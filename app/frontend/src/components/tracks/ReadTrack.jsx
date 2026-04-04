@@ -50,8 +50,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       ctx.fillStyle = color
       for (const bin of data.bins) {
         const binW = ((bin.end - bin.start) / regionLen) * width
-        const autoW = Math.max(1, Math.min(pxPerNt, binW))
-        const w = barAuto ? autoW : Math.min(barFixedPx, binW)
+        const w = barAuto ? Math.max(1, binW) : Math.min(barFixedPx, binW)
         const x = ((bin.start - region.start) / regionLen) * width
         ctx.fillRect(x, height - (bin.value / maxVal) * (height - 14) - 2, w, (bin.value / maxVal) * (height - 14))
       }

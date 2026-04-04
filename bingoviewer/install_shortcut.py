@@ -79,8 +79,10 @@ def _install_windows(target_dir):
         exe_path = str(pythonw)
         exe_args = "-m bingoviewer"
 
-    # Write icon
-    ico_path = target_dir / "bingo_icon.ico"
+    # Write icon to hidden config dir (not the desktop)
+    icon_dir = Path.home() / ".bingoviewer"
+    icon_dir.mkdir(parents=True, exist_ok=True)
+    ico_path = icon_dir / "bingo_icon.ico"
     ico_path.write_bytes(generate_ico())
 
     lnk_path = target_dir / f"{_APP_NAME}.lnk"
