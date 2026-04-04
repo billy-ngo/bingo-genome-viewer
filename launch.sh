@@ -14,8 +14,16 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 # ── Check prerequisites ──────────────────────────────────────────────
 
 command -v python3 >/dev/null 2>&1 || error "Python 3 is required. Install from https://www.python.org/downloads/ or 'brew install python3'"
-command -v node    >/dev/null 2>&1 || error "Node.js is required. Install from https://nodejs.org/ or 'brew install node'"
-command -v npm     >/dev/null 2>&1 || error "npm is required (ships with Node.js)."
+
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    warn "Node.js is not installed (required for from-source mode)."
+    info "Install from https://nodejs.org/ or 'brew install node'"
+    info ""
+    info "Or skip Node.js entirely — use pip install instead:"
+    info "  pip3 install bingoviewer"
+    info "  bingo"
+    exit 1
+fi
 
 PYTHON=python3
 PIP="$PYTHON -m pip"
