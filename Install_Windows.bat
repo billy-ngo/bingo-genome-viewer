@@ -47,8 +47,37 @@ exit /b 1
 for /f "delims=" %%V in ('!PYTHON! --version 2^>^&1') do echo   Found %%V
 echo.
 
+:: ── Verify Python version >= 3.10 ─────────────────────────────
+for /f "tokens=2 delims= " %%A in ('!PYTHON! --version 2^>^&1') do set "PYVER=%%A"
+for /f "tokens=1,2 delims=." %%M in ("!PYVER!") do (
+    set "PYMAJOR=%%M"
+    set "PYMINOR=%%N"
+)
+:: Convert to number for comparison (e.g. 3.10 -> 310)
+set /a "PYNUM=!PYMAJOR!*100+!PYMINOR!"
+if !PYNUM! LSS 310 (
+    echo   ERROR: Python 3.10 or higher is required, but found !PYVER!.
+    echo.
+    echo   Please download a newer Python from:
+    echo     https://www.python.org/downloads/
+    echo.
+    pause
+    exit /b 1
+)
+
 :: ── Create virtual environment ─────────────────────────────────
-set "VENV=%USERPROFILE%\.bingoviewer\venv"
+set "INSTALL_DIR=%USERPROFILE%\.bingoviewer"
+set "VENV=!INSTALL_DIR!\venv"
+
+:: Check if venv exists but is broken (python.exe missing or not working)
+if exist "!VENV!" (
+    "!VENV!\Scripts\python.exe" -c "import sys" >nul 2>nul
+    if errorlevel 1 (
+        echo   Detected broken virtual environment. Recreating...
+        echo.
+        rmdir /s /q "!VENV!" >nul 2>nul
+    )
+)
 
 if not exist "!VENV!\Scripts\python.exe" (
     echo   [1/2] Setting up BiNgo Genome Viewer...
@@ -57,7 +86,8 @@ if not exist "!VENV!\Scripts\python.exe" (
     !PYTHON! -m venv "!VENV!"
     if errorlevel 1 (
         echo.
-        echo   Could not create environment. Trying direct install...
+        echo   Could not create virtual environment.
+        echo   Trying direct install...
         !PYTHON! -m pip install --user BiNgoViewer
         if errorlevel 1 (
             echo.
@@ -77,11 +107,23 @@ if not exist "!VENV!\Scripts\python.exe" (
 )
 
 :: ── Install / update BiNgoViewer ───────────────────────────────
-"!VENV!\Scripts\python.exe" -m pip install --upgrade pip -q >nul 2>nul
+
+:: Ensure pip is available in the venv (handles rare cases where ensurepip failed)
+"!VENV!\Scripts\python.exe" -m ensurepip --default-pip >nul 2>nul
+
+"!VENV!\Scripts\python.exe" -m pip install --upgrade pip setuptools wheel -q >nul 2>nul
 
 :: Install from local source if available, otherwise from PyPI
+:: Use %~dp0 which includes trailing backslash, so "%~dp0." gives the directory
 if exist "%~dp0pyproject.toml" (
-    "!VENV!\Scripts\python.exe" -m pip install --upgrade "%~dp0."
+    :: Local source: always reinstall to pick up changes, skip dep reinstall
+    "!VENV!\Scripts\python.exe" -m pip install --force-reinstall --no-deps "%~dp0."
+    if errorlevel 1 (
+        :: Fallback: try without --force-reinstall for older pip versions
+        "!VENV!\Scripts\python.exe" -m pip install "%~dp0."
+    )
+    :: Ensure dependencies are satisfied (installs missing ones, skips existing)
+    "!VENV!\Scripts\python.exe" -m pip install "%~dp0." >nul 2>nul
 ) else (
     "!VENV!\Scripts\python.exe" -m pip install --upgrade BiNgoViewer
 )
@@ -89,7 +131,11 @@ if exist "%~dp0pyproject.toml" (
 if errorlevel 1 (
     echo.
     echo   Installation failed.
-    echo   Check your internet connection and try again.
+    echo.
+    echo   Possible fixes:
+    echo     - Check your internet connection
+    echo     - Try deleting %INSTALL_DIR% and running this again
+    echo     - Run as Administrator if you see permission errors
     echo.
     pause
     exit /b 1
