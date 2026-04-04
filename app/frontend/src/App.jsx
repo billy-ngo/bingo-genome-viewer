@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.3.5'
+const APP_VERSION = '1.3.6'
 
 function BingoLogo({ size = 32 }) {
   return (
@@ -137,12 +137,15 @@ function BrowserApp() {
 
   const onAppDragEnter = useCallback((e) => {
     e.preventDefault(); e.stopPropagation()
+    // Only show drop overlay for external file drops, not internal track reorder drags
+    if (!e.dataTransfer?.types?.includes('Files')) return
     appDragCounter.current++
     if (appDragCounter.current === 1) setAppDragOver(true)
   }, [])
 
   const onAppDragLeave = useCallback((e) => {
     e.preventDefault(); e.stopPropagation()
+    if (!e.dataTransfer?.types?.includes('Files')) return
     appDragCounter.current--
     if (appDragCounter.current <= 0) { appDragCounter.current = 0; setAppDragOver(false) }
   }, [])
@@ -158,6 +161,9 @@ function BrowserApp() {
     e.preventDefault(); e.stopPropagation()
     appDragCounter.current = 0
     setAppDragOver(false)
+
+    // Ignore internal drags (track reorder)
+    if (!e.dataTransfer?.types?.includes('Files')) return
 
     const files = Array.from(e.dataTransfer.files)
     if (!files.length) return
