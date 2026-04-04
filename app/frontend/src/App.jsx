@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.4.3'
+const APP_VERSION = '1.4.4'
 
 function BingoLogo({ size = 32 }) {
   return (
