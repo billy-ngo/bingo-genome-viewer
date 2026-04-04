@@ -19,7 +19,7 @@ import NavigationBar from './components/NavigationBar'
 import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 
-const APP_VERSION = '1.0.0'
+const APP_VERSION = '1.1.0'
 
 function BingoLogo({ size = 32 }) {
   return (
