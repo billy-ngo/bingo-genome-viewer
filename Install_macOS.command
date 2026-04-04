@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# ──────────────────────────────────────────────────────────────────
-#  BiNgo Genome Viewer — macOS / Linux Installer
-#  Double-click this file to install and launch.
-# ──────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+#  BiNgo Genome Viewer — macOS / Linux installer
+#  Double-click (or run) this file to install and launch.
+# ──────────────────────────────────────────────────────────────
 
 clear
 echo ""
@@ -11,154 +11,136 @@ echo "    BiNgo Genome Viewer — Setup & Launch"
 echo "  =========================================="
 echo ""
 
-# ── Find Python 3 ──────────────────────────────────────────────
-
-PYTHON=""
-
-if command -v python3 &>/dev/null; then
-    PYTHON=python3
-elif command -v python &>/dev/null; then
-    if python --version 2>&1 | grep -q "Python 3"; then
-        PYTHON=python
+# ── Locate Python 3 ───────────────────────────────────────────
+PY=""
+for cmd in python3 python; do
+    if command -v "$cmd" &>/dev/null && "$cmd" -c "import sys; exit(0 if sys.version_info.major==3 else 1)" 2>/dev/null; then
+        PY="$cmd"
+        break
     fi
-fi
+done
 
-if [ -z "$PYTHON" ]; then
-    echo "  Python 3 is not installed."
+if [ -z "$PY" ]; then
+    echo "  Python 3 was not found."
     echo ""
-    echo "  Install Python from:"
-    echo "    https://www.python.org/downloads/"
+    echo "  Install from  https://www.python.org/downloads"
+    [ -f /etc/debian_version ] && echo "    or:  sudo apt install python3 python3-venv"
+    [ "$(uname)" = "Darwin" ]  && echo "    or:  brew install python3"
     echo ""
-    echo "  Or with Homebrew:"
-    echo "    brew install python3"
-    echo ""
-    echo "  After installing Python, double-click this file again."
-    echo ""
-    read -n1 -s -p "  Press any key to close..."
+    read -n1 -s -p "  Press any key to exit..."
     exit 1
 fi
 
-echo "  Found $($PYTHON --version)"
+PY_VER=$($PY -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+echo "  Found Python $PY_VER"
 echo ""
 
-# ── Verify Python version >= 3.10 ─────────────────────────────
-
-PY_VERSION=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
-PY_MAJOR=$($PYTHON -c "import sys; print(sys.version_info.major)" 2>/dev/null)
-PY_MINOR=$($PYTHON -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
-
-if [ -z "$PY_MAJOR" ] || [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-    echo "  ERROR: Python 3.10 or higher is required, but found $PY_VERSION."
+# ── Check Python >= 3.10 ──────────────────────────────────────
+if ! $PY -c "import sys; exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
+    echo "  Python 3.10 or newer is required."
+    echo "  Please update from  https://www.python.org/downloads"
     echo ""
-    echo "  Install a newer Python from:"
-    echo "    https://www.python.org/downloads/"
-    echo ""
-    read -n1 -s -p "  Press any key to close..."
+    read -n1 -s -p "  Press any key to exit..."
     exit 1
 fi
 
-# ── Create virtual environment ─────────────────────────────────
-
+# ── Set up virtual environment ─────────────────────────────────
 INSTALL_DIR="$HOME/.bingoviewer"
 VENV="$INSTALL_DIR/venv"
 
-# Check if venv exists but is broken (python binary missing or not working)
+# Recreate venv if Python version changed or venv is broken
 if [ -d "$VENV" ]; then
-    if ! "$VENV/bin/python" -c "import sys" 2>/dev/null; then
-        echo "  Detected broken virtual environment. Recreating..."
+    VENV_VER=$("$VENV/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "")
+    if [ "$VENV_VER" != "$PY_VER" ]; then
+        echo "  Recreating environment for Python $PY_VER..."
         echo ""
         rm -rf "$VENV"
     fi
 fi
 
 if [ ! -f "$VENV/bin/python" ]; then
-    echo "  [1/2] Setting up BiNgo Genome Viewer..."
-    echo "        (first time only — this may take a minute)"
+    echo "  [1/3] Creating environment..."
     echo ""
     mkdir -p "$INSTALL_DIR"
-    $PYTHON -m venv "$VENV"
-    if [ $? -ne 0 ]; then
+    if ! $PY -m venv "$VENV"; then
         echo ""
-        echo "  Could not create virtual environment."
+        echo "  Failed to create virtual environment."
+        [ -f /etc/debian_version ] && echo "  Try:  sudo apt install python3-venv"
         echo ""
-        # On Debian/Ubuntu, python3-venv may not be installed
-        if [ -f /etc/debian_version ]; then
-            echo "  On Debian/Ubuntu, you may need to install the venv module:"
-            echo "    sudo apt install python3-venv"
-            echo ""
-        fi
-        echo "  Trying direct install..."
-        $PYTHON -m pip install --user BiNgoViewer
-        if [ $? -ne 0 ]; then
-            echo ""
-            echo "  Installation failed. Please check your Python installation."
-            read -n1 -s -p "  Press any key to close..."
-            exit 1
-        fi
-        echo ""
-        echo "  Starting BiNgo Genome Viewer..."
-        $PYTHON -m bingoviewer
-        exit 0
+        read -n1 -s -p "  Press any key to exit..."
+        exit 1
     fi
 else
-    echo "  [1/2] Checking for updates..."
+    echo "  [1/3] Environment ready."
     echo ""
 fi
 
-# ── Install / update BiNgoViewer ───────────────────────────────
+# ── Install / upgrade BiNgo ────────────────────────────────────
+echo "  [2/3] Installing BiNgo Genome Viewer..."
+echo ""
 
-# Ensure pip is available in the venv (handles rare cases where ensurepip failed)
-"$VENV/bin/python" -m ensurepip --default-pip >/dev/null 2>&1
+"$VENV/bin/python" -m pip install --upgrade pip -q >/dev/null 2>&1
 
-"$VENV/bin/python" -m pip install --upgrade pip setuptools wheel -q >/dev/null 2>&1
-
-# Install from local source if available, otherwise from PyPI
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
-    # Local source: always reinstall to pick up changes, skip dep reinstall
-    "$VENV/bin/python" -m pip install --force-reinstall --no-deps "$SCRIPT_DIR" || \
-        "$VENV/bin/python" -m pip install "$SCRIPT_DIR"
-    # Ensure dependencies are satisfied (installs missing ones, skips existing)
-    "$VENV/bin/python" -m pip install "$SCRIPT_DIR" >/dev/null 2>&1
+    echo "  Installing from local source..."
+    echo ""
+    # Force reinstall the package itself so local changes always take effect,
+    # then run again without --force to install/update dependencies normally
+    "$VENV/bin/python" -m pip install --force-reinstall --no-deps "$SCRIPT_DIR" -q
+    "$VENV/bin/python" -m pip install "$SCRIPT_DIR" -q
 else
-    "$VENV/bin/python" -m pip install --upgrade BiNgoViewer
+    echo "  Installing from PyPI..."
+    echo ""
+    "$VENV/bin/python" -m pip install --upgrade bingoviewer
 fi
 
 if [ $? -ne 0 ]; then
     echo ""
-    echo "  Installation failed."
+    echo "  Install failed."
     echo ""
     echo "  Possible fixes:"
     echo "    - Check your internet connection"
-    echo "    - Try deleting ~/.bingoviewer and running this again"
-    echo "    - Check file permissions"
+    echo "    - Delete  ~/.bingoviewer  and run this again"
     echo ""
-    read -n1 -s -p "  Press any key to close..."
+    read -n1 -s -p "  Press any key to exit..."
     exit 1
 fi
 
 echo ""
-echo "  [2/2] Starting BiNgo Genome Viewer..."
+echo "  Install complete."
+
+# ── Shortcut prompt ────────────────────────────────────────────
+echo ""
+printf "  Create a desktop shortcut? [Y/n]: "
+read -r SHORTCUT
+# Portable lowercase check (works on macOS bash 3.x)
+case "$SHORTCUT" in
+    n|N) ;;
+    *)
+        "$VENV/bin/python" -m bingoviewer --install 2>/dev/null || \
+            echo "  (Shortcut skipped — you can create one later with: bingo --install)"
+        ;;
+esac
+
+# ── Launch ─────────────────────────────────────────────────────
+echo ""
+echo "  [3/3] Starting BiNgo Genome Viewer..."
 echo ""
 echo "  =========================================="
 echo "    A browser window will open shortly."
 echo "    The server runs in the background."
-echo "    To stop it, run: kill \$(cat ~/.bingoviewer/server.pid)"
+echo "    To stop: kill \$(cat ~/.bingoviewer/server.pid)"
 echo "  =========================================="
 echo ""
 
-# ── Launch in background and close the terminal ────────────────
 LOG_FILE="$INSTALL_DIR/server.log"
-
 nohup "$VENV/bin/python" -m bingoviewer > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$INSTALL_DIR/server.pid"
 
 echo "  Server started (PID: $SERVER_PID)"
-echo "  Log file: $LOG_FILE"
+echo "  Log: $LOG_FILE"
 echo ""
 echo "  You can close this window now."
-echo ""
-
-# Give the server a moment to start, then close
 sleep 2

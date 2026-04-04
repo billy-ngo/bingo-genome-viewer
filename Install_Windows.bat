@@ -7,151 +7,151 @@ echo     BiNgo Genome Viewer - Setup ^& Launch
 echo   ==========================================
 echo.
 
-:: ── Find Python 3 ──────────────────────────────────────────────
-set "PYTHON="
+:: ── Locate Python 3 ───────────────────────────────────────────
+set "PY="
 
 py -3 --version >nul 2>nul
-if not errorlevel 1 (
-    set "PYTHON=py -3"
-    goto :found_python
+if !errorlevel! EQU 0 (
+    set "PY=py -3"
+    goto :found_py
 )
 
 python --version >nul 2>nul
-if not errorlevel 1 (
-    set "PYTHON=python"
-    goto :found_python
+if !errorlevel! EQU 0 (
+    set "PY=python"
+    goto :found_py
 )
 
 python3 --version >nul 2>nul
-if not errorlevel 1 (
-    set "PYTHON=python3"
-    goto :found_python
+if !errorlevel! EQU 0 (
+    set "PY=python3"
+    goto :found_py
 )
 
-echo   Python 3 is not installed.
+echo   Python 3 was not found.
 echo.
-echo   Please download Python from:
+echo   Download it from  https://www.python.org/downloads
 echo.
-echo     https://www.python.org/downloads/
-echo.
-echo   IMPORTANT: On the first install screen, check the box:
-echo.
-echo     [x] Add Python to PATH
-echo.
-echo   After installing Python, double-click this file again.
+echo   IMPORTANT: check  [x] Add Python to PATH  during setup.
 echo.
 pause
 exit /b 1
 
-:found_python
-for /f "delims=" %%V in ('!PYTHON! --version 2^>^&1') do echo   Found %%V
+:found_py
+for /f "delims=" %%V in ('!PY! --version 2^>^&1') do echo   Found %%V
 echo.
 
-:: ── Verify Python version >= 3.10 ─────────────────────────────
-for /f "tokens=2 delims= " %%A in ('!PYTHON! --version 2^>^&1') do set "PYVER=%%A"
-for /f "tokens=1,2 delims=." %%M in ("!PYVER!") do (
-    set "PYMAJOR=%%M"
-    set "PYMINOR=%%N"
-)
-:: Convert to number for comparison (e.g. 3.10 -> 310)
-set /a "PYNUM=!PYMAJOR!*100+!PYMINOR!"
-if !PYNUM! LSS 310 (
-    echo   ERROR: Python 3.10 or higher is required, but found !PYVER!.
-    echo.
-    echo   Please download a newer Python from:
-    echo     https://www.python.org/downloads/
+:: ── Check Python ^>= 3.10 ────────────────────────────────────
+set "PYOK="
+for /f %%N in ('!PY! -c "import sys; print(1 if sys.version_info>=(3,10) else 0)" 2^>nul') do set "PYOK=%%N"
+if "!PYOK!" NEQ "1" (
+    echo   Python 3.10 or newer is required.
+    echo   Please update from  https://www.python.org/downloads
     echo.
     pause
     exit /b 1
 )
 
-:: ── Create virtual environment ─────────────────────────────────
-set "INSTALL_DIR=%USERPROFILE%\.bingoviewer"
-set "VENV=!INSTALL_DIR!\venv"
+:: ── Set up virtual environment ────────────────────────────────
+set "INSTALLDIR=%USERPROFILE%\.bingoviewer"
+set "VENV=!INSTALLDIR!\venv"
 
-:: Check if venv exists but is broken (python.exe missing or not working)
-if exist "!VENV!" (
+:: Check if existing venv is broken or built with different Python
+if exist "!VENV!\Scripts\python.exe" (
     "!VENV!\Scripts\python.exe" -c "import sys" >nul 2>nul
-    if errorlevel 1 (
-        echo   Detected broken virtual environment. Recreating...
+    if !errorlevel! NEQ 0 (
+        echo   Existing environment is broken, recreating...
+        echo.
+        rmdir /s /q "!VENV!" >nul 2>nul
+        goto :create_venv
+    )
+    :: Compare Python versions
+    set "SYS_VER="
+    set "VENV_VER="
+    for /f %%A in ('!PY! -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"') do set "SYS_VER=%%A"
+    for /f %%A in ('"!VENV!\Scripts\python.exe" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"') do set "VENV_VER=%%A"
+    if "!SYS_VER!" NEQ "!VENV_VER!" (
+        echo   Recreating environment for Python !SYS_VER! ...
         echo.
         rmdir /s /q "!VENV!" >nul 2>nul
     )
 )
 
+:create_venv
 if not exist "!VENV!\Scripts\python.exe" (
-    echo   [1/2] Setting up BiNgo Genome Viewer...
-    echo         ^(first time only - this may take a minute^)
+    echo   [1/3] Creating environment...
     echo.
-    !PYTHON! -m venv "!VENV!"
-    if errorlevel 1 (
+    if not exist "!INSTALLDIR!" mkdir "!INSTALLDIR!"
+    !PY! -m venv "!VENV!"
+    if !errorlevel! NEQ 0 (
+        echo   Failed to create virtual environment.
         echo.
-        echo   Could not create virtual environment.
-        echo   Trying direct install...
-        !PYTHON! -m pip install --user BiNgoViewer
-        if errorlevel 1 (
-            echo.
-            echo   Installation failed. Please check your Python installation.
-            pause
-            exit /b 1
-        )
-        echo.
-        echo   Starting BiNgo Genome Viewer...
-        !PYTHON! -m bingoviewer
         pause
-        exit /b 0
+        exit /b 1
     )
 ) else (
-    echo   [1/2] Checking for updates...
+    echo   [1/3] Environment ready.
     echo.
 )
 
-:: ── Install / update BiNgoViewer ───────────────────────────────
+:: ── Install / upgrade BiNgo ───────────────────────────────────
+echo   [2/3] Installing BiNgo Genome Viewer...
+echo.
 
-:: Ensure pip is available in the venv (handles rare cases where ensurepip failed)
-"!VENV!\Scripts\python.exe" -m ensurepip --default-pip >nul 2>nul
+"!VENV!\Scripts\python.exe" -m pip install --upgrade pip -q >nul 2>nul
 
-"!VENV!\Scripts\python.exe" -m pip install --upgrade pip setuptools wheel -q >nul 2>nul
-
-:: Install from local source if available, otherwise from PyPI
-:: Use %~dp0 which includes trailing backslash, so "%~dp0." gives the directory
-if exist "%~dp0pyproject.toml" (
-    :: Local source: always reinstall to pick up changes, skip dep reinstall
-    "!VENV!\Scripts\python.exe" -m pip install --force-reinstall --no-deps "%~dp0."
-    if errorlevel 1 (
-        :: Fallback: try without --force-reinstall for older pip versions
-        "!VENV!\Scripts\python.exe" -m pip install "%~dp0."
-    )
-    :: Ensure dependencies are satisfied (installs missing ones, skips existing)
-    "!VENV!\Scripts\python.exe" -m pip install "%~dp0." >nul 2>nul
-) else (
-    "!VENV!\Scripts\python.exe" -m pip install --upgrade BiNgoViewer
-)
-
-if errorlevel 1 (
+:: Install from local source if pyproject.toml is beside this script
+set "SRC=%~dp0"
+if exist "!SRC!pyproject.toml" (
+    echo   Installing from local source...
     echo.
-    echo   Installation failed.
+    :: Force reinstall the package itself so local changes always take effect,
+    :: then run again without --force to install/update dependencies normally
+    "!VENV!\Scripts\python.exe" -m pip install --force-reinstall --no-deps "!SRC!." -q
+    "!VENV!\Scripts\python.exe" -m pip install "!SRC!." -q
+) else (
+    echo   Installing from PyPI...
+    echo.
+    "!VENV!\Scripts\python.exe" -m pip install --upgrade bingoviewer
+)
+if !errorlevel! NEQ 0 (
+    echo.
+    echo   Install failed.
     echo.
     echo   Possible fixes:
     echo     - Check your internet connection
-    echo     - Try deleting %INSTALL_DIR% and running this again
-    echo     - Run as Administrator if you see permission errors
+    echo     - Delete  !INSTALLDIR!  and double-click this file again
     echo.
     pause
     exit /b 1
 )
 
 echo.
-echo   [2/2] Starting BiNgo Genome Viewer...
+echo   Install complete.
+
+:: ── Shortcut prompt ───────────────────────────────────────────
+echo.
+set "SHORTCUT=Y"
+set /p "SHORTCUT=  Create a desktop shortcut? [Y/n]: "
+if /i "!SHORTCUT!" EQU "n" goto :launch
+
+echo.
+"!VENV!\Scripts\python.exe" -m bingoviewer --install 2>nul
+if !errorlevel! NEQ 0 (
+    echo   ^(Shortcut skipped - you can create one later with: bingo --install^)
+)
+
+:: ── Launch ────────────────────────────────────────────────────
+:launch
+echo.
+echo   [3/3] Starting BiNgo Genome Viewer...
 echo.
 echo   ==========================================
 echo     A browser window will open shortly.
-echo     This window will close automatically.
+echo     Close this window to stop the server.
 echo   ==========================================
 echo.
 
-:: ── Launch with hidden console ─────────────────────────────────
-:: Use pythonw.exe (no console window) if available, otherwise fall back
 if exist "!VENV!\Scripts\pythonw.exe" (
     start "" "!VENV!\Scripts\pythonw.exe" -m bingoviewer
 ) else (

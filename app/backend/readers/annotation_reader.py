@@ -4,15 +4,14 @@ All load into memory once; index by chromosome for fast region queries.
 """
 
 from pathlib import Path
-from typing import List, Dict
 import re
 
 
 class BedReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._features: Dict[str, List] = {}
-        self._chroms: Dict[str, int] = {}
+        self._features: dict[str, list] = {}
+        self._chroms: dict[str, int] = {}
         self._load()
 
     def _load(self):
@@ -45,7 +44,7 @@ class BedReader:
                 self._chroms[chrom] = max(self._chroms.get(chrom, 0), end)
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return [{"name": k, "length": v} for k, v in self._chroms.items()]
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -55,7 +54,7 @@ class BedReader:
             return next(iter(self._features))
         return chrom
 
-    def get_features(self, chrom: str, start: int, end: int) -> List[Dict]:
+    def get_features(self, chrom: str, start: int, end: int) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         return [f for f in self._features.get(chrom, [])
                 if f["end"] > start and f["start"] < end]
@@ -66,13 +65,13 @@ class GtfReader:
 
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._genes: Dict[str, List] = {}
-        self._chroms: Dict[str, int] = {}
+        self._genes: dict[str, list] = {}
+        self._chroms: dict[str, int] = {}
         self._load()
 
     def _load(self):
-        transcripts: Dict[str, Dict] = {}
-        orphans: Dict[str, List] = {}
+        transcripts: dict[str, dict] = {}
+        orphans: dict[str, list] = {}
 
         with open(self.file_path) as f:
             for line in f:
@@ -138,7 +137,7 @@ class GtfReader:
             self._genes.setdefault(chrom, []).extend(feats)
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return [{"name": k, "length": v} for k, v in self._chroms.items()]
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -148,7 +147,7 @@ class GtfReader:
             return next(iter(self._genes))
         return chrom
 
-    def get_features(self, chrom: str, start: int, end: int) -> List[Dict]:
+    def get_features(self, chrom: str, start: int, end: int) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         return [f for f in self._genes.get(chrom, [])
                 if f["end"] > start and f["start"] < end]
@@ -159,13 +158,13 @@ class Gff3Reader:
 
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._top_level: Dict[str, List] = {}
-        self._chroms: Dict[str, int] = {}
+        self._top_level: dict[str, list] = {}
+        self._chroms: dict[str, int] = {}
         self._load()
 
     def _load(self):
-        by_id: Dict[str, Dict] = {}
-        chrom_map: Dict[str, str] = {}
+        by_id: dict[str, dict] = {}
+        chrom_map: dict[str, str] = {}
 
         with open(self.file_path) as f:
             for line in f:
@@ -224,7 +223,7 @@ class Gff3Reader:
             f.pop("_chrom", None)
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return [{"name": k, "length": v} for k, v in self._chroms.items()]
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -234,7 +233,7 @@ class Gff3Reader:
             return next(iter(self._top_level))
         return chrom
 
-    def get_features(self, chrom: str, start: int, end: int) -> List[Dict]:
+    def get_features(self, chrom: str, start: int, end: int) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         return [f for f in self._top_level.get(chrom, [])
                 if f["end"] > start and f["start"] < end]
@@ -242,14 +241,14 @@ class Gff3Reader:
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _parse_gtf_attrs(raw: str) -> Dict:
+def _parse_gtf_attrs(raw: str) -> dict:
     attrs = {}
     for m in re.finditer(r'(\w+)\s+"([^"]+)"', raw):
         attrs[m.group(1)] = m.group(2)
     return attrs
 
 
-def _parse_gff3_attrs(raw: str) -> Dict:
+def _parse_gff3_attrs(raw: str) -> dict:
     attrs = {}
     for item in raw.split(";"):
         item = item.strip()

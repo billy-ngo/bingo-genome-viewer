@@ -1,7 +1,7 @@
 /**
- * BrowserContext.jsx — Global navigation state (genome, region, zoom/pan).
+ * BrowserContext.jsx — Global navigation state (genome, region, zoom/pan, selection).
  *
- * Provides: genome, region, setGenome, navigateTo, zoom, pan.
+ * Provides: genome, region, selection, setGenome, navigateTo, zoom, pan, setSelection, clearSelection.
  * Uses a ref for immediate region reads to prevent stale-closure panning bugs.
  */
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react'
@@ -11,6 +11,7 @@ const BrowserContext = createContext(null)
 export function BrowserProvider({ children }) {
   const [genome, setGenomeState] = useState(null)     // { name, chromosomes, is_annotated }
   const [region, setRegion] = useState(null)           // { chrom, start, end }
+  const [selection, setSelectionState] = useState(null) // { chrom, start, end } or null
   const genomeRef = useRef(null)
   const regionRef = useRef(null)
 
@@ -57,8 +58,19 @@ export function BrowserProvider({ children }) {
     navigateTo(r.chrom, r.start + bpDelta, r.end + bpDelta)
   }, [navigateTo])
 
+  const setSelection = useCallback((sel) => {
+    setSelectionState(sel)
+  }, [])
+
+  const clearSelection = useCallback(() => {
+    setSelectionState(null)
+  }, [])
+
   return (
-    <BrowserContext.Provider value={{ genome, setGenome, region, navigateTo, zoom, pan }}>
+    <BrowserContext.Provider value={{
+      genome, setGenome, region, navigateTo, zoom, pan,
+      selection, setSelection, clearSelection,
+    }}>
       {children}
     </BrowserContext.Provider>
   )

@@ -4,7 +4,6 @@ Provides chromosome list, reference sequence, and feature annotations.
 """
 
 from pathlib import Path
-from typing import List, Dict, Optional
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
 
@@ -12,7 +11,7 @@ from Bio.SeqRecord import SeqRecord
 class GenBankReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._records: Dict[str, SeqRecord] = {}
+        self._records: dict[str, SeqRecord] = {}
         self._load()
 
     def _load(self):
@@ -30,7 +29,7 @@ class GenBankReader:
             self._records[chrom] = record
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return [
             {"name": chrom, "length": len(record.seq)}
             for chrom, record in self._records.items()
@@ -41,7 +40,7 @@ class GenBankReader:
         record = self._get_record(chrom)
         return str(record.seq[start:end])
 
-    def get_features(self, chrom: str, start: int, end: int) -> List[Dict]:
+    def get_features(self, chrom: str, start: int, end: int) -> list[dict]:
         """Return features overlapping [start, end) as dicts."""
         record = self._get_record(chrom)
         results = []

@@ -12,24 +12,28 @@ import { useTheme } from '../../store/ThemeContext'
 import { genomeApi, tracksApi } from '../../api/client'
 
 const SESSION_STORAGE_KEY = 'genomics-viewer-session'
+const SESSION_VERSION = 2
+
+// ── Public helpers (shared with ExitGuard, etc.) ─────────────────────────
 
 /**
  * Collects the full session state from all contexts.
  * The genome file_path and each track's file_path are included so the backend
  * can re-open the readers on restore.
  */
-function collectSession(genome, region, tracks, themeName, customTheme, labelWidth) {
+export function collectSession(genome, region, tracks, themeName, customTheme, labelWidth) {
   return {
-    version: 1,
+    version: SESSION_VERSION,
     savedAt: new Date().toISOString(),
     genome: genome ? {
       name: genome.name,
       file_path: genome.file_path,
       chromosomes: genome.chromosomes,
       is_annotated: genome.is_annotated,
+      annotated_chromosomes: genome.annotated_chromosomes || null,
     } : null,
-    region,
-    tracks: tracks.map(t => ({
+    region: region ? { chrom: region.chrom, start: region.start, end: region.end } : null,
+    tracks: tracks.map((t, idx) => ({
       id: t.id,
       name: t.name,
       file_path: t.file_path,
@@ -39,33 +43,41 @@ function collectSession(genome, region, tracks, themeName, customTheme, labelWid
       height: t.height,
       visible: t.visible,
       useArrows: t.useArrows,
-      scaleMax: t.scaleMax,
-      scaleMin: t.scaleMin,
-      logScale: t.logScale,
-      barAutoWidth: t.barAutoWidth,
-      barWidth: t.barWidth,
-      annotationColors: t.annotationColors,
+      scaleMax: t.scaleMax ?? null,
+      scaleMin: t.scaleMin ?? null,
+      logScale: t.logScale || false,
+      barAutoWidth: t.barAutoWidth !== false,
+      barWidth: t.barWidth || 2,
+      annotationColors: t.annotationColors || null,
       targetChromosomes: t.targetChromosomes || null,
+      order: idx,
     })),
     themeName,
-    customTheme,
+    customTheme: customTheme || null,
     labelWidth,
   }
 }
 
-export function useAutoSave(labelWidth) {
-  const { genome, region } = useBrowser()
-  const { tracks } = useTracks()
-  const { themeName, customTheme } = useTheme()
+/** Save session object to localStorage. Returns true on success. */
+export function saveSessionToStorage(session) {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session))
+    return true
+  } catch {
+    return false
+  }
+}
 
-  // Auto-save to localStorage on every meaningful change
-  React.useEffect(() => {
-    if (!genome) return
-    const session = collectSession(genome, region, tracks, themeName, customTheme, labelWidth)
-    try {
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session))
-    } catch {}
-  }, [genome, region, tracks, themeName, customTheme, labelWidth])
+/** Download session as a JSON file. */
+export function downloadSessionFile(session) {
+  const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const genomeName = session.genome?.name || 'untitled'
+  a.download = `bingo-session-${genomeName}-${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 export function getStoredSession() {
@@ -79,6 +91,42 @@ export function clearStoredSession() {
   localStorage.removeItem(SESSION_STORAGE_KEY)
 }
 
+/**
+ * Validate that a session object has the required shape.
+ * Returns { valid: boolean, error?: string }.
+ */
+function validateSession(session) {
+  if (!session || typeof session !== 'object') {
+    return { valid: false, error: 'Invalid session file — not a JSON object' }
+  }
+  if (!session.genome) {
+    return { valid: false, error: 'Session file has no genome data' }
+  }
+  if (!session.genome.file_path) {
+    return { valid: false, error: 'Session file missing genome file path' }
+  }
+  if (!Array.isArray(session.tracks)) {
+    return { valid: false, error: 'Session file has no track list' }
+  }
+  return { valid: true }
+}
+
+// ── Auto-save hook ───────────────────────────────────────────────────────
+
+export function useAutoSave(labelWidth) {
+  const { genome, region } = useBrowser()
+  const { tracks } = useTracks()
+  const { themeName, customTheme } = useTheme()
+
+  React.useEffect(() => {
+    if (!genome) return
+    const session = collectSession(genome, region, tracks, themeName, customTheme, labelWidth)
+    saveSessionToStorage(session)
+  }, [genome, region, tracks, themeName, customTheme, labelWidth])
+}
+
+// ── Component ────────────────────────────────────────────────────────────
+
 export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
   const { genome, region, setGenome, navigateTo } = useBrowser()
   const { tracks, setTracks } = useTracks()
@@ -90,13 +138,8 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
 
   function handleSave() {
     const session = collectSession(genome, region, tracks, themeName, customTheme, labelWidth)
-    const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `session-${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    saveSessionToStorage(session)
+    downloadSessionFile(session)
     setStatus('Session saved')
     setTimeout(() => setStatus(null), 2000)
   }
@@ -111,7 +154,18 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
     e.target.value = ''
     try {
       const text = await file.text()
-      const session = JSON.parse(text)
+      let session
+      try {
+        session = JSON.parse(text)
+      } catch {
+        setError('Invalid file — not valid JSON')
+        return
+      }
+      const check = validateSession(session)
+      if (!check.valid) {
+        setError(check.error)
+        return
+      }
       await restoreSession(session)
     } catch (err) {
       setError(`Failed to load session: ${err.message}`)
@@ -124,6 +178,11 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
       setError('No saved session found')
       return
     }
+    const check = validateSession(session)
+    if (!check.valid) {
+      setError(check.error)
+      return
+    }
     await restoreSession(session)
   }
 
@@ -133,44 +192,67 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
     setStatus('Restoring session...')
     try {
       // 1. Restore genome
+      let genomeInfo = null
       if (session.genome?.file_path) {
         try {
+          setStatus('Loading genome...')
           const res = await genomeApi.loadPath(session.genome.file_path)
-          const gInfo = res.data
-          setGenome(gInfo)
+          genomeInfo = res.data
+          setGenome(genomeInfo)
         } catch (err) {
           throw new Error(`Genome load failed: ${err.response?.data?.detail || err.message}`)
         }
       }
 
-      // 2. Restore tracks
-      const restoredTracks = []
-      const errors = []
-      for (const saved of (session.tracks || [])) {
-        if (saved.id === 'genome_annotations') {
-          // Genome annotations are auto-created by genome load
-          restoredTracks.push(saved)
-          continue
+      // 2. Restore tracks — load in parallel for speed
+      setStatus('Loading tracks...')
+      const savedTracks = session.tracks || []
+      const trackPromises = savedTracks.map(async (saved) => {
+        if (saved.id === 'genome_annotations' || saved.track_type === 'genome_annotations') {
+          return { saved, backend: null, ok: true }
         }
-        if (!saved.file_path) { errors.push(`${saved.name}: no file path`); continue }
+        if (!saved.file_path) {
+          return { saved, error: 'no file path', ok: false }
+        }
         try {
           const res = await tracksApi.loadPath(saved.file_path, saved.name)
-          const backendInfo = res.data
-          // Merge backend info (new id, file_path) with saved settings
+          return { saved, backend: res.data, ok: true }
+        } catch (err) {
+          return { saved, error: err.response?.data?.detail || err.message, ok: false }
+        }
+      })
+
+      const results = await Promise.allSettled(trackPromises)
+
+      const restoredTracks = []
+      const errors = []
+
+      for (const result of results) {
+        const { saved, backend, ok, error: errMsg } = result.status === 'fulfilled' ? result.value : { saved: null, ok: false, error: 'unknown' }
+        if (!ok) {
+          errors.push(`${saved?.name || 'unknown'}: ${errMsg}`)
+          continue
+        }
+        if (backend) {
+          // Merge backend info (new id, file_path) with saved UI settings
           restoredTracks.push({
             ...saved,
-            id: backendInfo.id,
-            file_path: backendInfo.file_path,
-            track_type: backendInfo.track_type,
-            file_format: backendInfo.file_format,
-            targetChromosomes: backendInfo.target_chromosomes || saved.targetChromosomes || null,
+            id: backend.id,
+            file_path: backend.file_path,
+            track_type: backend.track_type,
+            file_format: backend.file_format,
+            targetChromosomes: backend.target_chromosomes || saved.targetChromosomes || null,
           })
-        } catch (err) {
-          errors.push(`${saved.name}: ${err.response?.data?.detail || err.message}`)
+        } else {
+          // genome_annotations — keep saved settings
+          restoredTracks.push(saved)
         }
       }
 
-      // Apply frontend track state (colors, heights, settings, order)
+      // Sort by saved order to preserve track arrangement
+      restoredTracks.sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+
+      // Apply frontend track state (colors, heights, settings)
       setTracks(restoredTracks.map(t => ({
         ...t,
         name: cleanName(t.name) || t.name,
@@ -183,6 +265,7 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         barAutoWidth: t.barAutoWidth !== false,
         barWidth: t.barWidth || 2,
         color: t.color || '#78909c',
+        annotationColors: t.annotationColors || null,
         targetChromosomes: t.targetChromosomes || null,
       })))
 
@@ -193,16 +276,21 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
       // 4. Restore label width
       if (session.labelWidth && setLabelWidth) setLabelWidth(session.labelWidth)
 
-      // 5. Restore region
-      if (session.region) {
-        setTimeout(() => navigateTo(session.region.chrom, session.region.start, session.region.end), 100)
+      // 5. Restore region — wait for genome to be ready in genomeRef
+      if (session.region && genomeInfo) {
+        // genomeRef is updated synchronously in setGenome, so navigateTo
+        // can find the chromosome immediately. Use requestAnimationFrame
+        // to ensure React has flushed the state update for rendering.
+        requestAnimationFrame(() => {
+          navigateTo(session.region.chrom, session.region.start, session.region.end)
+        })
       }
 
       if (errors.length) {
-        setError(`Restored with ${errors.length} warning(s): ${errors.join('; ')}`)
+        setError(`Restored with ${errors.length} warning(s):\n${errors.join('\n')}`)
       } else {
         setStatus('Session restored')
-        setTimeout(() => { setStatus(null); onClose() }, 1500)
+        setTimeout(() => { setStatus(null); onClose() }, 1200)
       }
     } catch (err) {
       setError(err.message)

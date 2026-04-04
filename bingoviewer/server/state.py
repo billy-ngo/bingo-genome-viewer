@@ -5,14 +5,14 @@ Single-process in-memory store; safe for a local desktop app.
 
 import uuid
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Any
 
 
 class AppState:
     def __init__(self):
         self.genome = None                  # GenomeReader instance
-        self.tracks: Dict[str, Dict] = {}   # track_id -> TrackInfo dict
-        self.readers: Dict[str, Any] = {}   # track_id -> reader instance
+        self.tracks: dict[str, dict] = {}   # track_id -> TrackInfo dict
+        self.readers: dict[str, Any] = {}   # track_id -> reader instance
 
     def load_genome(self, file_path: str):
         from readers.genome_reader import GenomeReader
@@ -29,7 +29,7 @@ class AppState:
             }
             self.readers[track_id] = None  # served directly from genome reader
 
-    def load_track(self, file_path: str, name: str) -> Dict:
+    def load_track(self, file_path: str, name: str) -> dict:
         ext = Path(file_path).suffix.lower()
         track_id = str(uuid.uuid4())[:8]
 

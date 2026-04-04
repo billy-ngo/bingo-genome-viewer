@@ -39,10 +39,14 @@ export const genomeApi = {
 }
 
 export const tracksApi = {
-  load: (file, name) => {
+  /**
+   * Upload a track file.  For BAM files, pass the matching .bai as `indexFile`.
+   */
+  load: (file, name, indexFile) => {
     const fd = new FormData()
     fd.append('file', file)
     if (name) fd.append('name', name)
+    if (indexFile) fd.append('index', indexFile)
     return uploadFile('/tracks/load', fd)
   },
   loadPath: (path, name) => {
