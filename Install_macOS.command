@@ -115,7 +115,11 @@ fi
 # Install from local source if available, otherwise from PyPI
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
-    "$VENV/bin/python" -m pip install --upgrade "$SCRIPT_DIR"
+    # Local source: always reinstall to pick up changes, skip dep reinstall
+    "$VENV/bin/python" -m pip install --force-reinstall --no-deps "$SCRIPT_DIR" || \
+        "$VENV/bin/python" -m pip install "$SCRIPT_DIR"
+    # Ensure dependencies are satisfied (installs missing ones, skips existing)
+    "$VENV/bin/python" -m pip install "$SCRIPT_DIR" >/dev/null 2>&1
 else
     "$VENV/bin/python" -m pip install --upgrade BiNgoViewer
 fi

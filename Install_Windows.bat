@@ -116,7 +116,14 @@ if not exist "!VENV!\Scripts\python.exe" (
 :: Install from local source if available, otherwise from PyPI
 :: Use %~dp0 which includes trailing backslash, so "%~dp0." gives the directory
 if exist "%~dp0pyproject.toml" (
-    "!VENV!\Scripts\python.exe" -m pip install --upgrade "%~dp0."
+    :: Local source: always reinstall to pick up changes, skip dep reinstall
+    "!VENV!\Scripts\python.exe" -m pip install --force-reinstall --no-deps "%~dp0."
+    if errorlevel 1 (
+        :: Fallback: try without --force-reinstall for older pip versions
+        "!VENV!\Scripts\python.exe" -m pip install "%~dp0."
+    )
+    :: Ensure dependencies are satisfied (installs missing ones, skips existing)
+    "!VENV!\Scripts\python.exe" -m pip install "%~dp0." >nul 2>nul
 ) else (
     "!VENV!\Scripts\python.exe" -m pip install --upgrade BiNgoViewer
 )
