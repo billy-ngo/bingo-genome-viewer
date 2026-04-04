@@ -100,19 +100,19 @@ echo.
 
 "!VENV!\Scripts\python.exe" -m pip install --upgrade pip -q >nul 2>nul
 
+:: Uninstall old version first to ensure clean install
+"!VENV!\Scripts\python.exe" -m pip uninstall bingoviewer -y -q >nul 2>nul
+
 :: Install from local source if pyproject.toml is beside this script
 set "SRC=%~dp0"
 if exist "!SRC!pyproject.toml" (
     echo   Installing from local source...
     echo.
-    :: Force reinstall the package itself so local changes always take effect,
-    :: then run again without --force to install/update dependencies normally
-    "!VENV!\Scripts\python.exe" -m pip install --force-reinstall --no-deps "!SRC!." -q
     "!VENV!\Scripts\python.exe" -m pip install "!SRC!." -q
 ) else (
-    echo   Installing from PyPI...
+    echo   Installing latest version from PyPI...
     echo.
-    "!VENV!\Scripts\python.exe" -m pip install --upgrade bingoviewer
+    "!VENV!\Scripts\python.exe" -m pip install bingoviewer
 )
 if !errorlevel! NEQ 0 (
     echo.

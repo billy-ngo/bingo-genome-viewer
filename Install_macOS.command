@@ -81,18 +81,18 @@ echo ""
 
 "$VENV/bin/python" -m pip install --upgrade pip -q >/dev/null 2>&1
 
+# Uninstall old version first to ensure clean install
+"$VENV/bin/python" -m pip uninstall bingoviewer -y -q >/dev/null 2>&1
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
     echo "  Installing from local source..."
     echo ""
-    # Force reinstall the package itself so local changes always take effect,
-    # then run again without --force to install/update dependencies normally
-    "$VENV/bin/python" -m pip install --force-reinstall --no-deps "$SCRIPT_DIR" -q
     "$VENV/bin/python" -m pip install "$SCRIPT_DIR" -q
 else
-    echo "  Installing from PyPI..."
+    echo "  Installing latest version from PyPI..."
     echo ""
-    "$VENV/bin/python" -m pip install --upgrade bingoviewer
+    "$VENV/bin/python" -m pip install bingoviewer
 fi
 
 if [ $? -ne 0 ]; then
