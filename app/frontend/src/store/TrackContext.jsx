@@ -4,7 +4,7 @@
  * Provides: tracks, addTrack, removeTrack, updateTrack, reorderTracks, setTracks.
  * Handles file upload to backend and local display settings per track.
  */
-import React, { createContext, useContext, useState, useCallback } from 'react'
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react'
 import { tracksApi } from '../api/client'
 
 const TrackContext = createContext(null)
@@ -30,6 +30,8 @@ export function cleanName(s) {
 export function TrackProvider({ children }) {
   const [tracks, setTracks] = useState([])
   const [error, setError] = useState(null)
+  const tracksRef = useRef(tracks)
+  tracksRef.current = tracks
 
   const addTrack = useCallback(async (file, name) => {
     try {
@@ -62,12 +64,27 @@ export function TrackProvider({ children }) {
   }, [])
 
   const removeTrack = useCallback(async (id) => {
+    // Genome annotation tracks are hidden (not deleted) so they can be
+    // restored when the user navigates back to an annotated chromosome.
+    const track = tracksRef.current.find(t => t.id === id)
+    if (track && track.track_type === 'genome_annotations') {
+      setTracks(prev => prev.map(t => t.id === id ? { ...t, visible: false } : t))
+      return
+    }
     try {
       await tracksApi.remove(id)
       setTracks(prev => prev.filter(t => t.id !== id))
     } catch (e) {
       setError(e.response?.data?.detail || e.message)
     }
+  }, [])
+
+  const restoreAnnotationTracks = useCallback(() => {
+    setTracks(prev => prev.map(t =>
+      t.track_type === 'genome_annotations' && !t.visible
+        ? { ...t, visible: true }
+        : t
+    ))
   }, [])
 
   const updateTrack = useCallback((id, updates) => {
@@ -106,7 +123,8 @@ export function TrackProvider({ children }) {
   return (
     <TrackContext.Provider value={{
       tracks, setTracks, addTrack, removeTrack, updateTrack,
-      updateMultipleTracks, reorderTracks, addGenomeAnnotationTrack, error, setError,
+      updateMultipleTracks, reorderTracks, addGenomeAnnotationTrack,
+      restoreAnnotationTracks, error, setError,
     }}>
       {children}
     </TrackContext.Provider>

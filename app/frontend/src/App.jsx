@@ -85,7 +85,7 @@ function SkeletonTrack({ theme, labelWidth }) {
 function BrowserApp() {
   const { theme } = useTheme()
   const { genome, region, setGenome, navigateTo } = useBrowser()
-  const { tracks, reorderTracks, addTrack, addGenomeAnnotationTrack } = useTracks()
+  const { tracks, reorderTracks, addTrack, addGenomeAnnotationTrack, restoreAnnotationTracks } = useTracks()
   const containerRef = useRef(null)
   const [containerWidth, setContainerWidth] = useState(800)
   const [showSettings, setShowSettings] = useState(false)
@@ -112,6 +112,15 @@ function BrowserApp() {
     const id = setInterval(ping, 10_000)
     return () => clearInterval(id)
   }, [])
+
+  // Restore hidden genome annotation tracks when the user switches chromosomes.
+  const prevChromRef = useRef(region?.chrom)
+  useEffect(() => {
+    if (region?.chrom && region.chrom !== prevChromRef.current) {
+      prevChromRef.current = region.chrom
+      restoreAnnotationTracks()
+    }
+  }, [region?.chrom, restoreAnnotationTracks])
 
   // Full-screen drag-and-drop support
   const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
