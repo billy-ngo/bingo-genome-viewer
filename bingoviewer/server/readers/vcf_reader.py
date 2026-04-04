@@ -6,7 +6,6 @@ Supports plain .vcf and gzip-compressed .vcf.gz.
 
 import gzip
 from pathlib import Path
-from typing import List, Dict
 
 
 MAX_VARIANTS = 10_000
@@ -15,7 +14,7 @@ MAX_VARIANTS = 10_000
 class VcfReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._by_chrom: Dict[str, List[Dict]] = {}
+        self._by_chrom: dict[str, list[dict]] = {}
         self._chroms = []
         self._load()
 
@@ -79,7 +78,7 @@ class VcfReader:
         pass  # nothing to close for in-memory reader
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return self._chroms
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -89,7 +88,7 @@ class VcfReader:
             return next(iter(self._by_chrom))
         return chrom
 
-    def get_variants(self, chrom: str, start: int, end: int) -> List[Dict]:
+    def get_variants(self, chrom: str, start: int, end: int) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         variants = self._by_chrom.get(chrom, [])
         # Binary search for start

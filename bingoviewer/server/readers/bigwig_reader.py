@@ -9,7 +9,6 @@ UCSC BigWig specification:
 import struct
 import zlib
 from pathlib import Path
-from typing import List, Dict, Optional
 
 
 # ── BigWig constants ──────────────────────────────────────────────────────────
@@ -31,9 +30,9 @@ class BigWigReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
         self._fh = open(file_path, "rb")
-        self._chrom_to_id: Dict[str, int] = {}
-        self._id_to_chrom: Dict[int, str] = {}
-        self._chrom_sizes: Dict[str, int] = {}
+        self._chrom_to_id: dict[str, int] = {}
+        self._id_to_chrom: dict[int, str] = {}
+        self._chrom_sizes: dict[str, int] = {}
         self._uncompress_buf_size = 0
         self._full_index_offset = 0
         self._parse_header()
@@ -43,7 +42,7 @@ class BigWigReader:
         self._fh.close()
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return [{"name": k, "length": v} for k, v in self._chrom_sizes.items()]
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -53,7 +52,7 @@ class BigWigReader:
             return next(iter(self._chrom_to_id))
         return chrom
 
-    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> List[Dict]:
+    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         if chrom not in self._chrom_to_id:
             return []
@@ -231,8 +230,8 @@ class BigWigReader:
 class BedGraphReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._data: Dict[str, List] = {}
-        self._chroms: Dict[str, int] = {}
+        self._data: dict[str, list] = {}
+        self._chroms: dict[str, int] = {}
         self._load()
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -260,10 +259,10 @@ class BedGraphReader:
     def close(self): pass
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return [{"name": k, "length": v} for k, v in self._chroms.items()]
 
-    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> List[Dict]:
+    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         entries = self._data.get(chrom, [])
         region_len = end - start
@@ -302,8 +301,8 @@ class WigReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
         # Store as sorted list of (position, value) tuples — allows duplicates
-        self._data: Dict[str, List] = {}   # chrom -> [(pos, value), ...]
-        self._chroms: Dict[str, int] = {}  # chrom -> max_position
+        self._data: dict[str, list] = {}   # chrom -> [(pos, value), ...]
+        self._chroms: dict[str, int] = {}  # chrom -> max_position
         self._load()
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -318,7 +317,7 @@ class WigReader:
         step = span = 1
         pos = 1
         fixed = False
-        raw: Dict[str, List] = {}  # collect unsorted first
+        raw: dict[str, list] = {}  # collect unsorted first
 
         with open(self.file_path) as f:
             for line in f:
@@ -369,10 +368,10 @@ class WigReader:
     def close(self): pass
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         return [{"name": k, "length": v} for k, v in self._chroms.items()]
 
-    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> List[Dict]:
+    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         entries = self._data.get(chrom, [])
         region_len = end - start

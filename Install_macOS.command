@@ -62,10 +62,12 @@ fi
 INSTALL_DIR="$HOME/.bingoviewer"
 VENV="$INSTALL_DIR/venv"
 
-# Check if venv exists but is broken (python binary missing or not working)
+# Check if venv exists but was built with a different Python version
 if [ -d "$VENV" ]; then
-    if ! "$VENV/bin/python" -c "import sys" 2>/dev/null; then
-        echo "  Detected broken virtual environment. Recreating..."
+    VENV_PY=$("$VENV/bin/python" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+    if [ "$VENV_PY" != "$PY_VERSION" ]; then
+        echo "  Virtual environment needs to be recreated for Python $PY_VERSION..."
+        echo "  (was built with Python ${VENV_PY:-unknown})"
         echo ""
         rm -rf "$VENV"
     fi

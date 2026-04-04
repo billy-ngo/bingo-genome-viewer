@@ -5,14 +5,13 @@ multiple files via add_chromosomes_from().
 """
 
 from pathlib import Path
-from typing import List, Dict
 
 
 class GenomeReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._sub_readers: List[tuple] = []  # [(format, reader), ...]
-        self._chrom_index: Dict[str, int] = {}  # chrom name → index in _sub_readers
+        self._sub_readers: list[tuple] = []  # [(format, reader), ...]
+        self._chrom_index: dict[str, int] = {}  # chrom name → index in _sub_readers
         self._add_file(file_path)
 
     @staticmethod
@@ -47,7 +46,7 @@ class GenomeReader:
         return Path(self.file_path).stem
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         result = []
         for fmt, reader in self._sub_readers:
             if fmt == "genbank":
@@ -69,7 +68,7 @@ class GenomeReader:
         else:
             return str(reader[chrom][start:end])
 
-    def get_features(self, chrom: str, start: int, end: int) -> List[Dict]:
+    def get_features(self, chrom: str, start: int, end: int) -> list[dict]:
         """Only GenBank files carry annotation features."""
         idx = self._chrom_index.get(chrom)
         if idx is None:
@@ -83,7 +82,7 @@ class GenomeReader:
         return any(fmt == "genbank" for fmt, _ in self._sub_readers)
 
     @property
-    def annotated_chromosomes(self) -> List[str]:
+    def annotated_chromosomes(self) -> list[str]:
         """Return chromosome names that carry annotation features (GenBank)."""
         result = []
         for fmt, reader in self._sub_readers:

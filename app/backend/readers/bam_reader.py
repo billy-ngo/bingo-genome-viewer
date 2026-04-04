@@ -5,7 +5,6 @@ CRAM is not supported by bamnostic; use BAM instead.
 """
 
 import bamnostic as bam
-from typing import List, Dict
 
 MAX_READS_RETURNED = 5000
 READ_DETAIL_THRESHOLD = 50_000  # bp
@@ -20,7 +19,7 @@ class BamReader:
         self._aln.close()
 
     @property
-    def chromosomes(self) -> List[Dict]:
+    def chromosomes(self) -> list[dict]:
         header = self._aln.header
         sq = header.get("SQ", [])
         return [{"name": s["SN"], "length": s["LN"]} for s in sq]
@@ -34,7 +33,7 @@ class BamReader:
             return names[0]
         return chrom
 
-    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> List[Dict]:
+    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
         """Return binned coverage by piling up fetched reads."""
         chrom = self._resolve_chrom(chrom)
         region_len = end - start
@@ -66,7 +65,7 @@ class BamReader:
             })
         return result
 
-    def get_reads(self, chrom: str, start: int, end: int) -> List[Dict]:
+    def get_reads(self, chrom: str, start: int, end: int) -> list[dict]:
         """Return individual read alignments for zoomed-in view."""
         chrom = self._resolve_chrom(chrom)
         reads = []
@@ -95,9 +94,9 @@ class BamReader:
         return reads
 
 
-def _assign_rows(reads: List[Dict]):
+def _assign_rows(reads: list[dict]):
     """Greedy row assignment so reads don't overlap visually."""
-    row_ends: List[int] = []
+    row_ends: list[int] = []
     for r in sorted(reads, key=lambda x: x["start"]):
         placed = False
         for i, end in enumerate(row_ends):

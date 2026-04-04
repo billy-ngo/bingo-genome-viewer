@@ -69,11 +69,13 @@ if !PYNUM! LSS 310 (
 set "INSTALL_DIR=%USERPROFILE%\.bingoviewer"
 set "VENV=!INSTALL_DIR!\venv"
 
-:: Check if venv exists but is broken (python.exe missing or not working)
+:: Check if venv exists but is broken or was built with a different Python version
 if exist "!VENV!" (
-    "!VENV!\Scripts\python.exe" -c "import sys" >nul 2>nul
-    if errorlevel 1 (
-        echo   Detected broken virtual environment. Recreating...
+    set "VENV_OK=0"
+    "!VENV!\Scripts\python.exe" -c "import sys; assert sys.version_info[:2]==(int(sys.argv[1]),int(sys.argv[2]))" !PYMAJOR! !PYMINOR! >nul 2>nul
+    if not errorlevel 1 set "VENV_OK=1"
+    if "!VENV_OK!"=="0" (
+        echo   Virtual environment needs to be recreated for Python !PYVER!...
         echo.
         rmdir /s /q "!VENV!" >nul 2>nul
     )
