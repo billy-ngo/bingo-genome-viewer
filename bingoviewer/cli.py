@@ -14,6 +14,45 @@ import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
+
+_CONFIG_DIR = Path.home() / ".bingoviewer"
+_FIRST_RUN_MARKER = _CONFIG_DIR / ".shortcut_prompted"
+
+
+def _first_run_shortcut_prompt():
+    """On first ever launch, ask the user if they want a desktop shortcut."""
+    # Already prompted before — skip silently
+    if _FIRST_RUN_MARKER.exists():
+        return
+
+    # Mark as prompted immediately so it never asks again, even on failure
+    try:
+        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _FIRST_RUN_MARKER.write_text("prompted")
+    except Exception:
+        return  # can't write marker — skip rather than ask every time
+
+    # Show a yes/no dialog via tkinter
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+
+        answer = messagebox.askyesno(
+            "BiNgo Genome Viewer",
+            "Would you like to create a desktop shortcut for BiNgo Genome Viewer?\n\n"
+            "You can also do this later with:  bingo --install",
+        )
+        root.destroy()
+
+        if answer:
+            from bingoviewer.install_shortcut import main as install_main
+            install_main()
+    except Exception:
+        pass  # tkinter not available or dialog failed — continue silently
 
 
 def main():
@@ -43,6 +82,9 @@ def main():
         from bingoviewer.install_shortcut import main as install_main
         install_main()
         return 0
+
+    # On first launch, offer to create a desktop shortcut
+    _first_run_shortcut_prompt()
 
     # Add the backend source directory to sys.path so bare imports
     # (e.g. `from state import app_state`, `from readers.bam_reader import ...`)
