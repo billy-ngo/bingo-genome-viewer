@@ -285,20 +285,14 @@ def main():
         install_main()
         return 0
 
-    # ── Auto-update check ────────────────────────────────────────
+    # ── Manual update command ────────────────────────────────────
     if args.update:
         new_ver = check_and_update(force=True)
         if new_ver:
             _restart()
         else:
             print(f"  BiNgo Genome Viewer {_get_installed_version()} is up to date.")
-            if args.update and not args.port and not args.host:
-                return 0  # --update alone: just check and exit
-    elif not args.no_update:
-        # Background update check — only runs if enough time has passed
-        new_ver = check_and_update(force=False)
-        if new_ver:
-            _restart()
+        return 0
 
     # ── Single-instance check (fast: PID probe → quick HTTP) ──────
     existing = _check_existing_server(args.host, args.port)
@@ -328,6 +322,16 @@ def main():
     # Write lock file and register cleanup
     _write_lock(args.host, args.port)
     atexit.register(_remove_lock)
+
+    # ── Background update check (runs while server is active) ─────
+    if not args.no_update:
+        def _bg_update():
+            """Check for updates after a short delay, only while the server is running."""
+            time.sleep(5)  # let the server finish starting
+            new_ver = check_and_update(force=False)
+            if new_ver:
+                _log(f"  Update to {new_ver} installed. Restart bingo to use it.")
+        threading.Thread(target=_bg_update, daemon=True).start()
 
     # ── Start server ──────────────────────────────────────────────
     # On Windows, Python's default ProactorEventLoop has a known bug where
