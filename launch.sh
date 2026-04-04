@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-#  Genomics Viewer — cross-platform launcher (macOS / Linux)
+#  BiNgo Genome Viewer — cross-platform launcher (macOS / Linux)
 # ──────────────────────────────────────────────────────────────────────
 set -e
 cd "$(dirname "$0")"

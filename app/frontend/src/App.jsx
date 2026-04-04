@@ -17,6 +17,8 @@ import NavigationBar from './components/NavigationBar'
 import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 
+const APP_VERSION = '1.0.0'
+
 function BrowserApp() {
   const { theme } = useTheme()
   const { genome, region } = useBrowser()
@@ -27,6 +29,7 @@ function BrowserApp() {
   const [showTheme, setShowTheme] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [showSession, setShowSession] = useState(false)
+  const [showAbout, setShowAbout] = useState(false)
   const [labelWidth, setLabelWidth] = useState(140)
   const [dragTrackId, setDragTrackId] = useState(null)
   const [dropTrackId, setDropTrackId] = useState(null)
@@ -87,9 +90,21 @@ function BrowserApp() {
       <div style={S.header}>
         <div style={S.headerLeft}>
           <div>
-            <div style={S.title}>Genomics Viewer</div>
+            <div style={S.title}>BiNgo Genome Viewer</div>
             {genome && <div style={S.subtitle}>{genome.name} · {genome.chromosomes.length} chr</div>}
           </div>
+          <button
+            onClick={() => setShowAbout(true)}
+            title="About"
+            style={{
+              background: 'none', border: `1px solid ${theme.border}`, borderRadius: '50%',
+              width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'pointer', color: theme.textSecondary, fontSize: 12, fontWeight: 700,
+              lineHeight: 1, padding: 0, flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = theme.textPrimary; e.currentTarget.style.borderColor = theme.textSecondary }}
+            onMouseLeave={e => { e.currentTarget.style.color = theme.textSecondary; e.currentTarget.style.borderColor = theme.border }}
+          >?</button>
         </div>
         <div style={S.headerBtns}>
           <button style={S.btn} onClick={() => setShowSession(true)}>
@@ -189,6 +204,45 @@ function BrowserApp() {
       {showTheme && <ThemeSettings onClose={() => setShowTheme(false)} />}
       {showExport && <ExportImage onClose={() => setShowExport(false)} />}
       {showSession && <SessionManager onClose={() => setShowSession(false)} labelWidth={labelWidth} setLabelWidth={setLabelWidth} />}
+
+      {showAbout && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+        }} onClick={() => setShowAbout(false)}>
+          <div style={{
+            background: theme.panelBg, border: `1px solid ${theme.border}`, borderRadius: 8,
+            padding: '28px 36px', maxWidth: 400, color: theme.textPrimary, lineHeight: 1.7,
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>BiNgo Genome Viewer</div>
+            <div style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 12 }}>
+              <strong style={{ color: theme.textPrimary }}>Version:</strong> {APP_VERSION}
+            </div>
+            <div style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 12 }}>
+              <strong style={{ color: theme.textPrimary }}>Publisher:</strong> Billy Ngo
+            </div>
+            <div style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 20 }}>
+              <strong style={{ color: theme.textPrimary }}>Published:</strong> April 2026
+            </div>
+            <div style={{
+              fontSize: 12, color: theme.textSecondary, background: theme.canvasBg,
+              border: `1px solid ${theme.border}`, borderRadius: 4, padding: '10px 14px',
+              fontFamily: 'monospace', lineHeight: 1.6, marginBottom: 20, userSelect: 'all',
+            }}>
+              Ngo, B. (2026). BiNgo Genome Viewer (v{APP_VERSION}) [Software].
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <button
+                onClick={() => setShowAbout(false)}
+                style={{
+                  background: theme.btnBg, border: `1px solid ${theme.borderStrong}`, borderRadius: 4,
+                  color: theme.btnText, padding: '5px 18px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                }}
+              >Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

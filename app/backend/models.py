@@ -1,5 +1,5 @@
 """
-Pydantic response models for the Genomics Viewer API.
+Pydantic response models for the BiNgo Genome Viewer API.
 
 Defines schemas for genomes, tracks, coverage bins, read alignments,
 variants, and annotation features returned by the data endpoints.

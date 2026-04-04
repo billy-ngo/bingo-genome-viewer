@@ -5,7 +5,7 @@ set ROOT=%~dp0
 :: ── First-run setup ───────────────────────────────────────────────────────────
 if not exist "%ROOT%.installed" (
     echo ============================================
-    echo   Genomics Viewer - Setting up (one time^)
+    echo   BiNgo Genome Viewer - Setting up (one time^)
     echo ============================================
     echo.
 
@@ -63,10 +63,10 @@ if not exist "%ROOT%.installed" (
 )
 
 :: ── Launch ────────────────────────────────────────────────────────────────────
-echo Starting Genomics Viewer...
+echo Starting BiNgo Genome Viewer...
 
-start "Genomics Viewer - Backend" /min cmd /k "cd /d "%ROOT%app\backend" && python -m uvicorn main:app --host 0.0.0.0 --port 8000"
+start "BiNgo Genome Viewer - Backend" /min cmd /k "cd /d "%ROOT%app\backend" && python -m uvicorn main:app --host 0.0.0.0 --port 8000"
 timeout /t 3 /nobreak >nul
-start "Genomics Viewer - Frontend" /min cmd /k "cd /d "%ROOT%app\frontend" && npm run dev"
+start "BiNgo Genome Viewer - Frontend" /min cmd /k "cd /d "%ROOT%app\frontend" && npm run dev"
 timeout /t 4 /nobreak >nul
 start "" http://localhost:5173

@@ -1,5 +1,5 @@
 """
-Genomics Viewer — FastAPI application entry point.
+BiNgo Genome Viewer — FastAPI application entry point.
 
 Mounts the REST API routers (/api/genome, /api/tracks) and optionally
 serves the built Vite frontend from frontend/dist/ for production use.
@@ -15,7 +15,7 @@ from api.genome import router as genome_router
 from api.tracks import router as tracks_router
 from api.data import router as data_router
 
-app = FastAPI(title="Genomics Viewer API", version="1.0.0")
+app = FastAPI(title="BiNgo Genome Viewer API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,

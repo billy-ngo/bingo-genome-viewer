@@ -1,5 +1,5 @@
 /**
- * client.js — API client for the Genomics Viewer backend.
+ * client.js — API client for the BiNgo Genome Viewer backend.
  *
  * Wraps all REST calls: genome upload/load, track upload/load/remove,
  * and data fetching (coverage, reads, variants, features).
