@@ -14,8 +14,15 @@ const TRACK_COLORS = [
   '#ce93d8', '#80cbc4', '#fff176', '#ff8a65',
 ]
 
+export const DEFAULT_ANNOTATION_COLORS = {
+  cds: '#66bb6a', exon: '#42a5f5', gene: '#7e57c2',
+  transcript: '#ab47bc', utr: '#26c6da',
+  rrna: '#ffa726', trna: '#ef5350',
+  repeat: '#8d6e63', default: '#80cbc4',
+}
+
 /** Decode literal \\uXXXX escape sequences that can appear in filenames */
-function cleanName(s) {
+export function cleanName(s) {
   if (!s) return s
   return s.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
 }
@@ -31,6 +38,7 @@ export function TrackProvider({ children }) {
       if (info.name) info.name = cleanName(info.name)
       setTracks(prev => {
         const color = TRACK_COLORS[prev.length % TRACK_COLORS.length]
+        const isAnnotation = info.track_type === 'annotations' || info.track_type === 'genome_annotations'
         return [...prev, {
           ...info, color,
           height: defaultHeight(info.track_type),
@@ -41,6 +49,7 @@ export function TrackProvider({ children }) {
           logScale: false,
           barAutoWidth: true,
           barWidth: 2,
+          ...(isAnnotation ? { annotationColors: null } : {}),
         }]
       })
       setError(null)
@@ -85,7 +94,12 @@ export function TrackProvider({ children }) {
     setTracks(prev => {
       const exists = prev.find(t => t.id === info.id)
       if (exists) return prev
-      return [...prev, { ...info, color: '#a5d6a7', height: 80, visible: true, useArrows: true }]
+      return [...prev, {
+        ...info,
+        name: cleanName(info.name) || info.name,
+        color: '#a5d6a7', height: 80, visible: true, useArrows: true,
+        annotationColors: null,
+      }]
     })
   }, [])
 

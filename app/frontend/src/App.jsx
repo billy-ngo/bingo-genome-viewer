@@ -6,8 +6,9 @@
  */
 import React, { useRef, useState, useEffect, useCallback } from 'react'
 import { BrowserProvider, useBrowser } from './store/BrowserContext'
-import { TrackProvider, useTracks } from './store/TrackContext'
+import { TrackProvider, useTracks, cleanName } from './store/TrackContext'
 import { ThemeProvider, useTheme } from './store/ThemeContext'
+import { genomeApi } from './api/client'
 import FileLoader from './components/ui/FileLoader'
 import TrackSettings from './components/ui/TrackSettings'
 import ThemeSettings from './components/ui/ThemeSettings'
@@ -51,8 +52,8 @@ function BingoLogo({ size = 32 }) {
 
 function BrowserApp() {
   const { theme } = useTheme()
-  const { genome, region } = useBrowser()
-  const { tracks, reorderTracks } = useTracks()
+  const { genome, region, setGenome, navigateTo } = useBrowser()
+  const { tracks, reorderTracks, addTrack, addGenomeAnnotationTrack } = useTracks()
   const containerRef = useRef(null)
   const [containerWidth, setContainerWidth] = useState(800)
   const [showSettings, setShowSettings] = useState(false)
@@ -63,8 +64,110 @@ function BrowserApp() {
   const [labelWidth, setLabelWidth] = useState(140)
   const [dragTrackId, setDragTrackId] = useState(null)
   const [dropTrackId, setDropTrackId] = useState(null)
+  const [appDragOver, setAppDragOver] = useState(false)
+  const [dropStatus, setDropStatus] = useState(null)
+  const appDragCounter = useRef(0)
 
   useAutoSave(labelWidth)
+
+  // Full-screen drag-and-drop support
+  const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
+  const TRACK_EXTS = new Set(['.bam', '.bw', '.bigwig', '.wig', '.bedgraph', '.bdg', '.vcf', '.bed', '.gtf', '.gff', '.gff2', '.gff3'])
+
+  function getFileExt(name) {
+    if (!name) return ''
+    if (name.toLowerCase().endsWith('.vcf.gz')) return '.vcf.gz'
+    const dot = name.lastIndexOf('.')
+    return dot >= 0 ? name.slice(dot).toLowerCase() : ''
+  }
+
+  const onAppDragEnter = useCallback((e) => {
+    e.preventDefault(); e.stopPropagation()
+    appDragCounter.current++
+    if (appDragCounter.current === 1) setAppDragOver(true)
+  }, [])
+
+  const onAppDragLeave = useCallback((e) => {
+    e.preventDefault(); e.stopPropagation()
+    appDragCounter.current--
+    if (appDragCounter.current <= 0) { appDragCounter.current = 0; setAppDragOver(false) }
+  }, [])
+
+  const onAppDragOver = useCallback((e) => { e.preventDefault(); e.stopPropagation() }, [])
+
+  const onAppDrop = useCallback(async (e) => {
+    e.preventDefault(); e.stopPropagation()
+    appDragCounter.current = 0
+    setAppDragOver(false)
+
+    const files = Array.from(e.dataTransfer.files)
+    if (!files.length) return
+
+    const genomeFiles = []
+    const trackFiles = []
+    const unknownFiles = []
+
+    for (const f of files) {
+      const ext = getFileExt(f.name)
+      if (GENOME_EXTS.has(ext)) genomeFiles.push(f)
+      else if (TRACK_EXTS.has(ext) || ext === '.vcf.gz') trackFiles.push(f)
+      else unknownFiles.push(f)
+    }
+
+    if (unknownFiles.length && !genomeFiles.length && !trackFiles.length) {
+      setDropStatus({ error: `Unsupported file${unknownFiles.length > 1 ? 's' : ''}: ${unknownFiles.map(f => f.name).join(', ')}` })
+      setTimeout(() => setDropStatus(null), 4000)
+      return
+    }
+
+    try {
+      if (genomeFiles.length > 0 && !genome) {
+        setDropStatus({ msg: `Loading genome: ${genomeFiles[0].name}...` })
+        const res = await genomeApi.load(genomeFiles[0])
+        const info = res.data
+        if (info.name) info.name = cleanName(info.name)
+        setGenome(info)
+        if (info.chromosomes?.length > 0) {
+          const chr = info.chromosomes[0]
+          navigateTo(chr.name, 0, Math.min(chr.length, 50000))
+        }
+        if (info.is_annotated) {
+          addGenomeAnnotationTrack({
+            id: 'genome_annotations', name: `${info.name} (annotations)`,
+            track_type: 'genome_annotations', file_format: 'genbank',
+          })
+        }
+        if (genomeFiles.length > 1) trackFiles.push(...genomeFiles.slice(1))
+      } else if (genomeFiles.length > 0) {
+        trackFiles.push(...genomeFiles)
+      }
+
+      if (trackFiles.length > 0) {
+        setDropStatus({ msg: `Loading ${trackFiles.length} track${trackFiles.length > 1 ? 's' : ''}...` })
+        const errors = []
+        for (const file of trackFiles) {
+          try { await addTrack(file, undefined) }
+          catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
+        }
+        if (errors.length) {
+          setDropStatus({ error: errors.join('; ') })
+          setTimeout(() => setDropStatus(null), 5000)
+          return
+        }
+      }
+
+      if (unknownFiles.length) {
+        setDropStatus({ error: `Skipped unsupported: ${unknownFiles.map(f => f.name).join(', ')}` })
+        setTimeout(() => setDropStatus(null), 4000)
+      } else {
+        setDropStatus({ msg: 'Files loaded' })
+        setTimeout(() => setDropStatus(null), 2000)
+      }
+    } catch (err) {
+      setDropStatus({ error: err.message || 'Drop failed' })
+      setTimeout(() => setDropStatus(null), 5000)
+    }
+  }, [genome, setGenome, navigateTo, addTrack, addGenomeAnnotationTrack])
 
   const onLabelResizeStart = useCallback((e) => {
     e.preventDefault()
@@ -116,7 +219,13 @@ function BrowserApp() {
   }
 
   return (
-    <div style={S.app}>
+    <div
+      style={S.app}
+      onDragEnter={onAppDragEnter}
+      onDragLeave={onAppDragLeave}
+      onDragOver={onAppDragOver}
+      onDrop={onAppDrop}
+    >
       <div style={S.header}>
         <div style={S.headerLeft}>
           <BingoLogo size={34} />
@@ -275,6 +384,43 @@ function BrowserApp() {
               >Close</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Full-screen drop overlay */}
+      {appDragOver && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9998,
+          background: 'rgba(0,0,0,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            border: `3px dashed ${theme.textSecondary}`, borderRadius: 16,
+            padding: '40px 60px', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 28, fontWeight: 300, color: theme.textPrimary, marginBottom: 8 }}>
+              Drop files here
+            </div>
+            <div style={{ fontSize: 13, color: theme.textSecondary }}>
+              Genome (.gb, .fasta) or track files (.bam, .bw, .wig, .vcf, .bed, .gff, .gtf)
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drop status toast */}
+      {dropStatus && (
+        <div style={{
+          position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 10001, padding: '8px 20px', borderRadius: 6,
+          background: dropStatus.error ? '#c62828' : theme.panelBg,
+          border: `1px solid ${dropStatus.error ? '#e53935' : theme.borderAccent}`,
+          color: dropStatus.error ? '#fff' : '#81c784',
+          fontSize: 12, fontWeight: 600,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+        }}>
+          {dropStatus.error || dropStatus.msg}
         </div>
       )}
     </div>

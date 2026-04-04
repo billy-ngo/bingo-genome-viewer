@@ -6,6 +6,9 @@ __pycache__/
 
 # ── Build output (auto-generated) ────────────────────────────────
 app/frontend/dist/
+*.egg-info/
+dist/
+build/
 
 # ── Setup markers (auto-generated on first launch) ───────────────
 .installed

@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "BiNgoViewer"
+version = "1.0.0"
+description = "BiNgo Genome Viewer — a lightweight browser-based genomics viewer"
+readme = "README.md"
+license = {text = "All rights reserved"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Billy Ngo", email = "billy.ngo0108@gmail.com"},
+]
+keywords = ["genomics", "genome", "viewer", "browser", "bioinformatics", "igv"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+    "biopython>=1.83",
+    "pyfaidx>=0.8.1",
+    "bamnostic>=1.3",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+bingo = "bingoviewer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/billy-ngo/bingo-genome-viewer"
+Repository = "https://github.com/billy-ngo/bingo-genome-viewer"
+
+[tool.setuptools.packages.find]
+include = ["bingoviewer*"]
+
+[tool.setuptools.package-data]
+bingoviewer = [
+    "frontend_dist/**/*",
+    "server/**/*.py",
+    "server/api/**/*.py",
+    "server/readers/**/*.py",
+]

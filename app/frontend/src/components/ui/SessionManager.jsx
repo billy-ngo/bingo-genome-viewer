@@ -7,7 +7,7 @@
  */
 import React, { useState, useRef } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
-import { useTracks } from '../../store/TrackContext'
+import { useTracks, cleanName } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { genomeApi, tracksApi } from '../../api/client'
 
@@ -44,6 +44,7 @@ function collectSession(genome, region, tracks, themeName, customTheme, labelWid
       logScale: t.logScale,
       barAutoWidth: t.barAutoWidth,
       barWidth: t.barWidth,
+      annotationColors: t.annotationColors,
     })),
     themeName,
     customTheme,
@@ -170,6 +171,7 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
       // Apply frontend track state (colors, heights, settings, order)
       setTracks(restoredTracks.map(t => ({
         ...t,
+        name: cleanName(t.name) || t.name,
         height: t.height || 80,
         visible: t.visible !== false,
         useArrows: t.useArrows !== false,

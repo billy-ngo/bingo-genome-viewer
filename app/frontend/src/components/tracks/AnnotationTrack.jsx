@@ -78,7 +78,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
       const y = row * (FEAT_HEIGHT + ROW_GAP) + 2
       if (y + FEAT_HEIGHT > height) { hiddenCount++; continue }
 
-      const color = featureColor(feat.feature_type, track.color, theme)
+      const color = featureColor(feat.feature_type, track, theme)
 
       if (feat.sub_features && feat.sub_features.length > 0) {
         ctx.fillStyle = color + '66'
@@ -86,7 +86,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         for (const sf of feat.sub_features) {
           const sx = ((sf.start - region.start) / regionLen) * width
           const sw = Math.max(1, ((sf.end - sf.start) / regionLen) * width)
-          const sfColor = featureColor(sf.feature_type, track.color, theme)
+          const sfColor = featureColor(sf.feature_type, track, theme)
           const sfH = sf.feature_type === 'CDS' ? FEAT_HEIGHT : FEAT_HEIGHT - 6
           const sfY = sf.feature_type === 'CDS' ? y : y + 3
           if (useArrows) {
@@ -127,7 +127,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         ? `${hiddenCount} feature${hiddenCount > 1 ? 's' : ''} hidden \u2014 increase track height to show all`
         : null)
     }
-  }, [data, loading, error, width, height, region, track.color, useArrows, theme])
+  }, [data, loading, error, width, height, region, track.color, track.annotationColors, useArrows, theme])
 
   const onMouseMove = useCallback((e) => {
     const canvas = canvasRef.current
@@ -291,19 +291,20 @@ function drawArrowRect(ctx, color, x, y, w, h, strand) {
   ctx.stroke()
 }
 
-function featureColor(type, trackColor, theme) {
+function featureColor(type, track, theme) {
+  const ac = track.annotationColors
   switch (type?.toLowerCase()) {
-    case 'cds': return theme?.geneCds || '#66bb6a'
-    case 'exon': return theme?.geneExon || '#42a5f5'
-    case 'gene': return theme?.geneGene || '#7e57c2'
+    case 'cds': return ac?.cds || theme?.geneCds || '#66bb6a'
+    case 'exon': return ac?.exon || theme?.geneExon || '#42a5f5'
+    case 'gene': return ac?.gene || theme?.geneGene || '#7e57c2'
     case 'mrna':
-    case 'transcript': return theme?.geneTranscript || '#ab47bc'
+    case 'transcript': return ac?.transcript || theme?.geneTranscript || '#ab47bc'
     case 'utr':
     case '3utr':
-    case '5utr': return theme?.geneUtr || '#26c6da'
-    case 'rrna': return theme?.geneRrna || '#ffa726'
-    case 'trna': return theme?.geneTrna || '#ef5350'
-    case 'repeat_region': return theme?.geneRepeat || '#8d6e63'
-    default: return trackColor || theme?.geneDefault || '#80cbc4'
+    case '5utr': return ac?.utr || theme?.geneUtr || '#26c6da'
+    case 'rrna': return ac?.rrna || theme?.geneRrna || '#ffa726'
+    case 'trna': return ac?.trna || theme?.geneTrna || '#ef5350'
+    case 'repeat_region': return ac?.repeat || theme?.geneRepeat || '#8d6e63'
+    default: return ac?.default || track.color || theme?.geneDefault || '#80cbc4'
   }
 }

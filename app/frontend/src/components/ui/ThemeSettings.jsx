@@ -8,7 +8,7 @@ import React, { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTheme, THEMES } from '../../store/ThemeContext'
 
-const PRESET_KEYS = ['dark', 'light', 'midnight', 'solarized', 'highContrast']
+const PRESET_KEYS = ['dark', 'light', 'colorblind', 'soft', 'highContrast']
 
 const EDITABLE_FIELDS = [
   { key: 'appBg', label: 'Background', group: 'ui' },

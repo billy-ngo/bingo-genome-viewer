@@ -1,0 +1,6 @@
+# Ensure shell scripts keep executable permission on all platforms
+*.sh         eol=lf
+*.command    eol=lf
+
+# Windows batch files keep CRLF
+*.bat        eol=crlf

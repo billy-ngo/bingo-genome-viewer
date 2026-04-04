@@ -14,20 +14,43 @@ A lightweight, browser-based genomics viewer for visualizing genomes, coverage t
 
 ## Quick Start
 
-### Prerequisites
+### Install with pip (recommended)
 
-- **Python 3.10+** — [python.org/downloads](https://www.python.org/downloads/)
-- **Node.js 18+** (LTS) — [nodejs.org](https://nodejs.org/)
+No Node.js required — the frontend is pre-built and bundled.
 
-### Windows
+```bash
+pip install BiNgoViewer
+bingo
+```
+
+This installs the `bingo` command, starts the server, and opens the viewer in your browser. Options:
+
+```bash
+bingo --port 9000        # use a custom port
+bingo --no-browser       # start without opening the browser
+python -m bingoviewer    # alternative way to launch
+```
+
+### Windows (from source)
+
+Requires Python 3.10+ and Node.js 18+.
 
 Double-click **`launch.bat`**. On first run it will install dependencies automatically, then open the viewer in your browser.
 
-### macOS
+### macOS (from source)
 
-Double-click **`Genomics Viewer.command`** (or run `./launch.sh` from a terminal). On first run it will create a virtual environment and install dependencies, then open the viewer in your browser.
+Requires Python 3.10+ and Node.js 18+.
 
-### Linux
+Double-click **`BiNgo Genome Viewer.command`** (or run `./launch.sh` from a terminal). On first run it will create a virtual environment and install dependencies, then open the viewer in your browser.
+
+> **Permission denied?** If macOS says the file can't be opened, run this once in Terminal from the project folder:
+> ```bash
+> chmod +x launch.sh "BiNgo Genome Viewer.command"
+> ```
+
+### Linux (from source)
+
+Requires Python 3.10+ and Node.js 18+.
 
 ```bash
 chmod +x launch.sh
@@ -56,9 +79,14 @@ Then open [http://localhost:8000](http://localhost:8000).
 ## Project Structure
 
 ```
-├── launch.bat                  # Windows launcher
-├── launch.sh                   # macOS / Linux launcher
-├── Genomics Viewer.command     # macOS double-click launcher
+├── pyproject.toml              # pip package definition
+├── bingoviewer/                # Installable Python package
+│   ├── cli.py                  # `bingo` CLI entry point
+│   ├── server/                 # FastAPI backend (bundled)
+│   └── frontend_dist/          # Pre-built React frontend
+├── launch.bat                  # Windows launcher (from source)
+├── launch.sh                   # macOS / Linux launcher (from source)
+├── BiNgo Genome Viewer.command # macOS double-click launcher
 └── app/                        # Application source code
     ├── backend/                # Python (FastAPI) REST API
     ├── frontend/               # React (Vite) user interface
