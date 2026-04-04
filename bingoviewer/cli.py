@@ -23,21 +23,54 @@ _LOCK_FILE = _CONFIG_DIR / "server.lock"
 _FIRST_RUN_MARKER = _CONFIG_DIR / ".shortcut_prompted"
 
 
-def _is_server_running(host, port):
-    """Check if a BiNgo server is already listening on host:port."""
+# ── Fast instance detection ────────────────────────────────────────
+def _pid_alive(pid):
+    """Check whether a process with *pid* exists (instant, no I/O)."""
+    try:
+        os.kill(pid, 0)          # signal 0 = existence check
+        return True
+    except (OSError, ProcessLookupError, PermissionError):
+        return False
+
+
+def _http_check(host, port, timeout=0.5):
+    """Quick GET /health; returns True only if our server answers."""
     try:
         import urllib.request
-        url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}/health"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            data = json.loads(resp.read())
-            return data.get("status") == "ok"
+        url = f"http://{'localhost' if host in ('0.0.0.0', '127.0.0.1') else host}:{port}/health"
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return json.loads(resp.read()).get("status") == "ok"
     except Exception:
         return False
 
 
+def _check_existing_server(host, port):
+    """Return the URL of an already-running server, or None."""
+    # 1. Check lock file (PID → HTTP — avoids slow timeout when nothing is running)
+    try:
+        if _LOCK_FILE.exists():
+            data = json.loads(_LOCK_FILE.read_text())
+            lock_host = data.get("host", "127.0.0.1")
+            lock_port = data.get("port", 8000)
+            lock_pid = data.get("pid")
+            if lock_pid and _pid_alive(lock_pid) and _http_check(lock_host, lock_port):
+                h = "localhost" if lock_host in ("0.0.0.0", "127.0.0.1") else lock_host
+                return f"http://{h}:{lock_port}"
+            # Stale lock — remove it
+            _LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # 2. Quick port probe (catches servers started outside our CLI)
+    if _http_check(host, port):
+        h = "localhost" if host in ("0.0.0.0", "127.0.0.1") else host
+        return f"http://{h}:{port}"
+
+    return None
+
+
+# ── Lock file helpers ──────────────────────────────────────────────
 def _write_lock(host, port):
-    """Write a lock file so other instances can find the running server."""
     try:
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         _LOCK_FILE.write_text(json.dumps({"host": host, "port": port, "pid": os.getpid()}))
@@ -46,84 +79,66 @@ def _write_lock(host, port):
 
 
 def _remove_lock():
-    """Remove the lock file on exit."""
     try:
         if _LOCK_FILE.exists():
             data = json.loads(_LOCK_FILE.read_text())
-            # Only remove if it belongs to this process
             if data.get("pid") == os.getpid():
                 _LOCK_FILE.unlink()
     except Exception:
         pass
 
 
-def _read_lock():
-    """Read the lock file and return (host, port) or None."""
-    try:
-        if _LOCK_FILE.exists():
-            data = json.loads(_LOCK_FILE.read_text())
-            return data.get("host", "127.0.0.1"), data.get("port", 8000)
-    except Exception:
-        pass
-    return None
-
-
+# ── First-run shortcut prompt ─────────────────────────────────────
 def _first_run_shortcut_prompt():
-    """On first ever launch, ask the user if they want a desktop shortcut."""
-    # Already prompted before — skip silently
     if _FIRST_RUN_MARKER.exists():
         return
-
-    # Mark as prompted immediately so it never asks again, even on failure
     try:
         _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         _FIRST_RUN_MARKER.write_text("prompted")
     except Exception:
-        return  # can't write marker — skip rather than ask every time
-
-    # Show a yes/no dialog via tkinter
+        return
     try:
         import tkinter as tk
         from tkinter import messagebox
-
         root = tk.Tk()
         root.withdraw()
-
         answer = messagebox.askyesno(
             "BiNgo Genome Viewer",
             "Would you like to create a desktop shortcut for BiNgo Genome Viewer?\n\n"
             "You can also do this later with:  bingo --install",
         )
         root.destroy()
-
         if answer:
             from bingoviewer.install_shortcut import main as install_main
             install_main()
     except Exception:
-        pass  # tkinter not available or dialog failed — continue silently
+        pass
 
 
+# ── Browser opener (polls server until ready) ─────────────────────
+def _open_when_ready(url, timeout=8):
+    """Poll the health endpoint and open the browser as soon as the server responds."""
+    import urllib.request
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(f"{url}/health", timeout=0.5)
+            break
+        except Exception:
+            time.sleep(0.15)
+    webbrowser.open(url)
+
+
+# ── Entry point ───────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
         prog="bingo",
         description="BiNgo Genome Viewer — a lightweight browser-based genomics viewer",
     )
-    parser.add_argument(
-        "--port", type=int, default=8000,
-        help="Port to run the server on (default: 8000)",
-    )
-    parser.add_argument(
-        "--host", type=str, default="127.0.0.1",
-        help="Host to bind to (default: 127.0.0.1)",
-    )
-    parser.add_argument(
-        "--no-browser", action="store_true",
-        help="Don't automatically open the browser",
-    )
-    parser.add_argument(
-        "--install", action="store_true",
-        help="Create a desktop shortcut instead of starting the server",
-    )
+    parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host (default: 127.0.0.1)")
+    parser.add_argument("--no-browser", action="store_true", help="Don't open the browser")
+    parser.add_argument("--install", action="store_true", help="Create a desktop shortcut")
     args = parser.parse_args()
 
     if args.install:
@@ -131,73 +146,36 @@ def main():
         install_main()
         return 0
 
-    # ── Single-instance check ──────────────────────────────────────
-    # If a server is already running, just open a new browser tab and exit.
-    lock = _read_lock()
-    if lock:
-        lock_host, lock_port = lock
-        if _is_server_running(lock_host, lock_port):
-            url = f"http://{'localhost' if lock_host in ('0.0.0.0', '127.0.0.1') else lock_host}:{lock_port}"
-            if not args.no_browser:
-                print(f"\n  BiNgo Genome Viewer is already running at {url}")
-                print("  Opening a new browser tab...\n")
-                webbrowser.open(url)
-            else:
-                print(f"\n  BiNgo Genome Viewer is already running at {url}\n")
-            return 0
-        else:
-            # Stale lock file — server is no longer running
-            try:
-                _LOCK_FILE.unlink()
-            except Exception:
-                pass
-
-    # Also check if the target port is already in use by our server
-    if _is_server_running(args.host, args.port):
-        url = f"http://{'localhost' if args.host in ('0.0.0.0', '127.0.0.1') else args.host}:{args.port}"
+    # ── Single-instance check (fast: PID probe → quick HTTP) ──────
+    existing = _check_existing_server(args.host, args.port)
+    if existing:
         if not args.no_browser:
-            print(f"\n  BiNgo Genome Viewer is already running at {url}")
-            print("  Opening a new browser tab...\n")
-            webbrowser.open(url)
-        else:
-            print(f"\n  BiNgo Genome Viewer is already running at {url}\n")
+            webbrowser.open(existing)
         return 0
 
-    # On first launch, offer to create a desktop shortcut
+    # First launch — offer desktop shortcut
     _first_run_shortcut_prompt()
 
-    # Add the backend source directory to sys.path so bare imports
-    # (e.g. `from state import app_state`, `from readers.bam_reader import ...`)
-    # resolve correctly.
+    # Resolve the URL the browser will open
+    url = f"http://{'localhost' if args.host in ('0.0.0.0',) else args.host}:{args.port}"
+
+    # Start browser-opener thread BEFORE heavy imports so it can poll
+    # for server readiness in parallel with import + uvicorn startup.
+    if not args.no_browser:
+        threading.Thread(target=_open_when_ready, args=(url,), daemon=True).start()
+
+    # ── Heavy imports (FastAPI, Pydantic, Starlette) ──────────────
     backend_dir = os.path.join(os.path.dirname(__file__), "server")
     sys.path.insert(0, backend_dir)
-
-    # Enable auto-shutdown: the server will exit when all browser tabs close
     os.environ["BINGO_AUTO_SHUTDOWN"] = "1"
 
-    # Now import the FastAPI app (triggers backend module loading + watchdog)
     from bingoviewer.server.main import app  # noqa: E402
 
     # Write lock file and register cleanup
     _write_lock(args.host, args.port)
     atexit.register(_remove_lock)
 
-    # Open browser after a short delay
-    if not args.no_browser:
-        url = f"http://{args.host}:{args.port}"
-        if args.host in ("0.0.0.0",):
-            url = f"http://localhost:{args.port}"
-
-        def _open():
-            time.sleep(1.5)
-            webbrowser.open(url)
-
-        threading.Thread(target=_open, daemon=True).start()
-
-    # Run the server
+    # ── Start server ──────────────────────────────────────────────
     import uvicorn
-    print(f"\n  BiNgo Genome Viewer running at http://localhost:{args.port}")
-    print("  Press Ctrl+C to stop.\n")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
-
     return 0

@@ -63,12 +63,21 @@ def _default_desktop():
 
 # ── per-platform installers ─────────────────────────────────────────────
 def _install_windows(target_dir):
-    bingo = _find_bingo_exe()
-    if not bingo:
-        raise RuntimeError("Cannot locate the 'bingo' executable.")
-
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use pythonw.exe (no console window) to launch the viewer
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    if not pythonw.exists():
+        # Fall back to bingo.exe (console visible)
+        bingo = _find_bingo_exe()
+        if not bingo:
+            raise RuntimeError("Cannot locate the 'bingo' executable or pythonw.exe.")
+        exe_path = bingo
+        exe_args = ""
+    else:
+        exe_path = str(pythonw)
+        exe_args = "-m bingoviewer"
 
     # Write icon
     ico_path = target_dir / "bingo_icon.ico"
@@ -80,8 +89,9 @@ def _install_windows(target_dir):
     ps_script = (
         "$ws = New-Object -ComObject WScript.Shell; "
         f"$s = $ws.CreateShortcut('{lnk_path}'); "
-        f"$s.TargetPath = '{bingo}'; "
-        f"$s.IconLocation = '{ico_path},0'; "
+        f"$s.TargetPath = '{exe_path}'; "
+        + (f"$s.Arguments = '{exe_args}'; " if exe_args else "")
+        + f"$s.IconLocation = '{ico_path},0'; "
         f"$s.Description = '{_APP_NAME}'; "
         "$s.Save()"
     )
