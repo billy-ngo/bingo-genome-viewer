@@ -8,13 +8,15 @@
  *   - Save session and exit
  *
  * Clicking outside the dialog returns the user to the app.
+ *
+ * Reuses collectSession / saveSessionToStorage / downloadSessionFile from
+ * SessionManager to keep save logic in one place.
  */
 import React, { useEffect, useState, useCallback } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
-import { useTracks, cleanName } from '../../store/TrackContext'
+import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
-
-const SESSION_STORAGE_KEY = 'genomics-viewer-session'
+import { collectSession, saveSessionToStorage, downloadSessionFile } from './SessionManager'
 
 export default function ExitGuard({ labelWidth }) {
   const { genome, region } = useBrowser()
@@ -23,7 +25,6 @@ export default function ExitGuard({ labelWidth }) {
   const [showPrompt, setShowPrompt] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Track whether the app has meaningful state worth protecting
   const hasState = Boolean(genome)
 
   // ── Browser beforeunload: shows native "Leave site?" dialog ──
@@ -53,61 +54,23 @@ export default function ExitGuard({ labelWidth }) {
   const handleReturn = useCallback(() => setShowPrompt(false), [])
 
   const handleExitWithoutSaving = useCallback(() => {
-    // Remove beforeunload so the tab actually closes
     window.onbeforeunload = null
     window.close()
-    // If window.close() doesn't work (not opened by script), navigate away
     window.location.href = 'about:blank'
   }, [])
 
   const handleSaveAndExit = useCallback(() => {
     setSaving(true)
     try {
-      // Save to localStorage (same format as auto-save)
-      const session = {
-        version: 1,
-        savedAt: new Date().toISOString(),
-        genome: genome ? {
-          name: genome.name,
-          file_path: genome.file_path,
-          chromosomes: genome.chromosomes,
-          is_annotated: genome.is_annotated,
-        } : null,
-        region,
-        tracks: tracks.map(t => ({
-          id: t.id, name: t.name, file_path: t.file_path,
-          track_type: t.track_type, file_format: t.file_format,
-          color: t.color, height: t.height, visible: t.visible,
-          useArrows: t.useArrows, scaleMax: t.scaleMax, scaleMin: t.scaleMin,
-          logScale: t.logScale, barAutoWidth: t.barAutoWidth, barWidth: t.barWidth,
-          annotationColors: t.annotationColors,
-          targetChromosomes: t.targetChromosomes || null,
-        })),
-        themeName,
-        customTheme,
-        labelWidth,
-      }
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session))
-
-      // Also trigger file download
-      const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `session-${new Date().toISOString().slice(0, 10)}.json`
-      a.click()
-      URL.revokeObjectURL(url)
+      const session = collectSession(genome, region, tracks, themeName, customTheme, labelWidth)
+      saveSessionToStorage(session)
+      downloadSessionFile(session)
     } catch {}
     setSaving(false)
-
-    // Close after saving
     window.onbeforeunload = null
     window.close()
     window.location.href = 'about:blank'
   }, [genome, region, tracks, themeName, customTheme, labelWidth])
-
-  // Expose trigger for other components (e.g., a close button)
-  ExitGuard.show = () => setShowPrompt(true)
 
   if (!showPrompt) return null
 
