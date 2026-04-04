@@ -525,7 +525,7 @@ function BrowserApp() {
           <div style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
             display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
-          }} onClick={() => setDropPrompt(null)}>
+          }}>
             <div style={{
               background: theme.panelBg, border: `1px solid ${theme.borderAccent}`, borderRadius: 8,
               padding: '20px 24px', maxWidth: 440, width: '90%',

@@ -230,7 +230,7 @@ export default function FileLoader() {
 
       {/* Prompt dialog for genome files when genome already loaded */}
       {prompt && (
-        <div style={S.promptOverlay} onClick={handlePromptSkip}>
+        <div style={S.promptOverlay}>
           <div style={S.promptBox} onClick={e => e.stopPropagation()}>
             <div style={S.promptTitle}>Genome file{plural ? 's' : ''} detected</div>
             <div style={S.promptText}>
