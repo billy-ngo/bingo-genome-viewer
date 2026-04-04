@@ -12,6 +12,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from state import app_state
@@ -29,13 +30,37 @@ def _clean_name(raw: str) -> str:
     return _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), raw)
 
 
+def _save_upload(file: UploadFile) -> Path:
+    """Save an uploaded file to the shared upload directory."""
+    dest = _upload_dir / _clean_name(file.filename)
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return dest
+
+
 @router.post("/load")
-async def load_track(file: UploadFile = File(...), name: str = Form("")):
+async def load_track(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    index: Optional[UploadFile] = File(None),
+):
     clean_filename = _clean_name(file.filename)
     dest = _upload_dir / clean_filename
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
+
+        # Save index file (.bai) alongside BAM if provided
+        if index is not None:
+            index_dest = _upload_dir / _clean_name(index.filename)
+            with index_dest.open("wb") as f:
+                shutil.copyfileobj(index.file, f)
+        else:
+            # Auto-generate expected index name so the error message is helpful
+            ext = dest.suffix.lower()
+            if ext in (".bam", ".cram"):
+                _ensure_index_hint(dest)
+
         display_name = _clean_name(name) if name else clean_filename
         track = app_state.load_track(str(dest), display_name)
         compatibility = app_state.check_track_compatibility(track["id"])
@@ -43,6 +68,13 @@ async def load_track(file: UploadFile = File(...), name: str = Form("")):
         return {**track, "compatibility": compatibility, "target_chromosomes": target_chromosomes}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _ensure_index_hint(bam_dest: Path):
+    """Check if an index exists; if not, the BamReader will raise a clear error."""
+    # Nothing to do here — BamReader._find_index handles the check.
+    # This is a hook for future auto-indexing support.
+    pass
 
 
 @router.post("/load-path")

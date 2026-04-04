@@ -5,6 +5,9 @@
  * automatically classified as genome or track by extension. If a genome
  * file is selected when one is already loaded, the user is prompted to
  * add it as a new chromosome, load it as a track, or skip it.
+ *
+ * BAM files require a .bai index — when both are selected together the
+ * index is automatically paired and uploaded alongside the BAM.
  */
 import React, { useState, useRef } from 'react'
 import { genomeApi } from '../../api/client'
@@ -19,12 +22,74 @@ import { useTheme } from '../../store/ThemeContext'
 
 const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
 const TRACK_EXTS = new Set(['.bam', '.bw', '.bigwig', '.wig', '.bedgraph', '.bdg', '.vcf', '.bed', '.gtf', '.gff', '.gff2', '.gff3'])
+const INDEX_EXTS = new Set(['.bai'])
 
 function getFileExt(name) {
   if (!name) return ''
-  if (name.toLowerCase().endsWith('.vcf.gz')) return '.vcf.gz'
-  const dot = name.lastIndexOf('.')
-  return dot >= 0 ? name.slice(dot).toLowerCase() : ''
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.vcf.gz')) return '.vcf.gz'
+  if (lower.endsWith('.bam.bai')) return '.bam.bai'
+  const dot = lower.lastIndexOf('.')
+  return dot >= 0 ? lower.slice(dot) : ''
+}
+
+/** True for index files (.bai, .bam.bai) */
+function isIndexFile(name) {
+  const ext = getFileExt(name)
+  return ext === '.bai' || ext === '.bam.bai'
+}
+
+/**
+ * Given a list of selected Files, pair each .bam with its .bai index
+ * (if present) and return { trackFiles: [{file, indexFile?}], ... }.
+ */
+function classifyFiles(files) {
+  const genomeFiles = []
+  const bamFiles = []
+  const indexFiles = []
+  const otherTrackFiles = []
+  const unknownFiles = []
+
+  for (const f of files) {
+    const ext = getFileExt(f.name)
+    if (GENOME_EXTS.has(ext)) {
+      genomeFiles.push(f)
+    } else if (ext === '.bam') {
+      bamFiles.push(f)
+    } else if (isIndexFile(f.name)) {
+      indexFiles.push(f)
+    } else if (TRACK_EXTS.has(ext) || ext === '.vcf.gz') {
+      otherTrackFiles.push(f)
+    } else {
+      unknownFiles.push(f)
+    }
+  }
+
+  // Pair BAM files with their index files by name
+  const trackEntries = []
+  for (const bam of bamFiles) {
+    const baseName = bam.name.replace(/\.bam$/i, '')
+    const paired = indexFiles.find(idx => {
+      const idxName = idx.name.toLowerCase()
+      return idxName === bam.name.toLowerCase() + '.bai' || idxName === baseName.toLowerCase() + '.bai'
+    })
+    trackEntries.push({ file: bam, indexFile: paired || null })
+    // Remove paired index from pool
+    if (paired) {
+      const i = indexFiles.indexOf(paired)
+      if (i !== -1) indexFiles.splice(i, 1)
+    }
+  }
+
+  // Non-BAM tracks have no index
+  for (const f of otherTrackFiles) {
+    trackEntries.push({ file: f, indexFile: null })
+  }
+
+  // Remaining unpaired .bai files are unknown
+  unknownFiles.push(...indexFiles)
+
+  return { genomeFiles, trackEntries, unknownFiles }
 }
 
 export default function FileLoader() {
@@ -42,6 +107,7 @@ export default function FileLoader() {
     ...Array.from(GENOME_EXTS),
     ...Array.from(TRACK_EXTS),
     '.vcf.gz',
+    '.bai',
   ].join(',')
 
   const S = {
@@ -131,16 +197,16 @@ export default function FileLoader() {
     }
   }
 
-  async function loadTrackFiles(files) {
-    if (!files.length) return
+  async function loadTrackEntries(entries) {
+    if (!entries.length) return
     setLoading(true); setErr(null); setError(null)
-    setStatus(`Loading ${files.length} track${files.length > 1 ? 's' : ''}...`)
+    setStatus(`Loading ${entries.length} track${entries.length > 1 ? 's' : ''}...`)
     const compatible = []
     const incompatible = []
     const errors = []
-    for (const file of files) {
+    for (const { file, indexFile } of entries) {
       try {
-        const info = await uploadTrack(file, undefined)
+        const info = await uploadTrack(file, undefined, indexFile)
         if (isTrackMismatch(info)) {
           incompatible.push(info)
         } else {
@@ -162,16 +228,7 @@ export default function FileLoader() {
     const files = Array.from(fileList)
     if (!files.length) return
 
-    const genomeFiles = []
-    const trackFiles = []
-    const unknownFiles = []
-
-    for (const f of files) {
-      const ext = getFileExt(f.name)
-      if (GENOME_EXTS.has(ext)) genomeFiles.push(f)
-      else if (TRACK_EXTS.has(ext) || ext === '.vcf.gz') trackFiles.push(f)
-      else unknownFiles.push(f)
-    }
+    const { genomeFiles, trackEntries, unknownFiles } = classifyFiles(files)
 
     if (unknownFiles.length) {
       setErr(`Unsupported: ${unknownFiles.map(f => f.name).join(', ')}`)
@@ -182,24 +239,24 @@ export default function FileLoader() {
       await loadGenomeFile(genomeFiles[0])
       // Remaining genome files → prompt to add as chromosomes
       if (genomeFiles.length > 1) {
-        if (trackFiles.length > 0) await loadTrackFiles(trackFiles)
+        if (trackEntries.length > 0) await loadTrackEntries(trackEntries)
         setPrompt({ files: genomeFiles.slice(1) })
         if (inputRef.current) inputRef.current.value = ''
         return
       }
-      if (trackFiles.length > 0) await loadTrackFiles(trackFiles)
+      if (trackEntries.length > 0) await loadTrackEntries(trackEntries)
     }
     // Case 2: Genome already loaded and new genome file(s) selected — prompt
     else if (genomeFiles.length > 0 && genome) {
-      if (trackFiles.length > 0) await loadTrackFiles(trackFiles)
+      if (trackEntries.length > 0) await loadTrackEntries(trackEntries)
       setPrompt({ files: genomeFiles })
     }
     // Case 3: Only track files
-    else if (trackFiles.length > 0) {
+    else if (trackEntries.length > 0) {
       if (!genome) {
         setErr('Load a genome file first (.fasta, .gb, .genbank)')
       } else {
-        await loadTrackFiles(trackFiles)
+        await loadTrackEntries(trackEntries)
       }
     }
 
@@ -224,7 +281,8 @@ export default function FileLoader() {
     if (!prompt) return
     const { files } = prompt
     setPrompt(null)
-    await loadTrackFiles(files)
+    // Wrap plain genome files as trackEntries (no index)
+    await loadTrackEntries(files.map(f => ({ file: f, indexFile: null })))
   }
 
   function handlePromptSkip() {

@@ -4,16 +4,52 @@ Requires a .bai index alongside the BAM file for random-access queries.
 CRAM is not supported by bamnostic; use BAM instead.
 """
 
+from pathlib import Path
+
 import bamnostic as bam
 
 MAX_READS_RETURNED = 5000
 READ_DETAIL_THRESHOLD = 50_000  # bp
 
+# Standard index naming conventions: file.bam.bai and file.bai
+_INDEX_SUFFIXES = (".bam.bai", ".bai")
+
+
+def _find_index(bam_path: str) -> str | None:
+    """Locate a .bai index for the given BAM file.
+
+    Checks both naming conventions (.bam.bai and .bai) in the same
+    directory as the BAM file.
+    """
+    p = Path(bam_path)
+    for candidate in (
+        p.parent / (p.name + ".bai"),   # reads.bam.bai
+        p.with_suffix(".bai"),           # reads.bai
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return None
+
 
 class BamReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._aln = bam.AlignmentFile(file_path, "rb")
+
+        # Validate BAM file exists
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"BAM file not found: {file_path}")
+
+        # Validate index exists before opening
+        index_path = _find_index(file_path)
+        if index_path is None:
+            bam_name = Path(file_path).name
+            raise FileNotFoundError(
+                f"BAM index (.bai) not found for '{bam_name}'. "
+                f"Please provide a .bai file alongside the BAM file "
+                f"(expected '{bam_name}.bai' or '{Path(bam_name).stem}.bai')."
+            )
+
+        self._aln = bam.AlignmentFile(file_path, "rb", index_filename=index_path)
 
     def close(self):
         self._aln.close()
@@ -51,8 +87,8 @@ class BamReader:
                 hi = min(re, end) - start
                 for i in range(lo, hi):
                     depth[i] += 1
-        except Exception:
-            pass
+        except KeyError:
+            return []  # chromosome not in index
 
         bin_size = max(1, region_len // bins)
         result = []
@@ -87,8 +123,8 @@ class BamReader:
                 })
                 if len(reads) >= MAX_READS_RETURNED:
                     break
-        except Exception:
-            pass
+        except KeyError:
+            return []  # chromosome not in index
 
         _assign_rows(reads)
         return reads
