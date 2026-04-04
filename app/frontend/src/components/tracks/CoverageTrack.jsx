@@ -66,8 +66,17 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const fwdColor = color
     const revColor = adjustColor(color, -40)
 
-    // Pixels per single nucleotide — auto bars are capped to this width
+    // Pixels per single nucleotide — when zoomed in enough that each nt
+    // is >1px, cap auto bars to pxPerNt so single-position signals don't
+    // visually span the entire bin. When zoomed out (pxPerNt < 1), use
+    // the full bin width so there are no gaps.
     const pxPerNt = width / regionLen
+
+    function autoBarWidth(binW) {
+      if (!barAuto) return Math.min(barFixedPx, binW)
+      if (pxPerNt >= 1) return Math.max(1, Math.min(pxPerNt, binW))
+      return Math.max(1, binW)
+    }
 
     if (hasNegative) {
       const margin = 12
@@ -82,7 +91,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
 
       for (const bin of data.bins) {
         const binW = ((bin.end - bin.start) / regionLen) * width
-        const w = barAuto ? Math.max(1, binW) : Math.min(barFixedPx, binW)
+        const w = autoBarWidth(binW)
         const x = ((bin.start - regionStart) / regionLen) * width
         const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
         const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
@@ -106,7 +115,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       ctx.fillStyle = fwdColor
       for (const bin of data.bins) {
         const binW = ((bin.end - bin.start) / regionLen) * width
-        const w = barAuto ? Math.max(1, binW) : Math.min(barFixedPx, binW)
+        const w = autoBarWidth(binW)
         const x = ((bin.start - regionStart) / regionLen) * width
         const ratio = useLog ? logScale(bin.value, effectiveMax) : bin.value / effectiveMax
         const barH = ratio * (height - 14)

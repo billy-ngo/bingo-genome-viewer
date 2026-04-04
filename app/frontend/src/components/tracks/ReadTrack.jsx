@@ -52,10 +52,13 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       const color = track.color || '#78909c'
       const barAuto = track.barAutoWidth !== false
       const barFixedPx = track.barWidth || 2
+      const pxPerNt = width / regionLen
       ctx.fillStyle = color
       for (const bin of data.bins) {
         const binW = ((bin.end - bin.start) / regionLen) * width
-        const w = barAuto ? Math.max(1, binW) : Math.min(barFixedPx, binW)
+        const w = barAuto
+          ? (pxPerNt >= 1 ? Math.max(1, Math.min(pxPerNt, binW)) : Math.max(1, binW))
+          : Math.min(barFixedPx, binW)
         const x = ((bin.start - regionStart) / regionLen) * width
         const ratio = Math.min(1, bin.value / maxVal)
         const barH = ratio * (height - 14)
@@ -142,11 +145,12 @@ export default function ReadTrack({ track, width, height, onWarning }) {
             }
 
           } else if (seg.type === 'I') {
-            // Insertion — purple tick at exact genomic position
+            // Insertion — thin purple tick at exact genomic position
+            // Always 2px wide regardless of zoom so it doesn't look like
+            // the insertion spans multiple nucleotides
             const ix = toX(seg.pos)
-            const tickW = Math.max(2, Math.min(4, pxPerBp * 0.4))
             ctx.fillStyle = INSERTION_COLOR
-            ctx.fillRect(ix - tickW / 2, y - 1, tickW, READ_HEIGHT + 2)
+            ctx.fillRect(ix - 1, y - 1, 2, READ_HEIGHT + 2)
           }
         }
       } else {
