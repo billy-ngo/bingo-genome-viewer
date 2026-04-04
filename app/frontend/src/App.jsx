@@ -14,6 +14,7 @@ import TrackSettings from './components/ui/TrackSettings'
 import ThemeSettings from './components/ui/ThemeSettings'
 import ExportImage from './components/ui/ExportImage'
 import SessionManager, { useAutoSave } from './components/ui/SessionManager'
+import HelpTour from './components/ui/HelpTour'
 import NavigationBar from './components/NavigationBar'
 import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
@@ -61,6 +62,7 @@ function BrowserApp() {
   const [showExport, setShowExport] = useState(false)
   const [showSession, setShowSession] = useState(false)
   const [showAbout, setShowAbout] = useState(false)
+  const [showTour, setShowTour] = useState(false)
   const [labelWidth, setLabelWidth] = useState(140)
   const [dragTrackId, setDragTrackId] = useState(null)
   const [dropTrackId, setDropTrackId] = useState(null)
@@ -245,6 +247,23 @@ function BrowserApp() {
             onMouseEnter={e => { e.currentTarget.style.color = theme.textPrimary; e.currentTarget.style.borderColor = theme.textSecondary }}
             onMouseLeave={e => { e.currentTarget.style.color = theme.textSecondary; e.currentTarget.style.borderColor = theme.border }}
           >?</button>
+          <button
+            onClick={() => setShowTour(true)}
+            title="Guided Tour"
+            style={{
+              background: 'none', border: `1px solid ${theme.border}`, borderRadius: 10,
+              padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4,
+              cursor: 'pointer', color: theme.textSecondary, fontSize: 11, fontWeight: 600,
+              lineHeight: 1, flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = theme.textPrimary; e.currentTarget.style.borderColor = theme.textSecondary }}
+            onMouseLeave={e => { e.currentTarget.style.color = theme.textSecondary; e.currentTarget.style.borderColor = theme.border }}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
+              <path d="M1 2.5A2.5 2.5 0 0 1 3.5 0h9A2.5 2.5 0 0 1 15 2.5v11a.5.5 0 0 1-.854.354L11.5 11.207l-2.646 2.647a.5.5 0 0 1-.708 0L5.5 11.207 2.854 13.854A.5.5 0 0 1 2 13.5v-11A1.5 1.5 0 0 0 3.5 1h9A1.5 1.5 0 0 1 14 2.5v10.793l-2.146-2.147a.5.5 0 0 0-.708 0L8.5 13.793l-2.646-2.647a.5.5 0 0 0-.708 0L3 13.293V2.5A1.5 1.5 0 0 1 4.5 1z"/>
+            </svg>
+            Tour
+          </button>
         </div>
         <div style={S.headerBtns}>
           <button style={S.btn} onClick={() => setShowSession(true)} title="Save or restore a session">
@@ -344,6 +363,7 @@ function BrowserApp() {
       {showTheme && <ThemeSettings onClose={() => setShowTheme(false)} />}
       {showExport && <ExportImage onClose={() => setShowExport(false)} />}
       {showSession && <SessionManager onClose={() => setShowSession(false)} labelWidth={labelWidth} setLabelWidth={setLabelWidth} />}
+      {showTour && <HelpTour onClose={() => setShowTour(false)} theme={theme} />}
 
       {showAbout && (
         <div style={{

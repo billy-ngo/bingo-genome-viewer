@@ -5,6 +5,7 @@ Usage:
     bingo                    # start on default port 8000
     bingo --port 9000        # start on a custom port
     bingo --no-browser       # start without opening the browser
+    bingo --install          # create a desktop shortcut
 """
 
 import argparse
@@ -32,7 +33,16 @@ def main():
         "--no-browser", action="store_true",
         help="Don't automatically open the browser",
     )
+    parser.add_argument(
+        "--install", action="store_true",
+        help="Create a desktop shortcut instead of starting the server",
+    )
     args = parser.parse_args()
+
+    if args.install:
+        from bingoviewer.install_shortcut import main as install_main
+        install_main()
+        return 0
 
     # Add the backend source directory to sys.path so bare imports
     # (e.g. `from state import app_state`, `from readers.bam_reader import ...`)
