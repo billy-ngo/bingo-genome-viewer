@@ -14,6 +14,8 @@ A lightweight, browser-based genomics viewer for visualizing genomes, coverage t
 
 ## Quick Start
 
+> **Requires Python 3.10 or newer.** Download from [python.org](https://www.python.org/downloads/) if needed.
+
 ### Install with pip (recommended)
 
 No Node.js required — the frontend is pre-built and bundled.
@@ -46,12 +48,24 @@ Double-click **`Install_macOS.command`** (or run it from a terminal). It will cr
 
 ### Docker
 
+No Python or Node.js required — everything runs inside the container.
+
 ```bash
 cd app
-docker-compose up --build
+docker compose up --build
 ```
 
 Then open [http://localhost:8000](http://localhost:8000).
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `python` not found | Install Python 3.10+ and check **Add to PATH** during setup |
+| pip install fails | Try `pip install --user BiNgoViewer` or use a virtual environment |
+| Port 8000 in use | Run `bingo --port 9000` (or any free port) |
+| Browser doesn't open | Visit `http://localhost:8000` manually |
+| Server won't stop | The server auto-exits when you close all browser tabs; or press `Ctrl+C` |
 
 ## Usage
 

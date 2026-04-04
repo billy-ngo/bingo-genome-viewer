@@ -1,8 +1,9 @@
 """
 BiNgo Genome Viewer — FastAPI application entry point.
 
-Mounts the REST API routers (/api/genome, /api/tracks) and optionally
-serves the built Vite frontend from frontend/dist/ for production use.
+Mounts the REST API routers (/api/genome, /api/tracks) and serves
+the bundled Vite frontend. Works both in pip-installed mode (frontend
+bundled inside the package) and in development mode (frontend/dist/).
 
 When launched via the CLI (BINGO_AUTO_SHUTDOWN=1), a background watchdog
 shuts the server down automatically once all browser tabs have closed
@@ -37,9 +38,12 @@ app.include_router(genome_router)
 app.include_router(tracks_router)
 app.include_router(data_router)
 
-# Serve built frontend if present
-frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
-if frontend_dist.exists():
+# Locate the built frontend — check bundled package location first, then dev layout
+_pkg_dist = Path(__file__).parent.parent / "frontend_dist"      # pip-installed
+_dev_dist = Path(__file__).parent.parent / "frontend" / "dist"  # dev / launcher mode
+frontend_dist = _pkg_dist if _pkg_dist.exists() else (_dev_dist if _dev_dist.exists() else None)
+
+if frontend_dist:
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
 
     @app.get("/", include_in_schema=False)
@@ -53,8 +57,14 @@ def health():
 
 
 # ── Auto-shutdown heartbeat system ─────────────────────────────
+# The frontend sends GET /api/heartbeat every 10 seconds.
+# If no heartbeat is received for _HEARTBEAT_TIMEOUT seconds after
+# the first one, the server shuts itself down.  Only active when
+# the BINGO_AUTO_SHUTDOWN environment variable is set (i.e. launched
+# from the CLI / installer, not during development).
+
 _last_heartbeat = 0.0
-_HEARTBEAT_TIMEOUT = 30
+_HEARTBEAT_TIMEOUT = 30  # seconds
 
 
 @app.get("/api/heartbeat")
@@ -72,6 +82,7 @@ def _auto_shutdown_watchdog():
         if _last_heartbeat > 0:
             elapsed = time.time() - _last_heartbeat
             if elapsed > _HEARTBEAT_TIMEOUT:
+                # Clean up lock file before exiting
                 lock_file = Path.home() / ".bingoviewer" / "server.lock"
                 try:
                     lock_file.unlink(missing_ok=True)

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   bingo-genome-viewer:
     build: .
