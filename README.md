@@ -23,39 +23,26 @@ pip install BiNgoViewer
 bingo
 ```
 
-This installs the `bingo` command, starts the server, and opens the viewer in your browser. Options:
+Options:
 
 ```bash
 bingo --port 9000        # use a custom port
 bingo --no-browser       # start without opening the browser
-python -m bingoviewer    # alternative way to launch
+bingo --install          # create a desktop shortcut
 ```
 
-### Windows (from source)
+### Windows (one-click)
 
-Requires Python 3.10+ and Node.js 18+.
+Double-click **`Install_Windows.bat`**. It will install Python dependencies into a local environment and launch the viewer. No command line needed.
 
-Double-click **`launch.bat`**. On first run it will install dependencies automatically, then open the viewer in your browser.
+### macOS / Linux (one-click)
 
-### macOS (from source)
+Double-click **`Install_macOS.command`** (or run it from a terminal). It will create a virtual environment, install dependencies, and launch the viewer.
 
-Requires Python 3.10+ and Node.js 18+.
-
-Double-click **`BiNgo Genome Viewer.command`** (or run `./launch.sh` from a terminal). On first run it will create a virtual environment and install dependencies, then open the viewer in your browser.
-
-> **Permission denied?** If macOS says the file can't be opened, run this once in Terminal from the project folder:
+> **Permission denied?** Run once in Terminal:
 > ```bash
-> chmod +x launch.sh "BiNgo Genome Viewer.command"
+> chmod +x Install_macOS.command
 > ```
-
-### Linux (from source)
-
-Requires Python 3.10+ and Node.js 18+.
-
-```bash
-chmod +x launch.sh
-./launch.sh
-```
 
 ### Docker
 
@@ -68,37 +55,34 @@ Then open [http://localhost:8000](http://localhost:8000).
 
 ## Usage
 
-1. **Load a genome** — Drag and drop a FASTA or GenBank file into the file loader at the top
-2. **Add tracks** — Drag and drop any supported track files (BAM, BigWig, WIG, VCF, BED, GFF, etc.)
-3. **Navigate** — Click and drag on tracks to pan; scroll wheel to zoom; use the coordinate bar to jump to a region
-4. **Track settings** — Click the gear icon to adjust height, color, scale, and bar width for tracks
-5. **Reorder tracks** — Drag the grip handle (`≡`) on any track label to reorder
-6. **Export** — Click Export to save the current view as SVG or PNG
-7. **Save session** — Click Save Session to store your current workspace; restore it later or export as a JSON file
+1. **Load files** — Use the file picker or drag and drop. Genome and track files are auto-classified by extension.
+2. **Navigate** — Click and drag on tracks to pan; scroll wheel to zoom; use the coordinate bar to jump to a region.
+3. **Track settings** — Click the gear icon to adjust height, color, scale, and bar width.
+4. **Reorder tracks** — Drag the grip handle on any track label.
+5. **Export** — Save the current view as SVG or PNG.
+6. **Save session** — Store your workspace and restore it later.
 
 ## Project Structure
 
 ```
+├── Install_Windows.bat         # Windows installer (double-click)
+├── Install_macOS.command       # macOS / Linux installer (double-click)
+├── README.md
 ├── pyproject.toml              # pip package definition
 ├── bingoviewer/                # Installable Python package
 │   ├── cli.py                  # `bingo` CLI entry point
 │   ├── server/                 # FastAPI backend (bundled)
 │   └── frontend_dist/          # Pre-built React frontend
-├── launch.bat                  # Windows launcher (from source)
-├── launch.sh                   # macOS / Linux launcher (from source)
-├── BiNgo Genome Viewer.command # macOS double-click launcher
 └── app/                        # Application source code
     ├── backend/                # Python (FastAPI) REST API
-    ├── frontend/               # React (Vite) user interface
-    ├── Dockerfile              # Docker build
-    └── docker-compose.yml      # Docker Compose config
+    └── frontend/               # React (Vite) user interface
 ```
 
 ## Citation
 
 If you use this software in your research, please cite:
 
-> Ngo, B. (2026). BiNgo Genome Viewer (v1.0.0) [Software].
+> Ngo, B. (2026). BiNgo Genome Viewer (v1.1.0) [Software].
 
 ## License
 

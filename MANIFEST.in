@@ -1,2 +1,0 @@
-recursive-include bingoviewer/frontend_dist *
-recursive-include bingoviewer/server *.py
