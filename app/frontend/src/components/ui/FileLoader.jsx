@@ -106,6 +106,13 @@ export default function FileLoader() {
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
         setGenome(info)
+        // Ensure annotation track exists when the merged genome has annotations
+        if (info.is_annotated) {
+          addGenomeAnnotationTrack({
+            id: 'genome_annotations', name: `${info.name} (annotations)`,
+            track_type: 'genome_annotations', file_format: 'genbank',
+          })
+        }
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
     setLoading(false)

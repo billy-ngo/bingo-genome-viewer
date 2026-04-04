@@ -12,6 +12,7 @@ class GenomeReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
         self._sub_readers: List[tuple] = []  # [(format, reader), ...]
+        self._chrom_index: Dict[str, int] = {}  # chrom name → index in _sub_readers
         self._add_file(file_path)
 
     @staticmethod
@@ -27,7 +28,15 @@ class GenomeReader:
         else:
             from pyfaidx import Fasta
             reader = Fasta(file_path)
+        idx = len(self._sub_readers)
         self._sub_readers.append((fmt, reader))
+        # Build explicit chromosome→reader index so lookups are exact
+        if fmt == "genbank":
+            for info in reader.chromosomes:
+                self._chrom_index[info["name"]] = idx
+        else:
+            for key in reader.keys():
+                self._chrom_index[key] = idx
 
     def add_chromosomes_from(self, file_path: str):
         """Load another file and merge its chromosomes into this genome."""
@@ -51,25 +60,23 @@ class GenomeReader:
 
     def get_sequence(self, chrom: str, start: int, end: int) -> str:
         """0-based half-open [start, end)."""
-        for fmt, reader in self._sub_readers:
-            if fmt == "genbank":
-                try:
-                    return reader.get_sequence(chrom, start, end)
-                except KeyError:
-                    continue
-            else:
-                if chrom in reader:
-                    return str(reader[chrom][start:end])
-        raise KeyError(f"Chromosome '{chrom}' not found")
+        idx = self._chrom_index.get(chrom)
+        if idx is None:
+            raise KeyError(f"Chromosome '{chrom}' not found")
+        fmt, reader = self._sub_readers[idx]
+        if fmt == "genbank":
+            return reader.get_sequence(chrom, start, end)
+        else:
+            return str(reader[chrom][start:end])
 
     def get_features(self, chrom: str, start: int, end: int) -> List[Dict]:
         """Only GenBank files carry annotation features."""
-        for fmt, reader in self._sub_readers:
-            if fmt == "genbank":
-                try:
-                    return reader.get_features(chrom, start, end)
-                except KeyError:
-                    continue
+        idx = self._chrom_index.get(chrom)
+        if idx is None:
+            return []
+        fmt, reader = self._sub_readers[idx]
+        if fmt == "genbank":
+            return reader.get_features(chrom, start, end)
         return []
 
     def is_annotated(self) -> bool:

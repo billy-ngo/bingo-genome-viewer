@@ -239,6 +239,13 @@ function BrowserApp() {
           const info = res.data
           if (info.name) info.name = cleanName(info.name)
           setGenome(info)
+          // Ensure annotation track exists when the merged genome has annotations
+          if (info.is_annotated) {
+            addGenomeAnnotationTrack({
+              id: 'genome_annotations', name: `${info.name} (annotations)`,
+              track_type: 'genome_annotations', file_format: 'genbank',
+            })
+          }
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
       }
       if (errors.length) {
@@ -252,7 +259,7 @@ function BrowserApp() {
       setDropStatus({ error: err.message || 'Failed to add chromosomes' })
       setTimeout(() => setDropStatus(null), 5000)
     }
-  }, [dropPrompt, setGenome])
+  }, [dropPrompt, setGenome, addGenomeAnnotationTrack])
 
   const onDropPromptTrack = useCallback(async () => {
     if (!dropPrompt) return
