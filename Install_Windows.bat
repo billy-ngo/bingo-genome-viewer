@@ -103,11 +103,15 @@ echo.
 :: Install from local source if pyproject.toml is beside this script
 set "SRC=%~dp0"
 if exist "!SRC!pyproject.toml" (
+    echo   Installing from local source...
+    echo.
     :: Force reinstall the package itself so local changes always take effect,
     :: then run again without --force to install/update dependencies normally
     "!VENV!\Scripts\python.exe" -m pip install --force-reinstall --no-deps "!SRC!." -q
     "!VENV!\Scripts\python.exe" -m pip install "!SRC!." -q
 ) else (
+    echo   Installing from PyPI...
+    echo.
     "!VENV!\Scripts\python.exe" -m pip install --upgrade bingoviewer
 )
 if !errorlevel! NEQ 0 (
