@@ -19,6 +19,36 @@ import TrackPanel from './components/TrackPanel'
 
 const APP_VERSION = '1.0.0'
 
+function BingoLogo({ size = 32 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ flexShrink: 0 }}>
+      <defs>
+        <radialGradient id="ballGrad" cx="35%" cy="30%" r="65%">
+          <stop offset="0%" stopColor="#5eb8ff"/>
+          <stop offset="50%" stopColor="#1976d2"/>
+          <stop offset="100%" stopColor="#0d47a1"/>
+        </radialGradient>
+        <radialGradient id="shine" cx="30%" cy="25%" r="30%">
+          <stop offset="0%" stopColor="rgba(255,255,255,0.7)"/>
+          <stop offset="100%" stopColor="rgba(255,255,255,0)"/>
+        </radialGradient>
+      </defs>
+      {/* Ball body */}
+      <circle cx="50" cy="50" r="48" fill="url(#ballGrad)"/>
+      {/* White center circle */}
+      <circle cx="50" cy="48" r="28" fill="white"/>
+      {/* Blue ring around center */}
+      <circle cx="50" cy="48" r="28" fill="none" stroke="#1565c0" strokeWidth="2.5"/>
+      {/* BN text at top */}
+      <text x="50" y="39" textAnchor="middle" fontSize="13" fontWeight="800" fontFamily="Arial, sans-serif" fill="#0d47a1">BN</text>
+      {/* Number 1 */}
+      <text x="50" y="64" textAnchor="middle" fontSize="30" fontWeight="900" fontFamily="Arial, sans-serif" fill="#0d47a1">1</text>
+      {/* Glossy highlight */}
+      <circle cx="50" cy="50" r="48" fill="url(#shine)"/>
+    </svg>
+  )
+}
+
 function BrowserApp() {
   const { theme } = useTheme()
   const { genome, region } = useBrowser()
@@ -89,6 +119,7 @@ function BrowserApp() {
     <div style={S.app}>
       <div style={S.header}>
         <div style={S.headerLeft}>
+          <BingoLogo size={34} />
           <div>
             <div style={S.title}>BiNgo Genome Viewer</div>
             {genome && <div style={S.subtitle}>{genome.name} · {genome.chromosomes.length} chr</div>}
@@ -214,7 +245,10 @@ function BrowserApp() {
             background: theme.panelBg, border: `1px solid ${theme.border}`, borderRadius: 8,
             padding: '28px 36px', maxWidth: 400, color: theme.textPrimary, lineHeight: 1.7,
           }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 16 }}>BiNgo Genome Viewer</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+              <BingoLogo size={44} />
+              <div style={{ fontSize: 20, fontWeight: 700 }}>BiNgo Genome Viewer</div>
+            </div>
             <div style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 12 }}>
               <strong style={{ color: theme.textPrimary }}>Version:</strong> {APP_VERSION}
             </div>
