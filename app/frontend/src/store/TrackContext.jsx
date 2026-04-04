@@ -109,8 +109,13 @@ export function TrackProvider({ children }) {
 
   const addGenomeAnnotationTrack = useCallback((info) => {
     setTracks(prev => {
-      const exists = prev.find(t => t.id === info.id)
-      if (exists) return prev
+      const idx = prev.findIndex(t => t.id === info.id)
+      if (idx !== -1) {
+        // Already exists (maybe hidden) — update name and re-show
+        const updated = [...prev]
+        updated[idx] = { ...updated[idx], name: cleanName(info.name) || info.name, visible: true }
+        return updated
+      }
       return [...prev, {
         ...info,
         name: cleanName(info.name) || info.name,
