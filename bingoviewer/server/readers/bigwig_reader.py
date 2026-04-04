@@ -227,10 +227,13 @@ class BigWigReader:
 
 # ── BedGraph (text) ───────────────────────────────────────────────────────────
 
+import bisect
+
 class BedGraphReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._data: dict[str, list] = {}
+        self._data: dict[str, list] = {}   # chrom -> [(start, end, value), ...]
+        self._starts: dict[str, list] = {} # chrom -> [start, start, ...] for bisect
         self._chroms: dict[str, int] = {}
         self._load()
 
@@ -255,6 +258,7 @@ class BedGraphReader:
                 self._chroms[chrom] = max(self._chroms.get(chrom, 0), end)
         for chrom in self._data:
             self._data[chrom].sort()
+            self._starts[chrom] = [e[0] for e in self._data[chrom]]
 
     def close(self): pass
 
@@ -265,6 +269,7 @@ class BedGraphReader:
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
         entries = self._data.get(chrom, [])
+        starts = self._starts.get(chrom, [])
         region_len = end - start
         if region_len <= 0 or not entries:
             return []
@@ -272,8 +277,14 @@ class BedGraphReader:
         bin_size = region_len / n_bins
         totals = [0.0] * n_bins
         counts = [0] * n_bins
-        for (s, e, v) in entries:
-            if e <= start or s >= end:
+        # Binary search for first relevant entry
+        lo = bisect.bisect_right(starts, start) - 1
+        if lo < 0: lo = 0
+        for i in range(lo, len(entries)):
+            s, e, v = entries[i]
+            if s >= end:
+                break
+            if e <= start:
                 continue
             bi_s = int((max(s, start) - start) / bin_size)
             bi_e = min(int((min(e, end) - 1 - start) / bin_size) + 1, n_bins)
@@ -287,7 +298,6 @@ class BedGraphReader:
 # ── Wig (text) ────────────────────────────────────────────────────────────────
 
 import re
-import bisect
 
 class WigReader:
     """
@@ -296,20 +306,23 @@ class WigReader:
     - Negative values (e.g. Tn-seq reverse-strand reads)
     - Duplicate positions (same position, different strands)
     - 1-based WIG coords → 0-based internal coords
+
+    Data is stored as pre-built position and value arrays per chromosome
+    for fast binary-search queries without per-request allocation.
     """
 
     def __init__(self, file_path: str):
         self.file_path = file_path
-        # Store as sorted list of (position, value) tuples — allows duplicates
-        self._data: dict[str, list] = {}   # chrom -> [(pos, value), ...]
-        self._chroms: dict[str, int] = {}  # chrom -> max_position
+        self._positions: dict[str, list] = {} # chrom -> [pos, pos, ...] sorted
+        self._values: dict[str, list] = {}    # chrom -> [val, val, ...] matching
+        self._chroms: dict[str, int] = {}     # chrom -> max_position
         self._load()
 
     def _resolve_chrom(self, chrom: str) -> str:
-        if chrom in self._data:
+        if chrom in self._positions:
             return chrom
-        if len(self._data) == 1:
-            return next(iter(self._data))
+        if len(self._positions) == 1:
+            return next(iter(self._positions))
         return chrom
 
     def _load(self):
@@ -317,7 +330,7 @@ class WigReader:
         step = span = 1
         pos = 1
         fixed = False
-        raw: dict[str, list] = {}  # collect unsorted first
+        raw: dict[str, list] = {}  # collect unsorted first: chrom -> [(pos, val), ...]
 
         with open(self.file_path) as f:
             for line in f:
@@ -347,23 +360,23 @@ class WigReader:
                     try:
                         if fixed:
                             v = float(parts[0])
-                            # WIG is 1-based; convert to 0-based
                             p0 = pos - 1
                             raw[chrom].append((p0, v))
                             self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
                             pos += step
                         elif len(parts) >= 2:
-                            p0 = int(parts[0]) - 1  # 1-based → 0-based
+                            p0 = int(parts[0]) - 1
                             v = float(parts[1])
                             raw[chrom].append((p0, v))
                             self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
                     except (ValueError, IndexError):
-                        continue  # skip malformed lines
+                        continue
 
-        # Sort by position for fast binary-search queries
+        # Build sorted parallel arrays for fast binary-search queries
         for chrom, entries in raw.items():
             entries.sort(key=lambda x: x[0])
-            self._data[chrom] = entries
+            self._positions[chrom] = [e[0] for e in entries]
+            self._values[chrom] = [e[1] for e in entries]
 
     def close(self): pass
 
@@ -373,24 +386,25 @@ class WigReader:
 
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
         chrom = self._resolve_chrom(chrom)
-        entries = self._data.get(chrom, [])
+        positions = self._positions.get(chrom, [])
+        values = self._values.get(chrom, [])
         region_len = end - start
-        if region_len <= 0 or not entries:
+        if region_len <= 0 or not positions:
             return []
 
         n_bins = min(bins, region_len)
         bin_size = region_len / n_bins
-        pos_totals = [0.0] * n_bins  # forward (positive values)
-        neg_totals = [0.0] * n_bins  # reverse (negative values)
+        pos_totals = [0.0] * n_bins
+        neg_totals = [0.0] * n_bins
 
         # Binary search for start of relevant data
-        positions = [e[0] for e in entries]
         lo = bisect.bisect_left(positions, start)
 
-        for i in range(lo, len(entries)):
-            p, v = entries[i]
+        for i in range(lo, len(positions)):
+            p = positions[i]
             if p >= end:
                 break
+            v = values[i]
             bi = min(int((p - start) / bin_size), n_bins - 1)
             if v >= 0:
                 pos_totals[bi] += v
@@ -401,7 +415,7 @@ class WigReader:
             {
                 "start": int(start + i * bin_size),
                 "end": int(start + (i + 1) * bin_size),
-                "value": pos_totals[i] + neg_totals[i],  # net value
+                "value": pos_totals[i] + neg_totals[i],
                 "forward": pos_totals[i],
                 "reverse": neg_totals[i],
             }

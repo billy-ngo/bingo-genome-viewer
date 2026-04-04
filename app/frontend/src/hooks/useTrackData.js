@@ -3,6 +3,10 @@
  *
  * Manages loading/error state and an overscan cache so panning
  * doesn't re-fetch on every pixel. Supports coverage, reads, variants, features.
+ *
+ * Zoom-aware: when the zoom level changes while the viewport is still
+ * within the overscan region, a 1-second debounced refetch is scheduled
+ * to get data at the correct resolution for the new zoom level.
  */
 import { useState, useEffect, useRef } from 'react'
 import { tracksApi } from '../api/client'
@@ -10,6 +14,7 @@ import { tracksApi } from '../api/client'
 const READ_DETAIL_THRESHOLD = 50_000
 const OVERSCAN = 1.0        // fetch 1x extra on each side (3x total viewport width)
 const REFETCH_DEBOUNCE = 120 // ms — delay refetches during rapid panning
+const ZOOM_REFETCH_DELAY = 1000 // ms — delay before refetching at new resolution
 
 // Simple LRU cache keyed by string
 function makeCache(maxSize = 200) {
@@ -23,7 +28,6 @@ function makeCache(maxSize = 200) {
       map.set(key, val)
     },
     findByPrefix(prefix) {
-      // Return the LAST (most recent) match, not the first
       let result = null
       for (const [key, val] of map) {
         if (key.startsWith(prefix)) result = val
@@ -35,27 +39,19 @@ function makeCache(maxSize = 200) {
 const cache = makeCache()
 
 // ─── Live data store ────────────────────────────────────────────────────────
-// Stores the *currently rendered* data for each track — written every time
-// a track component receives new data, so the export always reads exactly
-// what is on screen.
 const liveData = new Map()
 
-/** Called internally whenever a track component gets data */
 function setLiveData(trackId, data) {
   liveData.set(trackId, data)
 }
 
-/** Retrieve the data currently rendered by a track component (for export) */
 export function getLiveTrackData(trackId) {
   return liveData.get(trackId) || null
 }
 
-/** Legacy helper used by annotation tooltip to sum bins across tracks */
 export function getCachedDataForTrack(trackId, chrom) {
-  // Try live data first (always up-to-date)
   const live = liveData.get(trackId)
   if (live) return live
-  // Fall back to cache prefix search
   return cache.findByPrefix(`${trackId}|coverage|${chrom}|`)
     || cache.findByPrefix(`${trackId}|reads|${chrom}|`)
     || cache.findByPrefix(`${trackId}|annotations|${chrom}|`)
@@ -69,9 +65,10 @@ export function useTrackData(track, region, canvasWidth) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const abortRef = useRef(null)
-  const fetchedRef = useRef(null)   // { trackId, chrom, start, end } — bounds of last successful fetch
+  const fetchedRef = useRef(null)
   const debounceRef = useRef(null)
-  const hasDataRef = useRef(false)  // whether we've ever received data for current track
+  const zoomDebounceRef = useRef(null)
+  const hasDataRef = useRef(false)
 
   useEffect(() => {
     if (!track || !region || !canvasWidth) return
@@ -85,20 +82,34 @@ export function useTrackData(track, region, canvasWidth) {
       hasDataRef.current = false
     }
 
-    // Check if current viewport fits within the already-fetched overscan region
-    // AND the zoom level hasn't changed significantly (within 20%)
+    // Check if viewport fits within already-fetched overscan
     const f = fetchedRef.current
     if (f && f.trackId === track.id && f.chrom === chrom &&
         start >= f.start && end <= f.end) {
-      // If zoom level changed by >20%, refetch at new resolution
+      // Viewport is within overscan — keep showing current data.
+      // But if zoom level changed, schedule a delayed refetch at
+      // the correct resolution (fires after user stops zooming).
       const zoomRatio = viewLen / (f.viewLen || viewLen)
       if (zoomRatio > 0.8 && zoomRatio < 1.2) {
+        // Same zoom level, just panning — no refetch needed
+        if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
         return
       }
+      // Zoom changed — schedule resolution refetch after 1 second
+      if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+      zoomDebounceRef.current = setTimeout(() => {
+        // Force a refetch by clearing the fetched ref
+        fetchedRef.current = null
+        // Trigger re-render which will enter the fetch path below
+        setData(prev => ({ ...prev, _zoomRefetch: Date.now() }))
+      }, ZOOM_REFETCH_DELAY)
+      return
     }
 
-    // Determine overscan bounds for the fetch
-    // (skip overscan for individual-read mode since it's expensive)
+    // Clear zoom debounce since we're doing a real fetch
+    if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+
+    // Determine overscan bounds
     const useOverscan = type !== 'reads' || viewLen > READ_DETAIL_THRESHOLD
     const os = useOverscan ? OVERSCAN : 0
     const fetchStart = Math.max(0, Math.floor(start - viewLen * os))
@@ -108,7 +119,6 @@ export function useTrackData(track, region, canvasWidth) {
 
     const cacheKey = `${track.id}|${type}|${chrom}|${fetchStart}|${fetchEnd}|${bins}`
 
-    // Check in-memory cache
     const cached = cache.get(cacheKey)
     if (cached) {
       setData(cached)
@@ -119,7 +129,6 @@ export function useTrackData(track, region, canvasWidth) {
       return
     }
 
-    // Clear any pending debounced fetch
     if (debounceRef.current) clearTimeout(debounceRef.current)
 
     const doFetch = () => {
@@ -127,8 +136,6 @@ export function useTrackData(track, region, canvasWidth) {
       const controller = new AbortController()
       abortRef.current = controller
 
-      // Only show loading spinner if we have no data at all (first load).
-      // During panning refetches, keep rendering stale data instead of blanking.
       if (!hasDataRef.current) setLoading(true)
       setError(null)
 
@@ -176,8 +183,6 @@ export function useTrackData(track, region, canvasWidth) {
         })
     }
 
-    // Debounce refetches when we already have data (user is actively panning).
-    // Fetch immediately if this is a new chromosome or we have no data yet.
     if (hasDataRef.current && f?.chrom === chrom) {
       debounceRef.current = setTimeout(doFetch, REFETCH_DEBOUNCE)
     } else {
@@ -186,8 +191,9 @@ export function useTrackData(track, region, canvasWidth) {
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
+      if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
     }
-  }, [track?.id, region?.chrom, region?.start, region?.end, canvasWidth])
+  }, [track?.id, region?.chrom, region?.start, region?.end, canvasWidth, data?._zoomRefetch])
 
   return { data, loading, error }
 }
