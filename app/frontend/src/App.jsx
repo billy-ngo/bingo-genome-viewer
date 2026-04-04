@@ -138,13 +138,13 @@ function BrowserApp() {
           >?</button>
         </div>
         <div style={S.headerBtns}>
-          <button style={S.btn} onClick={() => setShowSession(true)}>
+          <button style={S.btn} onClick={() => setShowSession(true)} title="Save or restore a session">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
               <path d="M2 2h8v8H2z"/><path d="M4 2v4h4V2"/><path d="M5 3h2"/>
             </svg>
             Save Session
           </button>
-          <button style={S.btn} onClick={() => setShowTheme(true)}>
+          <button style={S.btn} onClick={() => setShowTheme(true)} title="Customize color theme">
             <svg width="12" height="12" viewBox="0 0 12 12" style={{ flexShrink: 0 }}>
               <rect x="0" y="0" width="5.5" height="5.5" rx="1" fill="#66bb6a"/>
               <rect x="6.5" y="0" width="5.5" height="5.5" rx="1" fill="#42a5f5"/>
@@ -154,7 +154,7 @@ function BrowserApp() {
             Theme
           </button>
           {region && tracks.length > 0 && (
-            <button style={S.btn} onClick={() => setShowExport(true)}>
+            <button style={S.btn} onClick={() => setShowExport(true)} title="Export current view as SVG or PNG">
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                 <path d="M6 1v7M3 5.5L6 8.5 9 5.5M2 11h8"/>
               </svg>
@@ -162,7 +162,7 @@ function BrowserApp() {
             </button>
           )}
           {tracks.length > 0 && (
-            <button style={S.btn} onClick={() => setShowSettings(true)}>
+            <button style={S.btn} onClick={() => setShowSettings(true)} title="Adjust height, scale, color, and bar width for tracks">
               {'\u2699'} Track Settings
             </button>
           )}

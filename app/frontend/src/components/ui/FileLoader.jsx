@@ -1,9 +1,8 @@
 /**
- * FileLoader.jsx — Drag-and-drop file upload panel.
+ * FileLoader.jsx — File upload panel with auto-load and drag-and-drop.
  *
  * Accepts genome files (FASTA, GenBank) and track files (BAM, BigWig, WIG,
- * VCF, BED, GTF, GFF). Uploads to the backend and adds to the track list.
- * Supports both button-based loading and drag-and-drop from the file system.
+ * VCF, BED, GTF, GFF). Files load automatically when selected or dropped.
  */
 import React, { useState, useRef, useCallback } from 'react'
 import { genomeApi } from '../../api/client'
@@ -19,7 +18,6 @@ const TRACK_EXTS = new Set([
 
 function getExt(name) {
   if (!name) return ''
-  // Handle .vcf.gz specially
   if (name.toLowerCase().endsWith('.vcf.gz')) return '.vcf.gz'
   const dot = name.lastIndexOf('.')
   return dot >= 0 ? name.slice(dot).toLowerCase() : ''
@@ -55,11 +53,7 @@ export default function FileLoader() {
     label: { fontSize: 11, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 1, whiteSpace: 'nowrap' },
     fileInput: {
       background: theme.inputBg, border: `1px solid ${theme.borderAccent}`, borderRadius: 4,
-      color: theme.textPrimary, padding: '4px 6px', fontSize: 12, width: 220,
-    },
-    btn: {
-      background: theme.btnBg, border: 'none', borderRadius: 4, color: theme.btnText,
-      padding: '5px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+      color: theme.textPrimary, padding: '4px 6px', fontSize: 12, width: 220, cursor: 'pointer',
     },
     dropOverlay: {
       position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -104,16 +98,20 @@ export default function FileLoader() {
     else { setStatus(`Added ${files.length} track${files.length > 1 ? 's' : ''}.`); setTimeout(() => setStatus(null), 3000) }
   }
 
-  function loadGenomeButton() {
-    const file = genomeInputRef.current?.files?.[0]
-    if (!file) { setErr('Please choose a genome file first.'); return }
+  function onGenomeSelected(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setErr(null)
     loadGenomeFile(file)
   }
 
-  function loadTracksButton() {
-    const input = trackInputRef.current
-    if (!input?.files?.length) { setErr('Please choose one or more track files.'); return }
-    loadTrackFiles(Array.from(input.files)).then(() => { input.value = '' })
+  function onTracksSelected(e) {
+    const files = Array.from(e.target.files || [])
+    if (!files.length) return
+    setErr(null)
+    loadTrackFiles(files).then(() => {
+      if (trackInputRef.current) trackInputRef.current.value = ''
+    })
   }
 
   const handleDrop = useCallback((e) => {
@@ -142,21 +140,14 @@ export default function FileLoader() {
     }
 
     ;(async () => {
-      // Load genome first if present and no genome loaded yet
       if (genomeFiles.length > 0 && !genome) {
         await loadGenomeFile(genomeFiles[0])
-        if (genomeFiles.length > 1) {
-          // Remaining genome files treated as annotation tracks
-          trackFiles.push(...genomeFiles.slice(1))
-        }
+        if (genomeFiles.length > 1) trackFiles.push(...genomeFiles.slice(1))
       } else if (genomeFiles.length > 0 && genome) {
-        // Genome already loaded — treat genome files as annotation tracks
         trackFiles.push(...genomeFiles)
       }
 
-      if (trackFiles.length > 0) {
-        await loadTrackFiles(trackFiles)
-      }
+      if (trackFiles.length > 0) await loadTrackFiles(trackFiles)
 
       if (unknownFiles.length) {
         setErr(prev => {
@@ -168,26 +159,18 @@ export default function FileLoader() {
   }, [genome])
 
   const onDragEnter = useCallback((e) => {
-    e.preventDefault()
-    e.stopPropagation()
+    e.preventDefault(); e.stopPropagation()
     dragCounter.current++
     if (dragCounter.current === 1) setDragOver(true)
   }, [])
 
   const onDragLeave = useCallback((e) => {
-    e.preventDefault()
-    e.stopPropagation()
+    e.preventDefault(); e.stopPropagation()
     dragCounter.current--
-    if (dragCounter.current <= 0) {
-      dragCounter.current = 0
-      setDragOver(false)
-    }
+    if (dragCounter.current <= 0) { dragCounter.current = 0; setDragOver(false) }
   }, [])
 
-  const onDragOver = useCallback((e) => {
-    e.preventDefault()
-    e.stopPropagation()
-  }, [])
+  const onDragOver = useCallback((e) => { e.preventDefault(); e.stopPropagation() }, [])
 
   return (
     <div
@@ -203,29 +186,26 @@ export default function FileLoader() {
         </div>
       )}
 
-      <div style={S.group}>
+      <div style={S.group} title="Select a reference genome file (.gb, .gbk, .fasta, .fa)">
         <span style={S.label}>Genome</span>
         <input ref={genomeInputRef} type="file" style={S.fileInput} disabled={loading}
           accept=".gb,.gbk,.genbank,.fasta,.fa"
-          onChange={() => setErr(null)} />
-        <button style={S.btn} onClick={loadGenomeButton} disabled={loading}>
-          {loading ? 'Loading\u2026' : 'Load'}
-        </button>
+          onChange={onGenomeSelected} />
       </div>
       {genome && (
-        <div style={S.group}>
+        <div style={S.group} title="Select one or more track files (.bam, .bw, .wig, .vcf, .bed, .gff, .gtf)">
           <span style={S.label}>Tracks</span>
           <input ref={trackInputRef} type="file" multiple style={S.fileInput} disabled={loading}
-            accept=".bam,.bw,.bigwig,.wig,.bedgraph,.bdg,.vcf,.bed,.gtf,.gff,.gff2,.gff3" />
-          <button style={S.btn} onClick={loadTracksButton} disabled={loading}>Add Tracks</button>
+            accept=".bam,.bw,.bigwig,.wig,.bedgraph,.bdg,.vcf,.bed,.gtf,.gff,.gff2,.gff3"
+            onChange={onTracksSelected} />
         </div>
       )}
 
       <span style={{ fontSize: 10, color: theme.textMuted, fontStyle: 'italic' }}>
-        or drag &amp; drop files here
+        {loading ? status || 'Loading\u2026' : 'or drag & drop files'}
       </span>
 
-      {status && <span style={{ color: '#81c784', fontSize: 11 }}>{status}</span>}
+      {!loading && status && <span style={{ color: '#81c784', fontSize: 11 }}>{status}</span>}
       {(err || trackError) && <span style={{ color: '#ef9a9a', fontSize: 11 }}>{err || trackError}</span>}
     </div>
   )

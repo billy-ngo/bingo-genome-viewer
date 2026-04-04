@@ -33,7 +33,7 @@ export default function TrackPanel({
   onDragStart, onDragOver, onDrop, onDragEnd,
 }) {
   const { theme } = useTheme()
-  const { updateTrack } = useTracks()
+  const { updateTrack, removeTrack } = useTracks()
   const containerRef = useRef(null)
   const resizeRef = useRef(null)
   const [showColorPicker, setShowColorPicker] = useState(false)
@@ -114,7 +114,7 @@ export default function TrackPanel({
               onDragStart?.()
             }}
             style={{ cursor: 'grab', color: theme.textMuted, fontSize: 14, lineHeight: 1, userSelect: 'none', flexShrink: 0, padding: '0 2px' }}
-            title="Drag to reorder"
+            title="Drag to reorder tracks"
           >{'\u2261'}</div>
           <div ref={colorSwatchRef}>
             <span
@@ -123,6 +123,7 @@ export default function TrackPanel({
                 background: track.color, cursor: 'pointer', verticalAlign: 'middle',
                 border: '1px solid rgba(255,255,255,0.2)',
               }}
+              title="Click to pick color, double-click for full palette"
               onMouseDown={e => { e.stopPropagation(); setShowColorPicker(true) }}
               onDoubleClick={e => { e.stopPropagation(); setShowColorPicker(false); nativeColorRef.current?.click() }}
             />
@@ -164,6 +165,17 @@ export default function TrackPanel({
           <div style={{ ...S.trackName, flex: 1 }} title={track.name}>
             {track.name}
           </div>
+          <span
+            title="Remove track"
+            onClick={e => { e.stopPropagation(); removeTrack(track.id) }}
+            style={{
+              color: '#e53935', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              lineHeight: 1, flexShrink: 0, padding: '0 2px', opacity: 0.7,
+              transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+            onMouseLeave={e => e.currentTarget.style.opacity = '0.7'}
+          >{'\u00d7'}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <div style={S.trackType}>{track.file_format} · {track.track_type}</div>
@@ -187,6 +199,7 @@ export default function TrackPanel({
       <div
         ref={resizeRef}
         onMouseDown={onResizeMouseDown}
+        title="Drag to resize track height"
         style={{ position: 'absolute', left: 0, right: 0, bottom: -2, height: 5, cursor: 'ns-resize', zIndex: 10, background: 'transparent' }}
         onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.15)'}
         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
