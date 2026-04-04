@@ -1,0 +1,33 @@
+# ── Exclude from Docker build context ────────────────────────────
+node_modules
+frontend/node_modules
+frontend/dist
+.venv
+__pycache__
+*.pyc
+.installed
+.installed_unix
+.claude
+.git
+.gitignore
+
+# Genomics data files
+*.bw
+*.bam
+*.bai
+*.vcf
+*.vcf.gz
+*.gb
+*.gbk
+*.fasta
+*.fa
+*.fai
+*.wig
+*.bed
+*.xlsx
+
+# Data directories
+Test data
+Tn-seq data
+SlpA-V ChIP Quest files for IGV 2
+data

@@ -1,0 +1,58 @@
+# ── Dependencies ──────────────────────────────────────────────────
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# ── Build output (auto-generated) ────────────────────────────────
+app/frontend/dist/
+
+# ── Setup markers (auto-generated on first launch) ───────────────
+.installed
+.installed_unix
+
+# ── IDE / editor ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS files ─────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Genomics data files (large — keep out of repo) ──────────────
+*.bam
+*.bai
+*.cram
+*.bw
+*.bigwig
+*.vcf
+*.vcf.gz
+*.bcf
+*.fasta
+*.fa
+*.fai
+*.gb
+*.gbk
+*.bed
+*.gtf
+*.gff
+*.wig
+*.bedgraph
+*.bdg
+*.xlsx
+
+# ── Data / test data directories ────────────────────────────────
+data/
+Test data/
+Tn-seq data/
+SlpA-V ChIP Quest files for IGV 2/
+
+# ── Temp uploads (created at runtime) ───────────────────────────
+genomics_viewer_uploads/
+
+# ── Claude config (user-specific) ───────────────────────────────
+.claude/

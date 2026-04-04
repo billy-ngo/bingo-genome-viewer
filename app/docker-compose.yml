@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  genomics-viewer:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount a data directory so the container can access genome/track files
+      - ../data:/data
+    restart: unless-stopped
