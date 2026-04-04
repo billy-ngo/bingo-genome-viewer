@@ -20,6 +20,12 @@ function isTrackMismatch(info) {
 }
 import { useTheme } from '../../store/ThemeContext'
 
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
 const TRACK_EXTS = new Set(['.bam', '.bw', '.bigwig', '.wig', '.bedgraph', '.bdg', '.vcf', '.bed', '.gtf', '.gff', '.gff2', '.gff3'])
 const INDEX_EXTS = new Set(['.bai'])
@@ -99,6 +105,7 @@ export default function FileLoader() {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(null)
   const [status, setStatus] = useState(null)
+  const [progress, setProgress] = useState(null) // { percent, loaded, total, label }
   const [prompt, setPrompt] = useState(null) // { files: File[] }
   const [trackMismatch, setTrackMismatch] = useState(null) // { tracks: [...] }
   const inputRef = useRef(null)
@@ -146,9 +153,14 @@ export default function FileLoader() {
   }
 
   async function loadGenomeFile(file) {
-    setLoading(true); setErr(null); setStatus(`Loading genome: ${file.name}...`)
+    setLoading(true); setErr(null); setProgress(null)
+    setStatus(`Uploading genome: ${file.name}...`)
     try {
-      const res = await genomeApi.load(file)
+      const res = await genomeApi.load(file, (p) => {
+        setProgress({ ...p, label: file.name })
+        if (p.percent >= 100) setStatus(`Processing genome: ${file.name}...`)
+      })
+      setProgress(null)
       const info = res.data
       if (info.name) info.name = cleanName(info.name)
       setGenome(info)
@@ -165,17 +177,19 @@ export default function FileLoader() {
       }
       setStatus(`Genome loaded: ${info.name}`)
       setTimeout(() => setStatus(null), 3000)
-    } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null) }
+    } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null); setProgress(null) }
     finally { setLoading(false) }
   }
 
   async function addChromosomeFiles(files) {
-    setLoading(true); setErr(null)
+    setLoading(true); setErr(null); setProgress(null)
     const errors = []
     for (const file of files) {
       setStatus(`Adding chromosomes from ${file.name}...`)
       try {
-        const res = await genomeApi.addChromosomes(file)
+        const res = await genomeApi.addChromosomes(file, (p) => {
+          setProgress({ ...p, label: file.name })
+        })
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
         setGenome(info)
@@ -199,14 +213,18 @@ export default function FileLoader() {
 
   async function loadTrackEntries(entries) {
     if (!entries.length) return
-    setLoading(true); setErr(null); setError(null)
-    setStatus(`Loading ${entries.length} track${entries.length > 1 ? 's' : ''}...`)
+    setLoading(true); setErr(null); setError(null); setProgress(null)
     const compatible = []
     const incompatible = []
     const errors = []
-    for (const { file, indexFile } of entries) {
+    for (let idx = 0; idx < entries.length; idx++) {
+      const { file, indexFile } = entries[idx]
+      setStatus(`Loading track ${idx + 1}/${entries.length}: ${file.name}...`)
       try {
-        const info = await uploadTrack(file, undefined, indexFile)
+        const info = await uploadTrack(file, undefined, indexFile, (p) => {
+          setProgress({ ...p, label: file.name })
+          if (p.percent >= 100) setStatus(`Processing: ${file.name}...`)
+        })
         if (isTrackMismatch(info)) {
           incompatible.push(info)
         } else {
@@ -215,7 +233,7 @@ export default function FileLoader() {
         }
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
-    setLoading(false)
+    setLoading(false); setProgress(null)
     if (errors.length) { setErr(errors.join('; ')); setStatus(null) }
     else if (compatible.length > 0 && incompatible.length === 0) {
       setStatus(`Added ${compatible.length} track${compatible.length > 1 ? 's' : ''}.`)
@@ -321,9 +339,36 @@ export default function FileLoader() {
         />
       </div>
 
-      <span style={{ fontSize: 10, color: theme.textMuted, fontStyle: 'italic' }}>
-        {loading ? status || 'Loading\u2026' : 'or drag & drop anywhere'}
-      </span>
+      {loading ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 10, color: theme.textMuted, fontStyle: 'italic', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {status || 'Loading\u2026'}
+          </span>
+          {progress && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 100 }}>
+              <div style={{
+                flex: 1, height: 6, background: theme.inputBg,
+                borderRadius: 3, overflow: 'hidden', minWidth: 60,
+              }}>
+                <div style={{
+                  width: `${progress.percent}%`, height: '100%',
+                  background: progress.percent >= 100 ? '#66bb6a' : '#42a5f5',
+                  borderRadius: 3, transition: 'width 0.2s ease',
+                }} />
+              </div>
+              <span style={{ fontSize: 10, color: theme.textTertiary, whiteSpace: 'nowrap' }}>
+                {progress.percent < 100
+                  ? `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`
+                  : 'Processing...'}
+              </span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <span style={{ fontSize: 10, color: theme.textMuted, fontStyle: 'italic' }}>
+          or drag & drop anywhere
+        </span>
+      )}
 
       {!loading && status && <span style={{ color: '#81c784', fontSize: 11 }}>{status}</span>}
       {(err || trackError) && <span style={{ color: '#ef9a9a', fontSize: 11 }}>{err || trackError}</span>}

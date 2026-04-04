@@ -35,10 +35,11 @@ export function TrackProvider({ children }) {
 
   /** Upload a track file to the backend without adding to UI state.
    *  For BAM files, pass the matching .bai as indexFile.
+   *  onProgress receives { loaded, total, percent }.
    *  Returns the track info including a `compatibility` field. */
-  const uploadTrack = useCallback(async (file, name, indexFile) => {
+  const uploadTrack = useCallback(async (file, name, indexFile, onProgress) => {
     try {
-      const res = await tracksApi.load(file, name, indexFile)
+      const res = await tracksApi.load(file, name, indexFile, onProgress)
       const info = res.data
       if (info.name) info.name = cleanName(info.name)
       setError(null)
