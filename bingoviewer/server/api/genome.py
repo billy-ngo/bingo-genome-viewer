@@ -46,6 +46,27 @@ async def load_genome(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/add-chromosomes")
+async def add_chromosomes(file: UploadFile = File(...)):
+    """Merge chromosomes from an additional genome file into the current genome."""
+    if app_state.genome is None:
+        raise HTTPException(status_code=400, detail="No genome loaded")
+    dest = _upload_dir / _clean_name(file.filename)
+    try:
+        with dest.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+        app_state.genome.add_chromosomes_from(str(dest))
+        genome = app_state.genome
+        return {
+            "name": genome.name,
+            "file_path": genome.file_path,
+            "chromosomes": genome.chromosomes,
+            "is_annotated": genome.is_annotated(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/load-path")
 async def load_genome_from_path(path: str = Form(...)):
     """Re-load genome from an existing file path (for session restore)."""

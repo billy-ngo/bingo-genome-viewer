@@ -46,10 +46,12 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       const color = track.color || '#78909c'
       const barAuto = track.barAutoWidth !== false
       const barFixedPx = track.barWidth || 2
+      const pxPerNt = width / regionLen
       ctx.fillStyle = color
       for (const bin of data.bins) {
-        const autoW = Math.max(1, ((bin.end - bin.start) / regionLen) * width)
-        const w = barAuto ? autoW : Math.min(barFixedPx, autoW)
+        const binW = ((bin.end - bin.start) / regionLen) * width
+        const autoW = Math.max(1, Math.min(pxPerNt, binW))
+        const w = barAuto ? autoW : Math.min(barFixedPx, binW)
         const x = ((bin.start - region.start) / regionLen) * width
         ctx.fillRect(x, height - (bin.value / maxVal) * (height - 14) - 2, w, (bin.value / maxVal) * (height - 14))
       }

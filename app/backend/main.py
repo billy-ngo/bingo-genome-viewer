@@ -3,13 +3,21 @@ BiNgo Genome Viewer — FastAPI application entry point.
 
 Mounts the REST API routers (/api/genome, /api/tracks) and optionally
 serves the built Vite frontend from frontend/dist/ for production use.
+
+When launched via the CLI (BINGO_AUTO_SHUTDOWN=1), a background watchdog
+shuts the server down automatically once all browser tabs have closed
+(no heartbeat received for 30 seconds).
 """
+
+import os
+import time
+import threading
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pathlib import Path
 
 from api.genome import router as genome_router
 from api.tracks import router as tracks_router
@@ -42,3 +50,36 @@ if frontend_dist.exists():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── Auto-shutdown heartbeat system ─────────────────────────────
+_last_heartbeat = 0.0
+_HEARTBEAT_TIMEOUT = 30
+
+
+@app.get("/api/heartbeat")
+def heartbeat():
+    global _last_heartbeat
+    _last_heartbeat = time.time()
+    return {"status": "ok"}
+
+
+def _auto_shutdown_watchdog():
+    """Background thread: exit when all browser tabs are closed."""
+    global _last_heartbeat
+    while True:
+        time.sleep(10)
+        if _last_heartbeat > 0:
+            elapsed = time.time() - _last_heartbeat
+            if elapsed > _HEARTBEAT_TIMEOUT:
+                lock_file = Path.home() / ".bingoviewer" / "server.lock"
+                try:
+                    lock_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                os._exit(0)
+
+
+if os.environ.get("BINGO_AUTO_SHUTDOWN") == "1":
+    _watchdog = threading.Thread(target=_auto_shutdown_watchdog, daemon=True)
+    _watchdog.start()

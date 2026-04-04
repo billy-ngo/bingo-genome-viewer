@@ -66,6 +66,9 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const fwdColor = color
     const revColor = adjustColor(color, -40)
 
+    // Pixels per single nucleotide — auto bars are capped to this width
+    const pxPerNt = width / regionLen
+
     if (hasNegative) {
       const margin = 12
       const midY = Math.round(height / 2)
@@ -78,8 +81,9 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(width, midY); ctx.stroke()
 
       for (const bin of data.bins) {
-        const autoW = Math.max(1, ((bin.end - bin.start) / regionLen) * width)
-        const w = barAuto ? autoW : Math.min(barFixedPx, autoW)
+        const binW = ((bin.end - bin.start) / regionLen) * width
+        const autoW = Math.max(1, Math.min(pxPerNt, binW))
+        const w = barAuto ? autoW : Math.min(barFixedPx, binW)
         const x = ((bin.start - regionStart) / regionLen) * width
         const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
         const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
@@ -102,8 +106,9 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
       ctx.fillStyle = fwdColor
       for (const bin of data.bins) {
-        const autoW = Math.max(1, ((bin.end - bin.start) / regionLen) * width)
-        const w = barAuto ? autoW : Math.min(barFixedPx, autoW)
+        const binW = ((bin.end - bin.start) / regionLen) * width
+        const autoW = Math.max(1, Math.min(pxPerNt, binW))
+        const w = barAuto ? autoW : Math.min(barFixedPx, binW)
         const x = ((bin.start - regionStart) / regionLen) * width
         const ratio = useLog ? logScale(bin.value, effectiveMax) : bin.value / effectiveMax
         const barH = ratio * (height - 14)

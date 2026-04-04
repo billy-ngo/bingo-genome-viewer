@@ -1,6 +1,7 @@
 """
 Genome reader — supports FASTA (via pyfaidx) and GenBank (via BioPython).
-Auto-detects format from file extension.
+Auto-detects format from file extension.  Supports merging chromosomes from
+multiple files via add_chromosomes_from().
 """
 
 from pathlib import Path
@@ -10,17 +11,27 @@ from typing import List, Dict
 class GenomeReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
-        ext = Path(file_path).suffix.lower()
-        self._format = "genbank" if ext in (".gb", ".gbk", ".genbank") else "fasta"
-        self._reader = self._init_reader()
+        self._sub_readers: List[tuple] = []  # [(format, reader), ...]
+        self._add_file(file_path)
 
-    def _init_reader(self):
-        if self._format == "genbank":
+    @staticmethod
+    def _detect_format(file_path: str) -> str:
+        ext = Path(file_path).suffix.lower()
+        return "genbank" if ext in (".gb", ".gbk", ".genbank") else "fasta"
+
+    def _add_file(self, file_path: str):
+        fmt = self._detect_format(file_path)
+        if fmt == "genbank":
             from readers.genbank_reader import GenBankReader
-            return GenBankReader(self.file_path)
+            reader = GenBankReader(file_path)
         else:
             from pyfaidx import Fasta
-            return Fasta(self.file_path)
+            reader = Fasta(file_path)
+        self._sub_readers.append((fmt, reader))
+
+    def add_chromosomes_from(self, file_path: str):
+        """Load another file and merge its chromosomes into this genome."""
+        self._add_file(file_path)
 
     @property
     def name(self) -> str:
@@ -28,23 +39,38 @@ class GenomeReader:
 
     @property
     def chromosomes(self) -> List[Dict]:
-        if self._format == "genbank":
-            return self._reader.chromosomes
-        else:
-            return [{"name": k, "length": len(self._reader[k])} for k in self._reader.keys()]
+        result = []
+        for fmt, reader in self._sub_readers:
+            if fmt == "genbank":
+                result.extend(reader.chromosomes)
+            else:
+                result.extend(
+                    [{"name": k, "length": len(reader[k])} for k in reader.keys()]
+                )
+        return result
 
     def get_sequence(self, chrom: str, start: int, end: int) -> str:
         """0-based half-open [start, end)."""
-        if self._format == "genbank":
-            return self._reader.get_sequence(chrom, start, end)
-        else:
-            return str(self._reader[chrom][start:end])
+        for fmt, reader in self._sub_readers:
+            if fmt == "genbank":
+                try:
+                    return reader.get_sequence(chrom, start, end)
+                except KeyError:
+                    continue
+            else:
+                if chrom in reader:
+                    return str(reader[chrom][start:end])
+        raise KeyError(f"Chromosome '{chrom}' not found")
 
     def get_features(self, chrom: str, start: int, end: int) -> List[Dict]:
         """Only GenBank files carry annotation features."""
-        if self._format == "genbank":
-            return self._reader.get_features(chrom, start, end)
+        for fmt, reader in self._sub_readers:
+            if fmt == "genbank":
+                try:
+                    return reader.get_features(chrom, start, end)
+                except KeyError:
+                    continue
         return []
 
     def is_annotated(self) -> bool:
-        return self._format == "genbank"
+        return any(fmt == "genbank" for fmt, _ in self._sub_readers)

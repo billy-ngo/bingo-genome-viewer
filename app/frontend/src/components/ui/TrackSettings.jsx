@@ -122,9 +122,12 @@ export default function TrackSettings({ onClose }) {
                 {commonBarAutoWidth === false && (
                   <div style={S.controlRow}>
                     <span style={S.controlLabel}></span>
-                    <span style={{ fontSize: 11, color: t.textTertiary, width: 24 }}>px</span>
-                    <input type="number" min={1} max={50} step={1} value={commonBarWidth ?? 2} placeholder="px" style={S.input}
-                      onChange={e => { const v = parseInt(e.target.value); if (v >= 1) applyToSelected({ barWidth: v }) }} />
+                    <input type="range" min={1} max={50} step={1} value={commonBarWidth ?? 2}
+                      onChange={e => applyToSelected({ barWidth: parseInt(e.target.value) })}
+                      style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
+                    <input type="number" min={1} max={50} step={1} value={commonBarWidth ?? 2} style={{ ...S.input, width: 48 }}
+                      onChange={e => { const v = parseInt(e.target.value); if (v >= 1 && v <= 50) applyToSelected({ barWidth: v }) }} />
+                    <span style={{ fontSize: 11, color: t.textTertiary }}>px</span>
                   </div>
                 )}
               </>

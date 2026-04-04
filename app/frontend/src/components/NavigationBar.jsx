@@ -60,15 +60,20 @@ export default function NavigationBar() {
     }
   }
 
-  if (!genome) return null
+  if (!genome) return (
+    <div style={{ ...S.bar, opacity: 0.4 }} data-tour="nav-bar">
+      <span style={{ fontSize: 12, color: theme.textMuted, fontStyle: 'italic' }}>Load a genome to enable navigation</span>
+    </div>
+  )
+
   const regionLen = region ? region.end - region.start : 0
 
   return (
-    <div style={S.bar}>
+    <div style={S.bar} data-tour="nav-bar">
       <select style={S.select} value={region?.chrom || ''} onChange={handleChromChange}>
         {genome.chromosomes.map((c, i) => (
           <option key={c.name} value={c.name}>
-            chr{i + 1} \u2014 {c.name} ({(c.length / 1000).toFixed(0)} kbp)
+            chr{i + 1} {'\u2014'} {c.name} ({(c.length / 1000).toFixed(0)} kbp)
           </option>
         ))}
       </select>

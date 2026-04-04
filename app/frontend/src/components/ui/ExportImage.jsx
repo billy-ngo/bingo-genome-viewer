@@ -210,6 +210,7 @@ function svgCoverage(data, region, track, w, h, theme) {
 
   const barAuto = track.barAutoWidth !== false
   const barFixedPx = track.barWidth || 2
+  const pxPerNt = w / regionLen
 
   if (hasNeg) {
     const midY = Math.round(h / 2)
@@ -220,8 +221,9 @@ function svgCoverage(data, region, track, w, h, theme) {
     s += `<line x1="0" y1="${midY}" x2="${w}" y2="${midY}" stroke="${theme.centerLine}" stroke-width="1"/>\n`
     for (const bin of visibleBins) {
       const x = ((bin.start - rStart) / regionLen) * w
-      const autoW = Math.max(0.5, ((bin.end - bin.start) / regionLen) * w)
-      const bw = barAuto ? autoW : Math.min(barFixedPx, autoW)
+      const binW = ((bin.end - bin.start) / regionLen) * w
+      const autoW = Math.max(0.5, Math.min(pxPerNt, binW))
+      const bw = barAuto ? autoW : Math.min(barFixedPx, binW)
       const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
       const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
       if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; s += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${color}"/>\n` }
@@ -234,8 +236,9 @@ function svgCoverage(data, region, track, w, h, theme) {
     const effMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
     for (const bin of visibleBins) {
       const x = ((bin.start - rStart) / regionLen) * w
-      const autoW = Math.max(0.5, ((bin.end - bin.start) / regionLen) * w)
-      const bw = barAuto ? autoW : Math.min(barFixedPx, autoW)
+      const binW = ((bin.end - bin.start) / regionLen) * w
+      const autoW = Math.max(0.5, Math.min(pxPerNt, binW))
+      const bw = barAuto ? autoW : Math.min(barFixedPx, binW)
       const r = useLog ? svgLogScale(bin.value, effMax) : bin.value / effMax
       const bh = r * (h - 14)
       s += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${color}"/>\n`

@@ -29,6 +29,11 @@ export const genomeApi = {
     fd.append('path', path)
     return uploadFile('/genome/load-path', fd)
   },
+  addChromosomes: (file) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return uploadFile('/genome/add-chromosomes', fd)
+  },
   chromosomes: () => api.get('/genome/chromosomes'),
   sequence: (chrom, start, end) => api.get('/genome/sequence', { params: { chrom, start, end } }),
 }

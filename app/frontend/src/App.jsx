@@ -51,6 +51,37 @@ function BingoLogo({ size = 32 }) {
   )
 }
 
+/**
+ * SkeletonTrack — An empty placeholder track row always visible when
+ * no real tracks are loaded, so users can see the track layout.
+ */
+function SkeletonTrack({ theme, labelWidth }) {
+  const trackH = 60
+  return (
+    <div style={{ display: 'flex', borderBottom: `1px solid ${theme.border}`, height: trackH, opacity: 0.45 }}>
+      <div
+        data-tour="skeleton-track-label"
+        style={{
+          width: labelWidth, minWidth: labelWidth, background: theme.panelBg,
+          borderRight: `1px solid ${theme.border}`, padding: '6px 8px',
+          display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 14, color: theme.textTertiary, userSelect: 'none', lineHeight: 1 }}>{'\u2261'}</span>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: '#78909c', flexShrink: 0 }} />
+          <span style={{
+            fontSize: 11, fontWeight: 600, color: theme.textSecondary, flex: 1,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>Track Name</span>
+          <span style={{ fontSize: 13, color: theme.textTertiary, lineHeight: 1, padding: '0 2px' }}>{'\u00D7'}</span>
+        </div>
+      </div>
+      <div style={{ flex: 1, background: theme.canvasBg }} />
+    </div>
+  )
+}
+
 function BrowserApp() {
   const { theme } = useTheme()
   const { genome, region, setGenome, navigateTo } = useBrowser()
@@ -68,9 +99,19 @@ function BrowserApp() {
   const [dropTrackId, setDropTrackId] = useState(null)
   const [appDragOver, setAppDragOver] = useState(false)
   const [dropStatus, setDropStatus] = useState(null)
+  const [dropPrompt, setDropPrompt] = useState(null) // { files: File[] }
   const appDragCounter = useRef(0)
 
   useAutoSave(labelWidth)
+
+  // Heartbeat — keeps the backend server alive while any tab is open.
+  // When all tabs close the heartbeats stop and the server auto-exits.
+  useEffect(() => {
+    const ping = () => fetch('/api/heartbeat').catch(() => {})
+    ping()
+    const id = setInterval(ping, 10_000)
+    return () => clearInterval(id)
+  }, [])
 
   // Full-screen drag-and-drop support
   const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
@@ -139,12 +180,17 @@ function BrowserApp() {
             track_type: 'genome_annotations', file_format: 'genbank',
           })
         }
-        if (genomeFiles.length > 1) trackFiles.push(...genomeFiles.slice(1))
-      } else if (genomeFiles.length > 0) {
-        trackFiles.push(...genomeFiles)
+      } else if (genomeFiles.length > 0 && genome) {
+        // Genome already loaded — prompt user
+        setDropPrompt({ files: genomeFiles })
       }
 
       if (trackFiles.length > 0) {
+        if (!genome && genomeFiles.length === 0) {
+          setDropStatus({ error: 'Load a genome file first (.fasta, .gb, .genbank)' })
+          setTimeout(() => setDropStatus(null), 4000)
+          return
+        }
         setDropStatus({ msg: `Loading ${trackFiles.length} track${trackFiles.length > 1 ? 's' : ''}...` })
         const errors = []
         for (const file of trackFiles) {
@@ -170,6 +216,58 @@ function BrowserApp() {
       setTimeout(() => setDropStatus(null), 5000)
     }
   }, [genome, setGenome, navigateTo, addTrack, addGenomeAnnotationTrack])
+
+  const onDropPromptChromosome = useCallback(async () => {
+    if (!dropPrompt) return
+    const files = dropPrompt.files
+    setDropPrompt(null)
+    try {
+      const errors = []
+      for (const file of files) {
+        setDropStatus({ msg: `Adding chromosomes from ${file.name}...` })
+        try {
+          const res = await genomeApi.addChromosomes(file)
+          const info = res.data
+          if (info.name) info.name = cleanName(info.name)
+          setGenome(info)
+        } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
+      }
+      if (errors.length) {
+        setDropStatus({ error: errors.join('; ') })
+        setTimeout(() => setDropStatus(null), 5000)
+      } else {
+        setDropStatus({ msg: `Added chromosomes from ${files.length} file${files.length > 1 ? 's' : ''}` })
+        setTimeout(() => setDropStatus(null), 3000)
+      }
+    } catch (err) {
+      setDropStatus({ error: err.message || 'Failed to add chromosomes' })
+      setTimeout(() => setDropStatus(null), 5000)
+    }
+  }, [dropPrompt, setGenome])
+
+  const onDropPromptTrack = useCallback(async () => {
+    if (!dropPrompt) return
+    const files = dropPrompt.files
+    setDropPrompt(null)
+    try {
+      setDropStatus({ msg: `Loading ${files.length} track${files.length > 1 ? 's' : ''}...` })
+      const errors = []
+      for (const file of files) {
+        try { await addTrack(file, undefined) }
+        catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
+      }
+      if (errors.length) {
+        setDropStatus({ error: errors.join('; ') })
+        setTimeout(() => setDropStatus(null), 5000)
+      } else {
+        setDropStatus({ msg: `Added ${files.length} track${files.length > 1 ? 's' : ''}` })
+        setTimeout(() => setDropStatus(null), 3000)
+      }
+    } catch (err) {
+      setDropStatus({ error: err.message || 'Failed to load tracks' })
+      setTimeout(() => setDropStatus(null), 5000)
+    }
+  }, [dropPrompt, addTrack])
 
   const onLabelResizeStart = useCallback((e) => {
     e.preventDefault()
@@ -214,8 +312,8 @@ function BrowserApp() {
       color: theme.btnText, padding: '5px 14px', cursor: 'pointer', fontSize: 12,
       fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
     },
-    trackArea: { flex: 1, overflowY: 'auto', overflowX: 'hidden' },
-    emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.textMuted, gap: 12 },
+    trackArea: { flex: 1, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' },
+    emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, color: theme.textMuted, gap: 12 },
     emptyTitle: { fontSize: 22, fontWeight: 300 },
     emptyHint: { fontSize: 13 },
   }
@@ -260,12 +358,13 @@ function BrowserApp() {
             onMouseLeave={e => { e.currentTarget.style.color = theme.textSecondary; e.currentTarget.style.borderColor = theme.border }}
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
-              <path d="M1 2.5A2.5 2.5 0 0 1 3.5 0h9A2.5 2.5 0 0 1 15 2.5v11a.5.5 0 0 1-.854.354L11.5 11.207l-2.646 2.647a.5.5 0 0 1-.708 0L5.5 11.207 2.854 13.854A.5.5 0 0 1 2 13.5v-11A1.5 1.5 0 0 0 3.5 1h9A1.5 1.5 0 0 1 14 2.5v10.793l-2.146-2.147a.5.5 0 0 0-.708 0L8.5 13.793l-2.646-2.647a.5.5 0 0 0-.708 0L3 13.293V2.5A1.5 1.5 0 0 1 4.5 1z"/>
+              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+              <path d="M5.255 5.786a.237.237 0 0 0 .241.247h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.241-2.673-2.241-1.267 0-2.655.59-2.75 2.286zM8 13.5a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/>
             </svg>
-            Tour
+            Help
           </button>
         </div>
-        <div style={S.headerBtns}>
+        <div style={S.headerBtns} data-tour="header-btns">
           <button style={S.btn} onClick={() => setShowSession(true)} title="Save or restore a session">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
               <path d="M2 2h8v8H2z"/><path d="M4 2v4h4V2"/><path d="M5 3h2"/>
@@ -281,26 +380,37 @@ function BrowserApp() {
             </svg>
             Theme
           </button>
-          {region && tracks.length > 0 && (
-            <button style={S.btn} onClick={() => setShowExport(true)} title="Export current view as SVG or PNG">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                <path d="M6 1v7M3 5.5L6 8.5 9 5.5M2 11h8"/>
-              </svg>
-              Export
-            </button>
-          )}
-          {tracks.length > 0 && (
-            <button style={S.btn} onClick={() => setShowSettings(true)} title="Adjust height, scale, color, and bar width for tracks">
-              {'\u2699'} Track Settings
-            </button>
-          )}
+          <button
+            data-tour="btn-export"
+            style={{ ...S.btn, ...(!(region && tracks.length > 0) ? { opacity: 0.35, cursor: 'default' } : {}) }}
+            onClick={() => { if (region && tracks.length > 0) setShowExport(true) }}
+            title="Export current view as SVG or PNG"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M6 1v7M3 5.5L6 8.5 9 5.5M2 11h8"/>
+            </svg>
+            Export Image
+          </button>
+          <button
+            data-tour="btn-settings"
+            style={{ ...S.btn, ...(tracks.length === 0 ? { opacity: 0.35, cursor: 'default' } : {}) }}
+            onClick={() => { if (tracks.length > 0) setShowSettings(true) }}
+            title="Adjust height, scale, color, and bar width for tracks"
+          >
+            {'\u2699'} Track Settings
+          </button>
         </div>
       </div>
 
       <FileLoader />
       <NavigationBar />
 
-      <div style={S.trackArea} ref={containerRef}>
+      <div style={S.trackArea} ref={containerRef} data-tour="track-area">
+        {/* Skeleton track — always visible when no real tracks are loaded */}
+        {tracks.filter(t => t.visible).length === 0 && (
+          <SkeletonTrack theme={theme} labelWidth={labelWidth} />
+        )}
+
         {!genome ? (
           <div style={S.emptyState}>
             <div style={S.emptyTitle}>No genome loaded</div>
@@ -406,6 +516,58 @@ function BrowserApp() {
           </div>
         </div>
       )}
+
+      {/* Prompt when genome file dropped while genome already loaded */}
+      {dropPrompt && (() => {
+        const plural = dropPrompt.files.length > 1
+        const names = dropPrompt.files.map(f => f.name).join(', ')
+        return (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+          }} onClick={() => setDropPrompt(null)}>
+            <div style={{
+              background: theme.panelBg, border: `1px solid ${theme.borderAccent}`, borderRadius: 8,
+              padding: '20px 24px', maxWidth: 440, width: '90%',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: theme.textPrimary, marginBottom: 8 }}>
+                Genome file{plural ? 's' : ''} detected
+              </div>
+              <div style={{ fontSize: 12, color: theme.textSecondary, lineHeight: 1.6, marginBottom: 16 }}>
+                <strong style={{ color: theme.textPrimary }}>{names}</strong>
+                {plural
+                  ? ' appear to be genome files. A genome is already loaded.'
+                  : ' appears to be a genome file. A genome is already loaded.'}
+                <br />How would you like to handle {plural ? 'them' : 'it'}?
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setDropPrompt(null)}
+                  style={{
+                    background: theme.btnBg, border: `1px solid ${theme.borderStrong}`, borderRadius: 4,
+                    color: theme.btnText, padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  }}
+                >Skip</button>
+                <button
+                  onClick={onDropPromptTrack}
+                  style={{
+                    background: theme.btnBg, border: `1px solid ${theme.borderStrong}`, borderRadius: 4,
+                    color: theme.btnText, padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  }}
+                >Add as Track{plural ? 's' : ''}</button>
+                <button
+                  onClick={onDropPromptChromosome}
+                  style={{
+                    background: '#1976d2', border: 'none', borderRadius: 4,
+                    color: '#fff', padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  }}
+                >Add as Chromosome{plural ? 's' : ''}</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Full-screen drop overlay */}
       {appDragOver && (

@@ -1,52 +1,81 @@
 /**
- * HelpTour.jsx — Guided tour overlay for new users.
+ * HelpTour.jsx — Spotlight-based guided tour overlay.
  *
- * Displays a step-by-step walkthrough of the BiNgo Genome Viewer's
- * main features in a centered modal with navigation dots.
+ * Each step highlights a specific UI element using four overlay strips
+ * arranged around a spotlight cutout. A tooltip card positions itself
+ * adjacent to the highlighted element.
+ *
+ * Keyboard: ArrowRight/Enter = next, ArrowLeft = prev, Escape = close.
  */
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 
 const STEPS = [
   {
-    icon: '\uD83D\uDCC2',
-    title: 'File Loading',
+    target: 'file-loader',
+    title: 'Load Files',
     description:
-      'Load your genome file (FASTA or GenBank) using the file picker, or drag and drop files anywhere on the screen.',
+      'Select genome and track files using the file picker or drag and drop. Files are auto-classified by extension.',
+    position: 'bottom',
   },
   {
-    icon: '\uD83E\uDDEC',
-    title: 'Adding Tracks',
-    description:
-      'Once a genome is loaded, add track files (BAM, BigWig, WIG, VCF, BED, GFF) via the file picker or drag and drop.',
-  },
-  {
-    icon: '\uD83E\uDDED',
+    target: 'nav-bar',
     title: 'Navigation',
     description:
-      'Use the navigation bar to switch chromosomes, enter coordinates, zoom in/out, and pan across the genome.',
+      'Switch chromosomes, type coordinates to jump to a region, zoom in/out, and pan.',
+    position: 'bottom',
   },
   {
-    icon: '\uD83D\uDD0D',
-    title: 'Track Interaction',
+    target: 'track-area',
+    title: 'Track Viewing',
     description:
-      'Click and drag on tracks to pan. Use the scroll wheel to zoom. Hover over features for details.',
+      'Click and drag to pan, scroll to zoom. Hover over features for details.',
+    position: 'inside',
   },
   {
-    icon: '\u2699\uFE0F',
+    target: 'skeleton-track-label',
     title: 'Track Controls',
     description:
-      'Each track has a label sidebar \u2014 drag \u2261 to reorder, click the color swatch to customize colors, and click \u00D7 to remove.',
+      'Drag \u2261 to reorder, click the color swatch to change colors, and click \u00D7 to remove.',
+    position: 'right',
   },
   {
-    icon: '\uD83D\uDCBE',
-    title: 'Settings & Export',
+    target: 'btn-export',
+    title: 'Export Image',
     description:
-      'Use the toolbar buttons to save/restore sessions, change color themes, export views as images, and adjust track settings.',
+      'Export your current view as SVG or PNG.',
+    position: 'bottom',
+  },
+  {
+    target: 'btn-settings',
+    title: 'Track Settings',
+    description:
+      'Adjust height, color, Y-axis scale, bar width, and more.',
+    position: 'bottom',
+  },
+  {
+    target: 'header-btns',
+    title: 'Sessions & Themes',
+    description:
+      'Save and restore sessions, and switch color themes.',
+    position: 'bottom',
   },
 ]
 
+const PAD = 8
+const GAP = 14
+const CARD_W = 340
+const EST_CARD_H = 230
+const DIM = 'rgba(0,0,0,0.55)'
+
 export default function HelpTour({ onClose, theme }) {
   const [step, setStep] = useState(0)
+  const [rect, setRect] = useState(null)
+  const [cardH, setCardH] = useState(EST_CARD_H)
+  const cardRef = useRef(null)
+
+  const current = STEPS[step]
+  const isFirst = step === 0
+  const isLast = step === STEPS.length - 1
 
   const next = useCallback(() => {
     if (step < STEPS.length - 1) setStep(s => s + 1)
@@ -57,160 +86,237 @@ export default function HelpTour({ onClose, theme }) {
     if (step > 0) setStep(s => s - 1)
   }, [step])
 
-  const current = STEPS[step]
-  const isFirst = step === 0
-  const isLast = step === STEPS.length - 1
+  // Keyboard navigation
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowRight' || e.key === 'Enter') next()
+      else if (e.key === 'ArrowLeft') prev()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, next, prev])
+
+  // Measure the target element
+  useEffect(() => {
+    function measure() {
+      const el = document.querySelector(`[data-tour="${current.target}"]`)
+      if (el) {
+        const r = el.getBoundingClientRect()
+        setRect({ top: r.top, left: r.left, width: r.width, height: r.height })
+      } else {
+        setRect(null)
+      }
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true)
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure, true)
+    }
+  }, [current.target])
+
+  // Measure actual card height after render
+  useEffect(() => {
+    if (cardRef.current) {
+      setCardH(cardRef.current.getBoundingClientRect().height)
+    }
+  })
+
+  // Spotlight box (padded around target)
+  const spot = rect ? {
+    top: rect.top - PAD,
+    left: rect.left - PAD,
+    width: rect.width + PAD * 2,
+    height: rect.height + PAD * 2,
+  } : null
+
+  // Compute card position
+  let cardTop, cardLeft
+  let arrowDir = null
+  let arrowOffset = CARD_W / 2
+
+  if (!rect) {
+    cardTop = (window.innerHeight - cardH) / 2
+    cardLeft = (window.innerWidth - CARD_W) / 2
+  } else {
+    const pos = current.position || 'bottom'
+    const spotBottom = rect.top + rect.height + PAD
+    const spotTop = rect.top - PAD
+    const spotRight = rect.left + rect.width + PAD
+    const targetCenterX = rect.left + rect.width / 2
+
+    if (pos === 'inside') {
+      cardTop = rect.top + Math.max(20, (rect.height - cardH) / 2)
+      cardLeft = rect.left + Math.max(16, (rect.width - CARD_W) / 2)
+    } else if (pos === 'right') {
+      cardTop = rect.top + rect.height / 2 - cardH / 2
+      cardLeft = spotRight + GAP
+      arrowDir = 'left'
+      arrowOffset = cardH / 2
+      if (cardLeft + CARD_W > window.innerWidth - 12) {
+        cardTop = spotBottom + GAP
+        cardLeft = targetCenterX - CARD_W / 2
+        arrowDir = 'up'
+        arrowOffset = Math.max(20, Math.min(CARD_W - 20, targetCenterX - cardLeft))
+      }
+    } else {
+      if (spotBottom + GAP + cardH <= window.innerHeight) {
+        cardTop = spotBottom + GAP
+        arrowDir = 'up'
+      } else if (spotTop - GAP - cardH >= 0) {
+        cardTop = spotTop - GAP - cardH
+        arrowDir = 'down'
+      } else {
+        cardTop = spotBottom + GAP
+        arrowDir = 'up'
+      }
+
+      if (rect.width < 200) {
+        cardLeft = Math.max(12, rect.left + rect.width - CARD_W)
+        if (cardLeft < 12) cardLeft = 12
+      } else {
+        cardLeft = targetCenterX - CARD_W / 2
+      }
+      arrowOffset = Math.max(20, Math.min(CARD_W - 20, targetCenterX - cardLeft))
+    }
+
+    cardLeft = Math.max(12, Math.min(window.innerWidth - CARD_W - 12, cardLeft))
+    cardTop = Math.max(12, Math.min(window.innerHeight - cardH - 12, cardTop))
+  }
 
   const S = {
-    overlay: {
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(0,0,0,0.65)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 10000,
-    },
     card: {
+      position: 'fixed',
+      top: cardTop,
+      left: cardLeft,
+      width: CARD_W,
+      zIndex: 10002,
       background: theme.panelBg,
       border: `1px solid ${theme.borderAccent}`,
-      borderRadius: 12,
-      padding: '32px 36px 24px',
-      maxWidth: 460,
-      width: '90%',
+      borderRadius: 10,
+      padding: '20px 24px 16px',
       color: theme.textPrimary,
       boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-      position: 'relative',
     },
     stepCounter: {
-      fontSize: 11,
-      fontWeight: 600,
-      color: theme.textTertiary,
-      textTransform: 'uppercase',
-      letterSpacing: 1.2,
-      marginBottom: 16,
-    },
-    iconRow: {
-      fontSize: 36,
-      marginBottom: 12,
-      lineHeight: 1,
+      fontSize: 11, fontWeight: 600, color: theme.textTertiary,
+      textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 10,
     },
     title: {
-      fontSize: 18,
-      fontWeight: 700,
-      marginBottom: 10,
-      color: theme.textPrimary,
+      fontSize: 16, fontWeight: 700, marginBottom: 6, color: theme.textPrimary,
     },
     description: {
-      fontSize: 14,
-      lineHeight: 1.65,
-      color: theme.textSecondary,
-      marginBottom: 28,
+      fontSize: 13, lineHeight: 1.6, color: theme.textSecondary, marginBottom: 20,
     },
     dots: {
-      display: 'flex',
-      justifyContent: 'center',
-      gap: 8,
-      marginBottom: 20,
+      display: 'flex', justifyContent: 'center', gap: 8, marginBottom: 14,
     },
     dot: (active) => ({
-      width: 8,
-      height: 8,
-      borderRadius: '50%',
+      width: 7, height: 7, borderRadius: '50%',
       background: active ? '#42a5f5' : theme.borderStrong,
-      transition: 'background 0.2s',
       cursor: 'pointer',
     }),
     nav: {
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     },
     btnPrimary: {
-      background: '#1976d2',
-      border: 'none',
-      borderRadius: 5,
-      color: '#fff',
-      padding: '7px 20px',
-      cursor: 'pointer',
-      fontSize: 13,
-      fontWeight: 600,
+      background: '#1976d2', border: 'none', borderRadius: 5,
+      color: '#fff', padding: '6px 18px', cursor: 'pointer',
+      fontSize: 12, fontWeight: 600,
     },
     btnSecondary: {
-      background: theme.btnBg,
-      border: `1px solid ${theme.borderStrong}`,
-      borderRadius: 5,
-      color: theme.btnText,
-      padding: '7px 16px',
-      cursor: 'pointer',
-      fontSize: 13,
-      fontWeight: 600,
+      background: theme.btnBg, border: `1px solid ${theme.borderStrong}`,
+      borderRadius: 5, color: theme.btnText, padding: '6px 14px',
+      cursor: 'pointer', fontSize: 12, fontWeight: 600,
     },
     btnDisabled: {
-      background: theme.btnBg,
-      border: `1px solid ${theme.border}`,
-      borderRadius: 5,
-      color: theme.textMuted,
-      padding: '7px 16px',
-      fontSize: 13,
-      fontWeight: 600,
-      cursor: 'default',
-      opacity: 0.5,
+      background: theme.btnBg, border: `1px solid ${theme.border}`,
+      borderRadius: 5, color: theme.textMuted, padding: '6px 14px',
+      fontSize: 12, fontWeight: 600, cursor: 'default', opacity: 0.5,
     },
     skip: {
-      background: 'none',
-      border: 'none',
-      color: theme.textTertiary,
-      fontSize: 12,
-      cursor: 'pointer',
-      textDecoration: 'underline',
-      padding: 0,
+      background: 'none', border: 'none', color: theme.textTertiary,
+      fontSize: 11, cursor: 'pointer', textDecoration: 'underline', padding: 0,
+    },
+    arrowUp: {
+      position: 'absolute', top: -7, left: arrowOffset - 7,
+      width: 0, height: 0,
+      borderLeft: '7px solid transparent', borderRight: '7px solid transparent',
+      borderBottom: `7px solid ${theme.panelBg}`,
+    },
+    arrowDown: {
+      position: 'absolute', bottom: -7, left: arrowOffset - 7,
+      width: 0, height: 0,
+      borderLeft: '7px solid transparent', borderRight: '7px solid transparent',
+      borderTop: `7px solid ${theme.panelBg}`,
+    },
+    arrowLeft: {
+      position: 'absolute', left: -7, top: arrowOffset - 7,
+      width: 0, height: 0,
+      borderTop: '7px solid transparent', borderBottom: '7px solid transparent',
+      borderRight: `7px solid ${theme.panelBg}`,
     },
   }
 
   return (
-    <div style={S.overlay} onClick={onClose}>
-      <div style={S.card} onClick={e => e.stopPropagation()}>
+    <>
+      {/* Click-capture layer */}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 10000 }} onClick={onClose} />
+
+      {/* Overlay: four strips around the spotlight cutout */}
+      {spot ? (
+        <>
+          {/* Top strip */}
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, height: Math.max(0, spot.top), background: DIM, zIndex: 10001, pointerEvents: 'none' }} />
+          {/* Bottom strip */}
+          <div style={{ position: 'fixed', top: spot.top + spot.height, left: 0, right: 0, bottom: 0, background: DIM, zIndex: 10001, pointerEvents: 'none' }} />
+          {/* Left strip */}
+          <div style={{ position: 'fixed', top: spot.top, left: 0, width: Math.max(0, spot.left), height: spot.height, background: DIM, zIndex: 10001, pointerEvents: 'none' }} />
+          {/* Right strip */}
+          <div style={{ position: 'fixed', top: spot.top, left: spot.left + spot.width, right: 0, height: spot.height, background: DIM, zIndex: 10001, pointerEvents: 'none' }} />
+          {/* Spotlight border */}
+          <div style={{
+            position: 'fixed', top: spot.top, left: spot.left, width: spot.width, height: spot.height,
+            borderRadius: 6, border: '2px solid rgba(255,255,255,0.22)',
+            zIndex: 10001, pointerEvents: 'none', boxSizing: 'border-box',
+          }} />
+        </>
+      ) : (
+        <div style={{ position: 'fixed', inset: 0, background: DIM, zIndex: 10001, pointerEvents: 'none' }} />
+      )}
+
+      {/* Tooltip card */}
+      <div ref={cardRef} style={S.card} onClick={e => e.stopPropagation()}>
+        {arrowDir === 'up' && <div style={S.arrowUp} />}
+        {arrowDir === 'down' && <div style={S.arrowDown} />}
+        {arrowDir === 'left' && <div style={S.arrowLeft} />}
+
         <div style={S.stepCounter}>Step {step + 1} of {STEPS.length}</div>
-        <div style={S.iconRow}>{current.icon}</div>
         <div style={S.title}>{current.title}</div>
         <div style={S.description}>{current.description}</div>
 
         <div style={S.dots}>
           {STEPS.map((_, i) => (
-            <div
-              key={i}
-              style={S.dot(i === step)}
-              onClick={() => setStep(i)}
-            />
+            <div key={i} style={S.dot(i === step)} onClick={() => setStep(i)} />
           ))}
         </div>
 
         <div style={S.nav}>
-          <button
-            style={S.skip}
-            onClick={onClose}
-          >
-            Skip Tour
-          </button>
-
+          <button style={S.skip} onClick={onClose}>Skip Tour</button>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               style={isFirst ? S.btnDisabled : S.btnSecondary}
               onClick={prev}
               disabled={isFirst}
-            >
-              Previous
-            </button>
-            <button
-              style={S.btnPrimary}
-              onClick={next}
-            >
+            >Previous</button>
+            <button style={S.btnPrimary} onClick={next}>
               {isLast ? 'Finish' : 'Next'}
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }
