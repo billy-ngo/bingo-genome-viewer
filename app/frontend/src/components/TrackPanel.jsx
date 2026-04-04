@@ -15,6 +15,8 @@ import ReadTrack from './tracks/ReadTrack'
 import AnnotationTrack from './tracks/AnnotationTrack'
 import VariantTrack from './tracks/VariantTrack'
 import TrackWarningBadge from './ui/TrackWarningBadge'
+import SelectionOverlay from './ui/SelectionOverlay'
+import { getLiveTrackData } from '../hooks/useTrackData'
 
 class TrackErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null } }
@@ -229,6 +231,12 @@ export default function TrackPanel({
       </div>
       <div style={S.trackArea} ref={containerRef}>
         <TrackErrorBoundary>{renderTrack()}</TrackErrorBoundary>
+        <SelectionOverlay
+          width={width}
+          height={track.height}
+          trackData={getLiveTrackData(track.id)}
+          trackType={track.track_type}
+        />
       </div>
       <div
         ref={resizeRef}

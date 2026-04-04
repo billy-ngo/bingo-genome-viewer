@@ -18,6 +18,7 @@ import HelpTour from './components/ui/HelpTour'
 import NavigationBar from './components/NavigationBar'
 import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
+import ExitGuard from './components/ui/ExitGuard'
 
 const APP_VERSION = '1.2.0'
 
@@ -709,6 +710,9 @@ function BrowserApp() {
           {dropStatus.error || dropStatus.msg}
         </div>
       )}
+
+      {/* Exit warning guard */}
+      {genome && <ExitGuard labelWidth={labelWidth} />}
     </div>
   )
 }
