@@ -83,7 +83,10 @@ echo ""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
-    "$VENV/bin/python" -m pip install --upgrade "$SCRIPT_DIR"
+    # Force reinstall the package itself so local changes always take effect,
+    # then run again without --force to install/update dependencies normally
+    "$VENV/bin/python" -m pip install --force-reinstall --no-deps "$SCRIPT_DIR" -q
+    "$VENV/bin/python" -m pip install "$SCRIPT_DIR" -q
 else
     "$VENV/bin/python" -m pip install --upgrade bingoviewer
 fi
