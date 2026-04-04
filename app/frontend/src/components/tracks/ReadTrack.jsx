@@ -2,7 +2,10 @@
  * ReadTrack.jsx — Canvas renderer for aligned reads (BAM).
  *
  * Shows coverage bars when zoomed out, individual read rectangles when
- * zoomed in (<50 kbp). Supports strand coloring and pileup row layout.
+ * zoomed in (<50 kbp). When zoomed in, reads are drawn segment-by-segment
+ * from parsed CIGAR data: matches (filled), deletions (thin line),
+ * intron skips (dotted line), and insertions (purple tick marks at the
+ * exact genomic position).
  */
 import React, { useRef, useEffect } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
@@ -12,6 +15,7 @@ import { useTrackData } from '../../hooks/useTrackData'
 const READ_DETAIL_THRESHOLD = 50_000
 const READ_HEIGHT = 8
 const ROW_GAP = 2
+const INSERTION_COLOR = '#9c27b0'
 
 export default function ReadTrack({ track, width, height, onWarning }) {
   const canvasRef = useRef(null)
@@ -38,21 +42,24 @@ export default function ReadTrack({ track, width, height, onWarning }) {
     }
     if (!data) { if (onWarning) onWarning(null); return }
 
+    const regionStart = region.start
     const regionLen = region.end - region.start
 
+    // ── Coverage mode (zoomed out) ──────────────────────────────
     if (data.bins) {
       const actualMax = data.max_value || 1
       const maxVal = track.scaleMax != null ? track.scaleMax : actualMax
       const color = track.color || '#78909c'
       const barAuto = track.barAutoWidth !== false
       const barFixedPx = track.barWidth || 2
-      const pxPerNt = width / regionLen
       ctx.fillStyle = color
       for (const bin of data.bins) {
         const binW = ((bin.end - bin.start) / regionLen) * width
         const w = barAuto ? Math.max(1, binW) : Math.min(barFixedPx, binW)
-        const x = ((bin.start - region.start) / regionLen) * width
-        ctx.fillRect(x, height - (bin.value / maxVal) * (height - 14) - 2, w, (bin.value / maxVal) * (height - 14))
+        const x = ((bin.start - regionStart) / regionLen) * width
+        const ratio = Math.min(1, bin.value / maxVal)
+        const barH = ratio * (height - 14)
+        ctx.fillRect(x, height - barH - 2, w, barH)
       }
       ctx.fillStyle = theme.textSecondary; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.fillText(maxVal.toFixed(1), 2, 10)
       ctx.fillStyle = '#ffb74d'; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.textAlign = 'right'
@@ -65,6 +72,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       return
     }
 
+    // ── Read detail mode (zoomed in) ────────────────────────────
     if (!data.reads?.length) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
       ctx.fillText('No reads in region', 8, height / 2 + 4)
@@ -72,29 +80,102 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       return
     }
 
+    const toX = (pos) => ((pos - regionStart) / regionLen) * width
+    const pxPerBp = width / regionLen
+
     let hiddenReads = 0
     for (const read of data.reads) {
-      const x = ((read.start - region.start) / regionLen) * width
-      const w = Math.max(2, ((read.end - read.start) / regionLen) * width)
       const y = read.row * (READ_HEIGHT + ROW_GAP) + 2
       if (y + READ_HEIGHT > height) { hiddenReads++; continue }
 
-      ctx.fillStyle = read.strand === '+' ? '#90a4ae' : '#f06292'
-      ctx.fillRect(x, y, w, READ_HEIGHT)
+      const readColor = read.strand === '+' ? '#90a4ae' : '#f06292'
+      const segments = read.segments
 
-      const arrowSize = Math.min(4, w / 2)
-      ctx.fillStyle = theme.canvasBg
-      if (read.strand === '+') {
-        ctx.beginPath(); ctx.moveTo(x + w, y + READ_HEIGHT / 2)
-        ctx.lineTo(x + w - arrowSize, y); ctx.lineTo(x + w - arrowSize, y + READ_HEIGHT); ctx.fill()
+      if (segments && segments.length > 0) {
+        // ── CIGAR-aware rendering ─────────────────────────────
+
+        // 1) Thin connector line across full read span
+        const x0 = toX(read.start)
+        const x1 = toX(read.end)
+        ctx.strokeStyle = readColor
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(x0, y + READ_HEIGHT / 2)
+        ctx.lineTo(x1, y + READ_HEIGHT / 2)
+        ctx.stroke()
+
+        // 2) Draw each CIGAR segment
+        for (const seg of segments) {
+          if (seg.type === 'M') {
+            // Match/mismatch — filled rectangle
+            const sx = toX(seg.start)
+            const sw = Math.max(1, toX(seg.end) - sx)
+            ctx.fillStyle = readColor
+            ctx.fillRect(sx, y, sw, READ_HEIGHT)
+
+          } else if (seg.type === 'D') {
+            // Deletion — gap in the read body, thin line through center
+            const sx = toX(seg.start)
+            const sw = toX(seg.end) - sx
+            if (sw >= 1) {
+              ctx.strokeStyle = readColor
+              ctx.lineWidth = 1
+              ctx.beginPath()
+              ctx.moveTo(sx, y + READ_HEIGHT / 2)
+              ctx.lineTo(sx + sw, y + READ_HEIGHT / 2)
+              ctx.stroke()
+            }
+
+          } else if (seg.type === 'N') {
+            // Intron skip — dotted line
+            const sx = toX(seg.start)
+            const sw = toX(seg.end) - sx
+            if (sw >= 2) {
+              ctx.setLineDash([2, 2])
+              ctx.strokeStyle = readColor
+              ctx.lineWidth = 1
+              ctx.beginPath()
+              ctx.moveTo(sx, y + READ_HEIGHT / 2)
+              ctx.lineTo(sx + sw, y + READ_HEIGHT / 2)
+              ctx.stroke()
+              ctx.setLineDash([])
+            }
+
+          } else if (seg.type === 'I') {
+            // Insertion — purple tick at exact genomic position
+            const ix = toX(seg.pos)
+            const tickW = Math.max(2, Math.min(4, pxPerBp * 0.4))
+            ctx.fillStyle = INSERTION_COLOR
+            ctx.fillRect(ix - tickW / 2, y - 1, tickW, READ_HEIGHT + 2)
+          }
+        }
       } else {
-        ctx.beginPath(); ctx.moveTo(x, y + READ_HEIGHT / 2)
-        ctx.lineTo(x + arrowSize, y); ctx.lineTo(x + arrowSize, y + READ_HEIGHT); ctx.fill()
+        // Fallback: no CIGAR segments, draw simple rectangle
+        const x = toX(read.start)
+        const w = Math.max(2, toX(read.end) - x)
+        ctx.fillStyle = readColor
+        ctx.fillRect(x, y, w, READ_HEIGHT)
       }
 
-      if (w > 60) {
+      // Strand arrow overlay
+      const rx = toX(read.start)
+      const rw = Math.max(2, toX(read.end) - rx)
+      const arrowSize = Math.min(4, rw / 2)
+      if (arrowSize >= 2) {
+        ctx.fillStyle = theme.canvasBg
+        if (read.strand === '+') {
+          ctx.beginPath(); ctx.moveTo(rx + rw, y + READ_HEIGHT / 2)
+          ctx.lineTo(rx + rw - arrowSize, y); ctx.lineTo(rx + rw - arrowSize, y + READ_HEIGHT); ctx.fill()
+        } else {
+          ctx.beginPath(); ctx.moveTo(rx, y + READ_HEIGHT / 2)
+          ctx.lineTo(rx + arrowSize, y); ctx.lineTo(rx + arrowSize, y + READ_HEIGHT); ctx.fill()
+        }
+      }
+
+      // Read name when zoomed in enough
+      if (rw > 60) {
         ctx.fillStyle = theme.canvasBg; ctx.font = '8px Arial, Helvetica, sans-serif'; ctx.textAlign = 'left'
-        ctx.fillText(read.name.slice(0, 20), x + 2, y + READ_HEIGHT - 1)
+        ctx.fillText(read.name.slice(0, 20), rx + 2, y + READ_HEIGHT - 1)
       }
     }
 

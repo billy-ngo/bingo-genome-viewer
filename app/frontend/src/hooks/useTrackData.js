@@ -85,14 +85,16 @@ export function useTrackData(track, region, canvasWidth) {
       hasDataRef.current = false
     }
 
-    // Check if current viewport fits entirely within the already-fetched overscan region
+    // Check if current viewport fits within the already-fetched overscan region
+    // AND the zoom level hasn't changed significantly (within 20%)
     const f = fetchedRef.current
     if (f && f.trackId === track.id && f.chrom === chrom &&
         start >= f.start && end <= f.end) {
-      // Data already covers this viewport — nothing to do.
-      // The track component will re-render with the new `region` and
-      // map the existing data bins/features to the shifted viewport.
-      return
+      // If zoom level changed by >20%, refetch at new resolution
+      const zoomRatio = viewLen / (f.viewLen || viewLen)
+      if (zoomRatio > 0.8 && zoomRatio < 1.2) {
+        return
+      }
     }
 
     // Determine overscan bounds for the fetch
@@ -112,7 +114,7 @@ export function useTrackData(track, region, canvasWidth) {
       setData(cached)
       setLiveData(track.id, cached)
       setError(null)
-      fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd }
+      fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen }
       hasDataRef.current = true
       return
     }
@@ -156,7 +158,7 @@ export function useTrackData(track, region, canvasWidth) {
             mode: type === 'reads' && viewLen <= READ_DETAIL_THRESHOLD ? 'reads' : 'coverage',
           }
           cache.set(cacheKey, result)
-          fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd }
+          fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen }
           hasDataRef.current = true
           setData(result)
           setLiveData(track.id, result)

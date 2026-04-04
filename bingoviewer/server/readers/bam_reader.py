@@ -31,6 +31,20 @@ def _find_index(bam_path: str) -> str | None:
     return None
 
 
+def _parse_cigar(cigar_string: str) -> list[tuple[int, str]]:
+    """Parse a CIGAR string into a list of (length, op) tuples."""
+    ops = []
+    num = ""
+    for ch in cigar_string:
+        if ch.isdigit():
+            num += ch
+        else:
+            if num:
+                ops.append((int(num), ch))
+            num = ""
+    return ops
+
+
 class BamReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
@@ -90,19 +104,25 @@ class BamReader:
         except KeyError:
             return []  # chromosome not in index
 
-        bin_size = max(1, region_len // bins)
+        # Use floating-point bin boundaries to avoid gaps from integer rounding
+        n_bins = min(bins, region_len)
+        bin_size = region_len / n_bins
         result = []
-        for b in range(0, region_len, bin_size):
-            chunk = depth[b: b + bin_size]
+        for i in range(n_bins):
+            b_start = int(start + i * bin_size)
+            b_end = int(start + (i + 1) * bin_size)
+            lo = b_start - start
+            hi = b_end - start
+            chunk = depth[lo:hi]
             result.append({
-                "start": start + b,
-                "end":   min(start + b + bin_size, end),
+                "start": b_start,
+                "end":   b_end,
                 "value": sum(chunk) / len(chunk) if chunk else 0.0,
             })
         return result
 
     def get_reads(self, chrom: str, start: int, end: int) -> list[dict]:
-        """Return individual read alignments for zoomed-in view."""
+        """Return individual read alignments with parsed CIGAR operations."""
         chrom = self._resolve_chrom(chrom)
         reads = []
         try:
@@ -111,13 +131,19 @@ class BamReader:
                     continue
                 rs = read.reference_start
                 re = read.reference_end if read.reference_end else rs + 1
+                cigar = read.cigarstring or ""
+
+                # Parse CIGAR into segments for rendering
+                segments = _cigar_to_segments(rs, cigar)
+
                 reads.append({
                     "start":    rs,
                     "end":      re,
                     "strand":   "-" if read.is_reverse else "+",
                     "name":     read.query_name or "",
                     "mapq":     read.mapping_quality or 0,
-                    "cigar":    read.cigarstring or "",
+                    "cigar":    cigar,
+                    "segments": segments,
                     "sequence": read.query_sequence or "",
                     "row":      0,
                 })
@@ -128,6 +154,48 @@ class BamReader:
 
         _assign_rows(reads)
         return reads
+
+
+def _cigar_to_segments(ref_pos: int, cigar: str) -> list[dict]:
+    """Convert a CIGAR string into visual segments for the frontend.
+
+    Returns a list of dicts, each with:
+      type: 'M' (match/mismatch), 'D' (deletion), 'I' (insertion),
+            'N' (skip), 'S' (soft-clip)
+      start: reference position (for M/D/N)
+      end:   reference position end (for M/D/N)
+      pos:   reference position where insertion occurs (for I)
+      length: number of inserted bases (for I)
+    """
+    if not cigar:
+        return []
+
+    ops = _parse_cigar(cigar)
+    segments = []
+    pos = ref_pos
+
+    for length, op in ops:
+        if op in ('M', '=', 'X'):
+            # Match or mismatch — consumes both query and reference
+            segments.append({"type": "M", "start": pos, "end": pos + length})
+            pos += length
+        elif op == 'D':
+            # Deletion from reference — consumes reference only
+            segments.append({"type": "D", "start": pos, "end": pos + length})
+            pos += length
+        elif op == 'N':
+            # Skipped region (intron) — consumes reference only
+            segments.append({"type": "N", "start": pos, "end": pos + length})
+            pos += length
+        elif op == 'I':
+            # Insertion to reference — consumes query only, mark position
+            segments.append({"type": "I", "pos": pos, "length": length})
+        elif op == 'S':
+            # Soft clip — consumes query only, note at current pos
+            segments.append({"type": "S", "pos": pos, "length": length})
+        # H (hard clip) and P (padding) don't consume either — skip
+
+    return segments
 
 
 def _assign_rows(reads: list[dict]):
