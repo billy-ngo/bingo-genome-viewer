@@ -96,7 +96,7 @@ Then open [http://localhost:8000](http://localhost:8000).
 
 If you use this software in your research, please cite:
 
-> Ngo, B. (2026). BiNgo Genome Viewer (v1.1.0) [Software].
+> Ngo, B. (2026). BiNgo Genome Viewer (v1.2.0) [Software].
 
 ## License
 

@@ -77,6 +77,93 @@ class AppState:
         self.readers[track_id] = reader
         return info
 
+    def check_track_compatibility(self, track_id: str) -> dict:
+        """Compare a track reader's chromosomes against the loaded genome.
+
+        Returns a dict with ``status`` ('ok', 'mismatch', or 'size_mismatch')
+        and a human-readable ``message`` when there is a problem.
+        """
+        if self.genome is None:
+            return {"status": "no_genome"}
+
+        reader = self.readers.get(track_id)
+        if reader is None or not hasattr(reader, "chromosomes"):
+            return {"status": "ok"}
+
+        try:
+            track_chroms = {
+                c["name"]: c.get("length", 0) for c in reader.chromosomes
+            }
+        except Exception:
+            return {"status": "ok"}  # can't read chromosomes; skip check
+
+        if not track_chroms:
+            return {"status": "ok"}
+
+        genome_chroms = {c["name"]: c["length"] for c in self.genome.chromosomes}
+        matching_names = set(track_chroms) & set(genome_chroms)
+
+        # ── Single-chromosome special case ──
+        # Many bacterial tracks have one chromosome with a different name
+        # than the genome.  The _resolve_chrom() fallbacks in readers handle
+        # this transparently, so we only warn when the *sizes* differ.
+        if len(track_chroms) == 1 and len(genome_chroms) == 1:
+            t_name, t_len = next(iter(track_chroms.items()))
+            g_name, g_len = next(iter(genome_chroms.items()))
+            if t_len > 0 and g_len > 0:
+                ratio = abs(t_len - g_len) / max(g_len, 1)
+                if ratio > 0.05:
+                    return {
+                        "status": "size_mismatch",
+                        "message": (
+                            f"Chromosome size mismatch: track '{t_name}' "
+                            f"({t_len:,} bp) vs genome '{g_name}' ({g_len:,} bp)"
+                        ),
+                        "track_chromosomes": list(track_chroms.keys()),
+                        "genome_chromosomes": list(genome_chroms.keys()),
+                    }
+            return {"status": "ok"}
+
+        # ── Multi-chromosome: check name overlap ──
+        if not matching_names:
+            t_sample = sorted(track_chroms)[:5]
+            g_sample = sorted(genome_chroms)[:5]
+            return {
+                "status": "mismatch",
+                "message": (
+                    f"No matching chromosomes found. "
+                    f"Track: {', '.join(t_sample)}; "
+                    f"Genome: {', '.join(g_sample)}"
+                ),
+                "track_chromosomes": list(track_chroms.keys()),
+                "genome_chromosomes": list(genome_chroms.keys()),
+            }
+
+        # ── Check size mismatches for matching names ──
+        size_issues = []
+        for name in matching_names:
+            t_len = track_chroms[name]
+            g_len = genome_chroms[name]
+            if t_len > 0 and g_len > 0:
+                ratio = abs(t_len - g_len) / max(g_len, 1)
+                if ratio > 0.05:
+                    size_issues.append(name)
+
+        if size_issues:
+            ex = size_issues[0]
+            return {
+                "status": "size_mismatch",
+                "message": (
+                    f"Size mismatch on {', '.join(size_issues[:3])}: "
+                    f"e.g. '{ex}' is {genome_chroms[ex]:,} bp in genome "
+                    f"but {track_chroms[ex]:,} bp in track"
+                ),
+                "track_chromosomes": list(track_chroms.keys()),
+                "genome_chromosomes": list(genome_chroms.keys()),
+            }
+
+        return {"status": "ok"}
+
     def remove_track(self, track_id: str):
         reader = self.readers.pop(track_id, None)
         if reader and hasattr(reader, "close"):

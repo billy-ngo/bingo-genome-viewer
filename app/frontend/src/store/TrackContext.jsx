@@ -33,27 +33,13 @@ export function TrackProvider({ children }) {
   const tracksRef = useRef(tracks)
   tracksRef.current = tracks
 
-  const addTrack = useCallback(async (file, name) => {
+  /** Upload a track file to the backend without adding to UI state.
+   *  Returns the track info including a `compatibility` field. */
+  const uploadTrack = useCallback(async (file, name) => {
     try {
       const res = await tracksApi.load(file, name)
       const info = res.data
       if (info.name) info.name = cleanName(info.name)
-      setTracks(prev => {
-        const color = TRACK_COLORS[prev.length % TRACK_COLORS.length]
-        const isAnnotation = info.track_type === 'annotations' || info.track_type === 'genome_annotations'
-        return [...prev, {
-          ...info, color,
-          height: defaultHeight(info.track_type),
-          visible: true,
-          useArrows: true,
-          scaleMax: null,
-          scaleMin: null,
-          logScale: false,
-          barAutoWidth: true,
-          barWidth: 2,
-          ...(isAnnotation ? { annotationColors: null } : {}),
-        }]
-      })
       setError(null)
       return info
     } catch (e) {
@@ -62,6 +48,38 @@ export function TrackProvider({ children }) {
       throw e
     }
   }, [])
+
+  /** Add a previously uploaded track to the UI state. */
+  const commitTrack = useCallback((info) => {
+    setTracks(prev => {
+      const color = TRACK_COLORS[prev.length % TRACK_COLORS.length]
+      const isAnnotation = info.track_type === 'annotations' || info.track_type === 'genome_annotations'
+      return [...prev, {
+        ...info, color,
+        height: defaultHeight(info.track_type),
+        visible: true,
+        useArrows: true,
+        scaleMax: null,
+        scaleMin: null,
+        logScale: false,
+        barAutoWidth: true,
+        barWidth: 2,
+        ...(isAnnotation ? { annotationColors: null } : {}),
+      }]
+    })
+  }, [])
+
+  /** Discard a track that was uploaded to the backend but not committed. */
+  const discardTrack = useCallback(async (id) => {
+    try { await tracksApi.remove(id) } catch (e) { /* ignore */ }
+  }, [])
+
+  /** Convenience: upload + commit in one call (used by session restore etc.). */
+  const addTrack = useCallback(async (file, name) => {
+    const info = await uploadTrack(file, name)
+    commitTrack(info)
+    return info
+  }, [uploadTrack, commitTrack])
 
   const removeTrack = useCallback(async (id) => {
     // Genome annotation tracks are hidden (not deleted) so they can be
@@ -127,9 +145,9 @@ export function TrackProvider({ children }) {
 
   return (
     <TrackContext.Provider value={{
-      tracks, setTracks, addTrack, removeTrack, updateTrack,
-      updateMultipleTracks, reorderTracks, addGenomeAnnotationTrack,
-      restoreAnnotationTracks, error, setError,
+      tracks, setTracks, addTrack, uploadTrack, commitTrack, discardTrack,
+      removeTrack, updateTrack, updateMultipleTracks, reorderTracks,
+      addGenomeAnnotationTrack, restoreAnnotationTracks, error, setError,
     }}>
       {children}
     </TrackContext.Provider>

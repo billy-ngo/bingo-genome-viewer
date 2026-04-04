@@ -10,6 +10,11 @@ import React, { useState, useRef } from 'react'
 import { genomeApi } from '../../api/client'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks, cleanName } from '../../store/TrackContext'
+
+function isTrackMismatch(info) {
+  const c = info?.compatibility
+  return c && c.status !== 'ok' && c.status !== 'no_genome'
+}
 import { useTheme } from '../../store/ThemeContext'
 
 const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
@@ -25,11 +30,12 @@ function getFileExt(name) {
 export default function FileLoader() {
   const { theme } = useTheme()
   const { genome, setGenome, navigateTo } = useBrowser()
-  const { addTrack, addGenomeAnnotationTrack, error: trackError, setError } = useTracks()
+  const { addTrack, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, error: trackError, setError } = useTracks()
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(null)
   const [status, setStatus] = useState(null)
   const [prompt, setPrompt] = useState(null) // { files: File[] }
+  const [trackMismatch, setTrackMismatch] = useState(null) // { tracks: [...] }
   const inputRef = useRef(null)
 
   const ALL_ACCEPT = [
@@ -127,14 +133,27 @@ export default function FileLoader() {
     if (!files.length) return
     setLoading(true); setErr(null); setError(null)
     setStatus(`Loading ${files.length} track${files.length > 1 ? 's' : ''}...`)
+    const compatible = []
+    const incompatible = []
     const errors = []
     for (const file of files) {
-      try { await addTrack(file, undefined) }
-      catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
+      try {
+        const info = await uploadTrack(file, undefined)
+        if (isTrackMismatch(info)) {
+          incompatible.push(info)
+        } else {
+          commitTrack(info)
+          compatible.push(info)
+        }
+      } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
     setLoading(false)
     if (errors.length) { setErr(errors.join('; ')); setStatus(null) }
-    else { setStatus(`Added ${files.length} track${files.length > 1 ? 's' : ''}.`); setTimeout(() => setStatus(null), 3000) }
+    else if (compatible.length > 0 && incompatible.length === 0) {
+      setStatus(`Added ${compatible.length} track${compatible.length > 1 ? 's' : ''}.`)
+      setTimeout(() => setStatus(null), 3000)
+    } else if (incompatible.length === 0) { setStatus(null) }
+    if (incompatible.length > 0) setTrackMismatch({ tracks: incompatible })
   }
 
   async function processFiles(fileList) {
@@ -210,6 +229,20 @@ export default function FileLoader() {
     setPrompt(null)
   }
 
+  async function handleMismatchSkip() {
+    if (!trackMismatch) return
+    for (const t of trackMismatch.tracks) await discardTrack(t.id)
+    setTrackMismatch(null)
+  }
+
+  function handleMismatchLoad() {
+    if (!trackMismatch) return
+    for (const t of trackMismatch.tracks) commitTrack(t)
+    setTrackMismatch(null)
+    setStatus(`Added ${trackMismatch.tracks.length} track${trackMismatch.tracks.length > 1 ? 's' : ''}.`)
+    setTimeout(() => setStatus(null), 3000)
+  }
+
   const fileNames = prompt ? prompt.files.map(f => f.name).join(', ') : ''
   const plural = prompt && prompt.files.length > 1
 
@@ -255,6 +288,32 @@ export default function FileLoader() {
               <button style={S.promptBtnPrimary} onClick={handlePromptChromosome}>
                 Add as Chromosome{plural ? 's' : ''}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Prompt dialog for track-genome compatibility mismatch */}
+      {trackMismatch && (
+        <div style={S.promptOverlay}>
+          <div style={S.promptBox} onClick={e => e.stopPropagation()}>
+            <div style={S.promptTitle}>Track compatibility warning</div>
+            <div style={S.promptText}>
+              {trackMismatch.tracks.map(t => (
+                <div key={t.id} style={{ marginBottom: 6 }}>
+                  <span style={S.promptFile}>{t.name}</span>
+                  {' \u2014 '}{t.compatibility?.message || 'Possible mismatch with loaded genome'}
+                </div>
+              ))}
+              <div style={{ marginTop: 8 }}>
+                {trackMismatch.tracks.length > 1
+                  ? 'These tracks may not match the loaded genome.'
+                  : 'This track may not match the loaded genome.'}
+              </div>
+            </div>
+            <div style={S.promptBtns}>
+              <button style={S.promptBtn} onClick={handleMismatchSkip}>Skip</button>
+              <button style={S.promptBtnPrimary} onClick={handleMismatchLoad}>Load Anyway</button>
             </div>
           </div>
         </div>

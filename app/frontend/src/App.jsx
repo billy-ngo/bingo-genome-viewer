@@ -19,7 +19,7 @@ import NavigationBar from './components/NavigationBar'
 import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 
-const APP_VERSION = '1.1.0'
+const APP_VERSION = '1.2.0'
 
 function BingoLogo({ size = 32 }) {
   return (
@@ -85,7 +85,7 @@ function SkeletonTrack({ theme, labelWidth }) {
 function BrowserApp() {
   const { theme } = useTheme()
   const { genome, region, setGenome, navigateTo } = useBrowser()
-  const { tracks, reorderTracks, addTrack, addGenomeAnnotationTrack, restoreAnnotationTracks } = useTracks()
+  const { tracks, reorderTracks, addTrack, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, restoreAnnotationTracks } = useTracks()
   const containerRef = useRef(null)
   const [containerWidth, setContainerWidth] = useState(800)
   const [showSettings, setShowSettings] = useState(false)
@@ -100,6 +100,7 @@ function BrowserApp() {
   const [appDragOver, setAppDragOver] = useState(false)
   const [dropStatus, setDropStatus] = useState(null)
   const [dropPrompt, setDropPrompt] = useState(null) // { files: File[] }
+  const [dropTrackMismatch, setDropTrackMismatch] = useState(null) // { tracks: [...] }
   const appDragCounter = useRef(0)
 
   useAutoSave(labelWidth)
@@ -146,6 +147,11 @@ function BrowserApp() {
   }, [])
 
   const onAppDragOver = useCallback((e) => { e.preventDefault(); e.stopPropagation() }, [])
+
+  function isTrackMismatch(info) {
+    const c = info?.compatibility
+    return c && c.status !== 'ok' && c.status !== 'no_genome'
+  }
 
   const onAppDrop = useCallback(async (e) => {
     e.preventDefault(); e.stopPropagation()
@@ -201,15 +207,27 @@ function BrowserApp() {
           return
         }
         setDropStatus({ msg: `Loading ${trackFiles.length} track${trackFiles.length > 1 ? 's' : ''}...` })
+        const compatible = []
+        const incompatible = []
         const errors = []
         for (const file of trackFiles) {
-          try { await addTrack(file, undefined) }
-          catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
+          try {
+            const info = await uploadTrack(file, undefined)
+            if (isTrackMismatch(info)) {
+              incompatible.push(info)
+            } else {
+              commitTrack(info)
+              compatible.push(info)
+            }
+          } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
         }
         if (errors.length) {
           setDropStatus({ error: errors.join('; ') })
           setTimeout(() => setDropStatus(null), 5000)
           return
+        }
+        if (incompatible.length > 0) {
+          setDropTrackMismatch({ tracks: incompatible })
         }
       }
 
@@ -284,6 +302,20 @@ function BrowserApp() {
       setTimeout(() => setDropStatus(null), 5000)
     }
   }, [dropPrompt, addTrack])
+
+  const onDropMismatchSkip = useCallback(async () => {
+    if (!dropTrackMismatch) return
+    for (const t of dropTrackMismatch.tracks) await discardTrack(t.id)
+    setDropTrackMismatch(null)
+  }, [dropTrackMismatch, discardTrack])
+
+  const onDropMismatchLoad = useCallback(() => {
+    if (!dropTrackMismatch) return
+    for (const t of dropTrackMismatch.tracks) commitTrack(t)
+    setDropTrackMismatch(null)
+    setDropStatus({ msg: `Added ${dropTrackMismatch.tracks.length} track${dropTrackMismatch.tracks.length > 1 ? 's' : ''}` })
+    setTimeout(() => setDropStatus(null), 3000)
+  }, [dropTrackMismatch, commitTrack])
 
   const onLabelResizeStart = useCallback((e) => {
     e.preventDefault()
@@ -584,6 +616,53 @@ function BrowserApp() {
           </div>
         )
       })()}
+
+      {/* Track-genome compatibility mismatch prompt (drag-drop) */}
+      {dropTrackMismatch && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+        }}>
+          <div style={{
+            background: theme.panelBg, border: `1px solid ${theme.borderAccent}`, borderRadius: 8,
+            padding: '20px 24px', maxWidth: 480, width: '90%',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: theme.textPrimary, marginBottom: 8 }}>
+              Track compatibility warning
+            </div>
+            <div style={{ fontSize: 12, color: theme.textSecondary, lineHeight: 1.6, marginBottom: 16 }}>
+              {dropTrackMismatch.tracks.map(t => (
+                <div key={t.id} style={{ marginBottom: 6 }}>
+                  <strong style={{ color: theme.textPrimary }}>{t.name}</strong>
+                  {' \u2014 '}{t.compatibility?.message || 'Possible mismatch with loaded genome'}
+                </div>
+              ))}
+              <div style={{ marginTop: 8 }}>
+                {dropTrackMismatch.tracks.length > 1
+                  ? 'These tracks may not match the loaded genome.'
+                  : 'This track may not match the loaded genome.'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button
+                onClick={onDropMismatchSkip}
+                style={{
+                  background: theme.btnBg, border: `1px solid ${theme.borderStrong}`, borderRadius: 4,
+                  color: theme.btnText, padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                }}
+              >Skip</button>
+              <button
+                onClick={onDropMismatchLoad}
+                style={{
+                  background: '#1976d2', border: 'none', borderRadius: 4,
+                  color: '#fff', padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                }}
+              >Load Anyway</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Full-screen drop overlay */}
       {appDragOver && (

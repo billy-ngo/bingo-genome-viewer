@@ -38,7 +38,8 @@ async def load_track(file: UploadFile = File(...), name: str = Form("")):
             shutil.copyfileobj(file.file, f)
         display_name = _clean_name(name) if name else clean_filename
         track = app_state.load_track(str(dest), display_name)
-        return track
+        compatibility = app_state.check_track_compatibility(track["id"])
+        return {**track, "compatibility": compatibility}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
