@@ -93,6 +93,21 @@ def _do_upgrade():
         return False
 
 
+def _log(msg):
+    """Print to console if available, always log to file."""
+    try:
+        print(msg)
+    except Exception:
+        pass
+    try:
+        log = _CONFIG_DIR / "update.log"
+        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(log, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
+
 def check_and_update(force=False):
     """Check PyPI for a newer version and upgrade if found.
 
@@ -114,18 +129,25 @@ def check_and_update(force=False):
     if _version_tuple(latest) <= _version_tuple(installed):
         return None  # already up to date
 
-    print(f"  Updating BiNgo Genome Viewer: {installed} → {latest} ...")
+    _log(f"  Updating BiNgo Genome Viewer: {installed} → {latest} ...")
     if _do_upgrade():
-        print(f"  Updated to {latest}. Restarting...")
+        _log(f"  Updated to {latest}. Restarting...")
         return latest
     else:
-        print(f"  Update failed (you can retry with: bingo --update)")
+        _log(f"  Update failed (you can retry with: bingo --update)")
         return None
 
 
 def _restart():
-    """Re-exec the current process to pick up the new version."""
-    os.execv(sys.executable, [sys.executable, "-m", "bingoviewer"] + sys.argv[1:])
+    """Restart the process to pick up the new version.
+
+    Uses subprocess + exit instead of os.execv for compatibility with
+    pythonw.exe on Windows (which has no console for execv to inherit).
+    """
+    # Filter out --update to avoid infinite restart loops
+    args = [a for a in sys.argv[1:] if a != "--update"]
+    subprocess.Popen([sys.executable, "-m", "bingoviewer"] + args)
+    sys.exit(0)
 
 
 # ── Fast instance detection ────────────────────────────────────────
