@@ -52,6 +52,11 @@ class BedReader:
             return chrom
         if len(self._features) == 1:
             return next(iter(self._features))
+        for key in self._features:
+            if key.replace("chr", "") == chrom.replace("chr", ""):
+                return key
+            if key.lower() == chrom.lower():
+                return key
         return chrom
 
     def get_features(self, chrom: str, start: int, end: int) -> list[dict]:
@@ -145,6 +150,11 @@ class GtfReader:
             return chrom
         if len(self._genes) == 1:
             return next(iter(self._genes))
+        for key in self._genes:
+            if key.replace("chr", "") == chrom.replace("chr", ""):
+                return key
+            if key.lower() == chrom.lower():
+                return key
         return chrom
 
     def get_features(self, chrom: str, start: int, end: int) -> list[dict]:
@@ -231,6 +241,11 @@ class Gff3Reader:
             return chrom
         if len(self._top_level) == 1:
             return next(iter(self._top_level))
+        for key in self._top_level:
+            if key.replace("chr", "") == chrom.replace("chr", ""):
+                return key
+            if key.lower() == chrom.lower():
+                return key
         return chrom
 
     def get_features(self, chrom: str, start: int, end: int) -> list[dict]:

@@ -50,6 +50,11 @@ class BigWigReader:
             return chrom
         if len(self._chrom_to_id) == 1:
             return next(iter(self._chrom_to_id))
+        for key in self._chrom_to_id:
+            if key.replace("chr", "") == chrom.replace("chr", ""):
+                return key
+            if key.lower() == chrom.lower():
+                return key
         return chrom
 
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
@@ -242,6 +247,11 @@ class BedGraphReader:
             return chrom
         if len(self._data) == 1:
             return next(iter(self._data))
+        for key in self._data:
+            if key.replace("chr", "") == chrom.replace("chr", ""):
+                return key
+            if key.lower() == chrom.lower():
+                return key
         return chrom
 
     def _load(self):
@@ -323,6 +333,12 @@ class WigReader:
             return chrom
         if len(self._positions) == 1:
             return next(iter(self._positions))
+        # Try common prefix/suffix variations (chr1 vs 1, Chr1 vs chr1)
+        for key in self._positions:
+            if key.replace("chr", "") == chrom.replace("chr", ""):
+                return key
+            if key.lower() == chrom.lower():
+                return key
         return chrom
 
     def _load(self):
@@ -396,6 +412,7 @@ class WigReader:
         bin_size = region_len / n_bins
         pos_totals = [0.0] * n_bins
         neg_totals = [0.0] * n_bins
+        counts = [0] * n_bins
 
         # Binary search for start of relevant data
         lo = bisect.bisect_left(positions, start)
@@ -406,6 +423,7 @@ class WigReader:
                 break
             v = values[i]
             bi = min(int((p - start) / bin_size), n_bins - 1)
+            counts[bi] += 1
             if v >= 0:
                 pos_totals[bi] += v
             else:
@@ -415,9 +433,9 @@ class WigReader:
             {
                 "start": int(start + i * bin_size),
                 "end": int(start + (i + 1) * bin_size),
-                "value": pos_totals[i] + neg_totals[i],
-                "forward": pos_totals[i],
-                "reverse": neg_totals[i],
+                "value": (pos_totals[i] + neg_totals[i]) / counts[i] if counts[i] else 0.0,
+                "forward": pos_totals[i] / counts[i] if counts[i] else 0.0,
+                "reverse": neg_totals[i] / counts[i] if counts[i] else 0.0,
             }
             for i in range(n_bins)
         ]

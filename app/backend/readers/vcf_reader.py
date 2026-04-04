@@ -86,6 +86,11 @@ class VcfReader:
             return chrom
         if len(self._by_chrom) == 1:
             return next(iter(self._by_chrom))
+        for key in self._by_chrom:
+            if key.replace("chr", "") == chrom.replace("chr", ""):
+                return key
+            if key.lower() == chrom.lower():
+                return key
         return chrom
 
     def get_variants(self, chrom: str, start: int, end: int) -> list[dict]:

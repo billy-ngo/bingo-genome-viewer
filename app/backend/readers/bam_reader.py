@@ -81,6 +81,11 @@ class BamReader:
             return chrom
         if len(names) == 1:
             return names[0]
+        for name in names:
+            if name.replace("chr", "") == chrom.replace("chr", ""):
+                return name
+            if name.lower() == chrom.lower():
+                return name
         return chrom
 
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
