@@ -94,8 +94,12 @@ export default function TrackSettings({ onClose }) {
             </div>
             <div style={S.controlRow}>
               <span style={S.controlLabel}>Height (px)</span>
-              <input type="number" min={30} max={500} value={commonHeight} placeholder="mixed" style={S.input}
-                onChange={e => { const v = parseInt(e.target.value); if (v >= 30) applyToSelected({ height: v }) }} />
+              <input type="range" min={30} max={500} step={1} value={commonHeight || 80}
+                onChange={e => applyToSelected({ height: parseInt(e.target.value) })}
+                style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
+              <input type="text" inputMode="numeric" value={commonHeight} placeholder="mixed" style={{ ...S.input, width: 48 }}
+                onChange={e => { const v = parseInt(e.target.value); if (v >= 30 && v <= 500) applyToSelected({ height: v }) }}
+                onBlur={e => { const v = parseInt(e.target.value); if (!v || v < 30) applyToSelected({ height: 30 }); if (v > 500) applyToSelected({ height: 500 }) }} />
             </div>
             <div style={S.controlRow}>
               <span style={S.controlLabel}>Visible</span>
