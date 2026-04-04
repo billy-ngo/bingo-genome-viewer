@@ -3,7 +3,6 @@
 #  BiNgo Genome Viewer — macOS / Linux installer
 #  Double-click (or run) this file to install and launch.
 # ──────────────────────────────────────────────────────────────
-set -e
 
 clear
 echo ""
@@ -37,7 +36,7 @@ echo "  Found Python $PY_VER"
 echo ""
 
 # ── Check Python >= 3.10 ──────────────────────────────────────
-if ! $PY -c "import sys; exit(0 if sys.version_info >= (3,10) else 1)"; then
+if ! $PY -c "import sys; exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
     echo "  Python 3.10 or newer is required."
     echo "  Please update from  https://www.python.org/downloads"
     echo ""
@@ -61,6 +60,7 @@ fi
 
 if [ ! -f "$VENV/bin/python" ]; then
     echo "  [1/3] Creating environment..."
+    echo ""
     mkdir -p "$INSTALL_DIR"
     if ! $PY -m venv "$VENV"; then
         echo ""
@@ -70,6 +70,9 @@ if [ ! -f "$VENV/bin/python" ]; then
         read -n1 -s -p "  Press any key to exit..."
         exit 1
     fi
+else
+    echo "  [1/3] Environment ready."
+    echo ""
 fi
 
 # ── Install / upgrade BiNgo ────────────────────────────────────
@@ -85,13 +88,33 @@ else
     "$VENV/bin/python" -m pip install --upgrade bingoviewer
 fi
 
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "  Install failed."
+    echo ""
+    echo "  Possible fixes:"
+    echo "    - Check your internet connection"
+    echo "    - Delete  ~/.bingoviewer  and run this again"
+    echo ""
+    read -n1 -s -p "  Press any key to exit..."
+    exit 1
+fi
+
+echo ""
+echo "  Install complete."
+
 # ── Shortcut prompt ────────────────────────────────────────────
 echo ""
-read -r -p "  Create a desktop shortcut? [Y/n]: " SHORTCUT
-if [ "${SHORTCUT,,}" != "n" ]; then
-    "$VENV/bin/python" -m bingoviewer --install 2>/dev/null || \
-        echo "  (Shortcut creation skipped — you can retry later with: bingo --install)"
-fi
+printf "  Create a desktop shortcut? [Y/n]: "
+read -r SHORTCUT
+# Portable lowercase check (works on macOS bash 3.x)
+case "$SHORTCUT" in
+    n|N) ;;
+    *)
+        "$VENV/bin/python" -m bingoviewer --install 2>/dev/null || \
+            echo "  (Shortcut skipped — you can create one later with: bingo --install)"
+        ;;
+esac
 
 # ── Launch ─────────────────────────────────────────────────────
 echo ""
