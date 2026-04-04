@@ -17,7 +17,10 @@ export default function ExportImage({ onClose }) {
   const { region } = useBrowser()
   const { tracks } = useTracks()
   const { theme } = useTheme()
-  const visibleTracks = tracks.filter(t => t.visible)
+  const chrom = region?.chrom
+  const visibleTracks = tracks.filter(t =>
+    t.visible && (!t.targetChromosomes || !chrom || t.targetChromosomes.includes(chrom))
+  )
 
   const [format, setFormat] = useState('svg')
   const [includeRuler, setIncludeRuler] = useState(true)

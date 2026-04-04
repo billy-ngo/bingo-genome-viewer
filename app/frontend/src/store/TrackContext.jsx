@@ -64,6 +64,7 @@ export function TrackProvider({ children }) {
         logScale: false,
         barAutoWidth: true,
         barWidth: 2,
+        targetChromosomes: info.target_chromosomes || null,
         ...(isAnnotation ? { annotationColors: null } : {}),
       }]
     })
@@ -129,9 +130,14 @@ export function TrackProvider({ children }) {
     setTracks(prev => {
       const idx = prev.findIndex(t => t.id === info.id)
       if (idx !== -1) {
-        // Already exists (maybe hidden) — update name and re-show
+        // Already exists (maybe hidden) — update name, target chromosomes, and re-show
         const updated = [...prev]
-        updated[idx] = { ...updated[idx], name: cleanName(info.name) || info.name, visible: true }
+        updated[idx] = {
+          ...updated[idx],
+          name: cleanName(info.name) || info.name,
+          visible: true,
+          ...(info.targetChromosomes ? { targetChromosomes: info.targetChromosomes } : {}),
+        }
         return updated
       }
       return [...prev, {
@@ -139,6 +145,7 @@ export function TrackProvider({ children }) {
         name: cleanName(info.name) || info.name,
         color: '#a5d6a7', height: 80, visible: true, useArrows: true,
         annotationColors: null,
+        targetChromosomes: info.targetChromosomes || null,
       }]
     })
   }, [])

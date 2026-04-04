@@ -94,6 +94,7 @@ export default function FileLoader() {
         addGenomeAnnotationTrack({
           id: 'genome_annotations', name: `${info.name} (annotations)`,
           track_type: 'genome_annotations', file_format: 'genbank',
+          targetChromosomes: info.annotated_chromosomes || null,
         })
       }
       setStatus(`Genome loaded: ${info.name}`)
@@ -117,6 +118,7 @@ export default function FileLoader() {
           addGenomeAnnotationTrack({
             id: 'genome_annotations', name: `${info.name} (annotations)`,
             track_type: 'genome_annotations', file_format: 'genbank',
+            targetChromosomes: info.annotated_chromosomes || null,
           })
         }
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }

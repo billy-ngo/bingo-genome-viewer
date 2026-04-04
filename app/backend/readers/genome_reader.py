@@ -81,3 +81,12 @@ class GenomeReader:
 
     def is_annotated(self) -> bool:
         return any(fmt == "genbank" for fmt, _ in self._sub_readers)
+
+    @property
+    def annotated_chromosomes(self) -> List[str]:
+        """Return chromosome names that carry annotation features (GenBank)."""
+        result = []
+        for fmt, reader in self._sub_readers:
+            if fmt == "genbank":
+                result.extend(c["name"] for c in reader.chromosomes)
+        return result

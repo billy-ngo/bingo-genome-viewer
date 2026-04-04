@@ -193,6 +193,7 @@ function BrowserApp() {
           addGenomeAnnotationTrack({
             id: 'genome_annotations', name: `${info.name} (annotations)`,
             track_type: 'genome_annotations', file_format: 'genbank',
+            targetChromosomes: info.annotated_chromosomes || null,
           })
         }
       } else if (genomeFiles.length > 0 && genome) {
@@ -262,6 +263,7 @@ function BrowserApp() {
             addGenomeAnnotationTrack({
               id: 'genome_annotations', name: `${info.name} (annotations)`,
               track_type: 'genome_annotations', file_format: 'genbank',
+              targetChromosomes: info.annotated_chromosomes || null,
             })
           }
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
@@ -344,6 +346,13 @@ function BrowserApp() {
     observer.observe(containerRef.current)
     return () => observer.disconnect()
   }, [])
+
+  /** A track is shown if it is user-visible AND has data for the current chromosome. */
+  const isTrackActive = useCallback((t) => {
+    if (!t.visible) return false
+    if (!t.targetChromosomes || !region?.chrom) return true
+    return t.targetChromosomes.includes(region.chrom)
+  }, [region?.chrom])
 
   const S = {
     app: { display: 'flex', flexDirection: 'column', height: '100vh', background: theme.appBg, color: theme.textPrimary },
@@ -455,7 +464,7 @@ function BrowserApp() {
 
       <div style={S.trackArea} ref={containerRef} data-tour="track-area">
         {/* Skeleton track — always visible when no real tracks are loaded */}
-        {tracks.filter(t => t.visible).length === 0 && (
+        {tracks.filter(isTrackActive).length === 0 && (
           <SkeletonTrack theme={theme} labelWidth={labelWidth} />
         )}
 
@@ -487,7 +496,7 @@ function BrowserApp() {
               </div>
               <RulerTrack width={containerWidth - labelWidth} />
             </div>
-            {tracks.filter(t => t.visible).map(track => (
+            {tracks.filter(isTrackActive).map(track => (
               <TrackPanel
                 key={track.id}
                 track={track}

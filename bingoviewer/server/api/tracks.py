@@ -39,7 +39,8 @@ async def load_track(file: UploadFile = File(...), name: str = Form("")):
         display_name = _clean_name(name) if name else clean_filename
         track = app_state.load_track(str(dest), display_name)
         compatibility = app_state.check_track_compatibility(track["id"])
-        return {**track, "compatibility": compatibility}
+        target_chromosomes = app_state.get_target_chromosomes(track["id"])
+        return {**track, "compatibility": compatibility, "target_chromosomes": target_chromosomes}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -53,7 +54,8 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     try:
         display_name = _clean_name(name) if name else P(path).name
         track = app_state.load_track(path, display_name)
-        return track
+        target_chromosomes = app_state.get_target_chromosomes(track["id"])
+        return {**track, "target_chromosomes": target_chromosomes}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -45,6 +45,7 @@ function collectSession(genome, region, tracks, themeName, customTheme, labelWid
       barAutoWidth: t.barAutoWidth,
       barWidth: t.barWidth,
       annotationColors: t.annotationColors,
+      targetChromosomes: t.targetChromosomes || null,
     })),
     themeName,
     customTheme,
@@ -162,6 +163,7 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
             file_path: backendInfo.file_path,
             track_type: backendInfo.track_type,
             file_format: backendInfo.file_format,
+            targetChromosomes: backendInfo.target_chromosomes || saved.targetChromosomes || null,
           })
         } catch (err) {
           errors.push(`${saved.name}: ${err.response?.data?.detail || err.message}`)
@@ -181,6 +183,7 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         barAutoWidth: t.barAutoWidth !== false,
         barWidth: t.barWidth || 2,
         color: t.color || '#78909c',
+        targetChromosomes: t.targetChromosomes || null,
       })))
 
       // 3. Restore theme

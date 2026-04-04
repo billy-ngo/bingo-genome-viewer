@@ -164,6 +164,63 @@ class AppState:
 
         return {"status": "ok"}
 
+    def get_target_chromosomes(self, track_id: str) -> list:
+        """Return the list of genome chromosome names this track can serve.
+
+        Used by the frontend to hide tracks when the user switches to a
+        chromosome that the track has no data for.
+        """
+        if self.genome is None:
+            return []
+
+        genome_chroms = self.genome.chromosomes
+        all_names = [c["name"] for c in genome_chroms]
+
+        # Genome annotation tracks → only chromosomes from GenBank files
+        if track_id == "genome_annotations":
+            annotated = self.genome.annotated_chromosomes
+            return annotated if annotated else all_names
+
+        reader = self.readers.get(track_id)
+        if reader is None or not hasattr(reader, "chromosomes"):
+            return all_names
+
+        try:
+            track_chroms = reader.chromosomes
+            track_names = {c["name"] for c in track_chroms}
+            track_sizes = {c["name"]: c.get("length", 0) for c in track_chroms}
+        except Exception:
+            return all_names
+
+        if not track_names:
+            return all_names
+
+        # Single-chrom track + single-chrom genome → reader fallback handles
+        # the name mismatch, so map to the genome's chromosome.
+        if len(track_names) == 1 and len(genome_chroms) == 1:
+            return [genome_chroms[0]["name"]]
+
+        # Multi-chrom: exact name matches
+        matched = [gc["name"] for gc in genome_chroms if gc["name"] in track_names]
+        if matched:
+            return matched
+
+        # No exact name match with a single-chrom track → find closest by size
+        if len(track_names) == 1:
+            t_len = next(iter(track_sizes.values()))
+            if t_len > 0:
+                best, best_r = None, 1.0
+                for gc in genome_chroms:
+                    if gc["length"] > 0:
+                        r = abs(gc["length"] - t_len) / max(gc["length"], 1)
+                        if r < best_r:
+                            best_r, best = r, gc["name"]
+                if best and best_r <= 0.05:
+                    return [best]
+
+        # Fallback: user chose "Load Anyway" — show on all
+        return all_names
+
     def remove_track(self, track_id: str):
         reader = self.readers.pop(track_id, None)
         if reader and hasattr(reader, "close"):
