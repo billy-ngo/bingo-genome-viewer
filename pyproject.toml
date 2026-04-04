@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "BiNgoViewer"
 version = "1.3.0"
 description = "BiNgo Genome Viewer — a lightweight browser-based genomics viewer"
 readme = "README.md"
-license = {text = "Proprietary"}
+license = "Proprietary"
 requires-python = ">=3.10"
 authors = [
     {name = "Billy Ngo", email = "billy.ngo0108@gmail.com"},

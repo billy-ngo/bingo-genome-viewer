@@ -2,12 +2,14 @@ name: Publish to PyPI
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
 
 permissions:
-  id-token: write  # for trusted publishing
+  id-token: write
 
 jobs:
   build:
@@ -25,22 +27,10 @@ jobs:
       - name: Build package
         run: python -m build
 
-      - name: Verify package version
+      - name: Show built version
         run: |
-          WHEEL=$(ls dist/*.whl)
-          echo "Built: $WHEEL"
-          python -c "
-          import zipfile, sys
-          whl = sys.argv[1]
-          with zipfile.ZipFile(whl) as z:
-              for name in z.namelist():
-                  if name.endswith('METADATA'):
-                      meta = z.read(name).decode()
-                      for line in meta.splitlines():
-                          if line.startswith('Version:'):
-                              print(line)
-                              break
-          " "$WHEEL"
+          pip install dist/*.whl --quiet
+          python -c "from bingoviewer import __version__; print(f'Package version: {__version__}')"
 
       - uses: actions/upload-artifact@v4
         with:
