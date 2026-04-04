@@ -1,0 +1,61 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  id-token: write  # for trusted publishing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Verify package version
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          echo "Built: $WHEEL"
+          python -c "
+          import zipfile, sys
+          whl = sys.argv[1]
+          with zipfile.ZipFile(whl) as z:
+              for name in z.namelist():
+                  if name.endswith('METADATA'):
+                      meta = z.read(name).decode()
+                      for line in meta.splitlines():
+                          if line.startswith('Version:'):
+                              print(line)
+                              break
+          " "$WHEEL"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
