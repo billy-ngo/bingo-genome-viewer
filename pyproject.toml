@@ -7,7 +7,7 @@ name = "BiNgoViewer"
 version = "1.2.0"
 description = "BiNgo Genome Viewer — a lightweight browser-based genomics viewer"
 readme = "README.md"
-license = "Proprietary"
+license = {text = "Proprietary"}
 requires-python = ">=3.10"
 authors = [
     {name = "Billy Ngo", email = "billy.ngo0108@gmail.com"},

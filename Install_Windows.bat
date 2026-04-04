@@ -77,7 +77,7 @@ if not exist "!VENV!\Scripts\python.exe" (
 )
 
 :: ── Install / update BiNgoViewer ───────────────────────────────
-"!VENV!\Scripts\python.exe" -m pip install --upgrade pip -q >nul 2>nul
+"!VENV!\Scripts\python.exe" -m pip install --upgrade pip setuptools wheel -q >nul 2>nul
 
 :: Install from local source if available, otherwise from PyPI
 if exist "%~dp0pyproject.toml" (

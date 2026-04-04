@@ -74,7 +74,7 @@ fi
 
 # ── Install / update BiNgoViewer ───────────────────────────────
 
-"$VENV/bin/python" -m pip install --upgrade pip -q >/dev/null 2>&1
+"$VENV/bin/python" -m pip install --upgrade pip setuptools wheel -q >/dev/null 2>&1
 
 # Install from local source if available, otherwise from PyPI
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
