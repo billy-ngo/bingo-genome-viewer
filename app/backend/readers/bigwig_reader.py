@@ -346,15 +346,22 @@ class WigReader:
         step = span = 1
         pos = 1
         fixed = False
+        bedgraph_mode = False
         raw: dict[str, list] = {}  # collect unsorted first: chrom -> [(pos, val), ...]
 
         with open(self.file_path) as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith(("#", "browser", "track")):
+                if not line or line.startswith(("#", "browser")):
+                    continue
+                if line.startswith("track"):
+                    # Check if track line indicates bedGraph format
+                    if "bedGraph" in line or "bedgraph" in line:
+                        bedgraph_mode = True
                     continue
                 if line.startswith("fixedStep"):
                     fixed = True
+                    bedgraph_mode = False
                     params = dict(re.findall(r"(\w+)=(\S+)", line))
                     chrom = params.get("chrom")
                     if not chrom:
@@ -365,26 +372,44 @@ class WigReader:
                     raw.setdefault(chrom, [])
                 elif line.startswith("variableStep"):
                     fixed = False
+                    bedgraph_mode = False
                     params = dict(re.findall(r"(\w+)=(\S+)", line))
                     chrom = params.get("chrom")
                     if not chrom:
                         continue
                     span = int(params.get("span", 1))
                     raw.setdefault(chrom, [])
-                elif chrom:
+                else:
                     parts = line.split()
                     try:
-                        if fixed:
-                            v = float(parts[0])
-                            p0 = pos - 1
-                            raw[chrom].append((p0, v))
-                            self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
-                            pos += step
-                        elif len(parts) >= 2:
-                            p0 = int(parts[0]) - 1
-                            v = float(parts[1])
-                            raw[chrom].append((p0, v))
-                            self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
+                        if chrom and not bedgraph_mode:
+                            # Standard WIG data line (under fixedStep or variableStep header)
+                            if fixed:
+                                v = float(parts[0])
+                                p0 = pos - 1
+                                raw[chrom].append((p0, v))
+                                self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
+                                pos += step
+                            elif len(parts) >= 2:
+                                p0 = int(parts[0]) - 1
+                                v = float(parts[1])
+                                raw[chrom].append((p0, v))
+                                self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
+                        elif len(parts) >= 4:
+                            # BedGraph-style line: chrom start end value
+                            # (handles .wig files that are actually BedGraph format)
+                            bedgraph_mode = True
+                            c = parts[0]
+                            s = int(parts[1])
+                            e = int(parts[2])
+                            v = float(parts[3])
+                            # Store as single point at the start position with the value
+                            raw.setdefault(c, []).append((s, v))
+                            self._chroms[c] = max(self._chroms.get(c, 0), e)
+                        elif len(parts) >= 2 and not chrom:
+                            # Two-column data without header — try as variableStep
+                            # with an unknown chromosome. Skip these lines.
+                            pass
                     except (ValueError, IndexError):
                         continue
 
@@ -443,6 +468,30 @@ class WigReader:
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 
+def _sniff_wig_format(file_path: str) -> str:
+    """Peek at the first non-comment lines to detect if a .wig file is
+    actually BedGraph format (4+ tab/space columns with chrom, start, end, value)."""
+    try:
+        with open(file_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith(("#", "browser", "track")):
+                    continue
+                if line.startswith(("fixedStep", "variableStep")):
+                    return "wig"
+                parts = line.split()
+                if len(parts) >= 4:
+                    try:
+                        int(parts[1]); int(parts[2]); float(parts[3])
+                        return "bedgraph"
+                    except ValueError:
+                        pass
+                return "wig"
+    except Exception:
+        pass
+    return "wig"
+
+
 def make_coverage_reader(file_path: str):
     ext = Path(file_path).suffix.lower()
     if ext in (".bw", ".bigwig"):
@@ -450,6 +499,10 @@ def make_coverage_reader(file_path: str):
     elif ext in (".bedgraph", ".bdg"):
         return BedGraphReader(file_path)
     elif ext == ".wig":
+        # Some .wig files are actually BedGraph format — auto-detect
+        fmt = _sniff_wig_format(file_path)
+        if fmt == "bedgraph":
+            return BedGraphReader(file_path)
         return WigReader(file_path)
     else:
         raise ValueError(f"Unsupported coverage format: {ext}")
