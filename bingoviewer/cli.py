@@ -308,6 +308,14 @@ def main():
     atexit.register(_remove_lock)
 
     # ── Start server ──────────────────────────────────────────────
+    # On Windows, Python's default ProactorEventLoop has a known bug where
+    # dropped browser connections cause noisy OSError tracebacks
+    # (WinError 64: "The specified network name is no longer available").
+    # Force the SelectorEventLoop which handles this gracefully.
+    if sys.platform == "win32":
+        import asyncio
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
