@@ -64,7 +64,8 @@ export default function ReadTrack({ track, width, height, onWarning }) {
         const barH = ratio * (height - 14)
         ctx.fillRect(x, height - barH - 2, w, barH)
       }
-      ctx.fillStyle = theme.textSecondary; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.fillText(maxVal.toFixed(1), 2, 10)
+      drawLabel(ctx, maxVal.toFixed(1), 2, 2, theme)
+      drawLabel(ctx, '0', 2, height - 12, theme, true)
       ctx.fillStyle = '#ffb74d'; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.textAlign = 'right'
       ctx.fillText('zoom in for reads', width - 4, 10)
       if (onWarning) {
@@ -191,4 +192,19 @@ export default function ReadTrack({ track, width, height, onWarning }) {
   }, [data, loading, width, height, region, track.color, track.scaleMax, track.scaleMin, track.barAutoWidth, track.barWidth, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
+}
+
+function drawLabel(ctx, text, x, y, theme, muted = false) {
+  ctx.font = '10px Arial, Helvetica, sans-serif'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'top'
+  const pad = 2
+  const tw = ctx.measureText(text).width + pad * 2
+  ctx.fillStyle = theme.canvasBg || '#1e1e1e'
+  ctx.globalAlpha = 0.75
+  ctx.fillRect(x, y, tw, 12)
+  ctx.globalAlpha = 1.0
+  ctx.fillStyle = muted ? (theme.textTertiary || '#666') : (theme.textSecondary || '#aaa')
+  ctx.fillText(text, x + pad, y + 1)
+  ctx.textBaseline = 'alphabetic'
 }

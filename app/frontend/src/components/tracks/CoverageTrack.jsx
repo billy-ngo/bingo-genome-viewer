@@ -105,11 +105,10 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
         }
       }
 
-      ctx.fillStyle = theme.textSecondary; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.textAlign = 'left'
       const scaleLabel = useLog ? ' log\u2082' : ''
-      ctx.fillText(`+${posMax.toFixed(1)}${scaleLabel}`, 2, margin)
-      ctx.fillText(`\u2212${negMax.toFixed(1)}${scaleLabel}`, 2, height - 2)
-      ctx.fillStyle = theme.textTertiary; ctx.fillText('0', 2, midY - 2)
+      drawScaleLabel(ctx, `+${posMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
+      drawScaleLabel(ctx, `\u2212${negMax.toFixed(1)}${scaleLabel}`, 2, height - 12, theme)
+      drawScaleLabel(ctx, '0', 2, midY - 6, theme, true)
     } else {
       const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
       ctx.fillStyle = fwdColor
@@ -121,9 +120,9 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
         const barH = ratio * (height - 14)
         ctx.fillRect(x, height - barH - 2, w, barH)
       }
-      ctx.fillStyle = theme.textSecondary; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.textAlign = 'left'
       const scaleLabel = useLog ? ' log\u2082' : ''
-      ctx.fillText(`${effectiveMax.toFixed(1)}${scaleLabel}`, 2, 10)
+      drawScaleLabel(ctx, `${effectiveMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
+      drawScaleLabel(ctx, '0', 2, height - 12, theme, true)
     }
 
     // Detect clipping warnings
@@ -140,6 +139,26 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
   }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
+}
+
+/** Draw a scale label with a semi-transparent background so it's always readable. */
+function drawScaleLabel(ctx, text, x, y, theme, muted = false) {
+  ctx.font = '10px Arial, Helvetica, sans-serif'
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'top'
+  const metrics = ctx.measureText(text)
+  const pad = 2
+  const tw = metrics.width + pad * 2
+  const th = 12
+  // Background pill
+  ctx.fillStyle = theme.canvasBg || '#1e1e1e'
+  ctx.globalAlpha = 0.75
+  ctx.fillRect(x, y, tw, th)
+  ctx.globalAlpha = 1.0
+  // Text
+  ctx.fillStyle = muted ? (theme.textTertiary || '#666') : (theme.textSecondary || '#aaa')
+  ctx.fillText(text, x + pad, y + 1)
+  ctx.textBaseline = 'alphabetic'  // reset
 }
 
 function adjustColor(hex, delta) {
