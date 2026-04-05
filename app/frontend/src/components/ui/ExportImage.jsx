@@ -191,6 +191,34 @@ function svgRuler(region, x0, y0, w, h, theme) {
   return s
 }
 
+function svgSmoothValues(values, radius) {
+  if (radius <= 0) return values
+  const out = new Array(values.length)
+  for (let i = 0; i < values.length; i++) {
+    let sum = 0, count = 0
+    const lo = Math.max(0, i - radius), hi = Math.min(values.length - 1, i + radius)
+    for (let j = lo; j <= hi; j++) { sum += values[j]; count++ }
+    out[i] = sum / count
+  }
+  return out
+}
+
+function svgOutlinePath(xs, ys, stroke, smooth) {
+  if (xs.length < 2) return ''
+  if (smooth) {
+    let d = `M${xs[0]},${ys[0]}`
+    for (let i = 0; i < xs.length - 1; i++) {
+      const mx = (xs[i] + xs[i + 1]) / 2
+      const my = (ys[i] + ys[i + 1]) / 2
+      d += ` Q${xs[i]},${ys[i]} ${mx},${my}`
+    }
+    d += ` L${xs[xs.length - 1]},${ys[ys.length - 1]}`
+    return `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="1.5"/>\n`
+  }
+  const pts = xs.map((x, i) => `${x},${ys[i]}`).join(' ')
+  return `<polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="1.5"/>\n`
+}
+
 function svgLogScale(val, max) {
   if (val <= 0 || max <= 0) return 0
   return Math.log2(val + 1) / Math.log2(max + 1)
@@ -218,6 +246,7 @@ function svgCoverage(data, region, track, w, h, theme) {
   const showBars = track.showBars !== false
   const showOutline = track.showOutline === true
   const outColor = track.outlineColor || null
+  const outSmooth = track.outlineSmooth || 0
 
   function autoW(binW) {
     if (!barAuto) return Math.min(barFixedPx, binW)
@@ -243,14 +272,13 @@ function svgCoverage(data, region, track, w, h, theme) {
       }
     }
     if (showOutline && visibleBins.length > 0) {
-      // Forward outline
-      let pts = visibleBins.map(b => { const x = ((b.start - rStart) / regionLen) * w; const xEnd = ((b.end - rStart) / regionLen) * w; const fwd = b.forward != null ? b.forward : Math.max(0, b.value); const r = fwd > 0 ? (useLog ? svgLogScale(fwd, posMax) : fwd / posMax) : 0; const y = midY - r * topH; return `${x},${y} ${xEnd},${y}` }).join(' ')
-      const x0 = ((visibleBins[0].start - rStart) / regionLen) * w
-      const xN = ((visibleBins[visibleBins.length - 1].end - rStart) / regionLen) * w
-      s += `<polyline points="${x0},${midY} ${pts} ${xN},${midY}" fill="none" stroke="${outColor || color}" stroke-width="1.5"/>\n`
-      // Reverse outline
-      pts = visibleBins.map(b => { const x = ((b.start - rStart) / regionLen) * w; const xEnd = ((b.end - rStart) / regionLen) * w; const rev = b.reverse != null ? b.reverse : Math.min(0, b.value); const r = rev < 0 ? (useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax) : 0; const y = midY + r * botH; return `${x},${y} ${xEnd},${y}` }).join(' ')
-      s += `<polyline points="${x0},${midY} ${pts} ${xN},${midY}" fill="none" stroke="${outColor || adjustColorSvg(color, -40)}" stroke-width="1.5"/>\n`
+      const fwdRaw = visibleBins.map(b => { const v = b.forward != null ? b.forward : Math.max(0, b.value); return v > 0 ? (useLog ? svgLogScale(v, posMax) : v / posMax) : 0 })
+      const revRaw = visibleBins.map(b => { const v = b.reverse != null ? b.reverse : Math.min(0, b.value); return v < 0 ? (useLog ? svgLogScale(Math.abs(v), negMax) : Math.abs(v) / negMax) : 0 })
+      const fwdS = svgSmoothValues(fwdRaw, outSmooth)
+      const revS = svgSmoothValues(revRaw, outSmooth)
+      const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
+      s += svgOutlinePath(xs, fwdS.map(r => midY - r * topH), outColor || color, outSmooth > 0)
+      s += svgOutlinePath(xs, revS.map(r => midY + r * botH), outColor || adjustColorSvg(color, -40), outSmooth > 0)
     }
     const lbl = useLog ? ' log\u2082' : ''
     s += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${posMax.toFixed(1)}${lbl}</text>\n`
@@ -267,11 +295,11 @@ function svgCoverage(data, region, track, w, h, theme) {
       }
     }
     if (showOutline && visibleBins.length > 0) {
-      const baseline = h - 2
-      const pts = visibleBins.map(b => { const x = ((b.start - rStart) / regionLen) * w; const xEnd = ((b.end - rStart) / regionLen) * w; const r = useLog ? svgLogScale(b.value, effMax) : b.value / effMax; const y = h - r * (h - 14) - 2; return `${x},${y} ${xEnd},${y}` }).join(' ')
-      const x0 = ((visibleBins[0].start - rStart) / regionLen) * w
-      const xN = ((visibleBins[visibleBins.length - 1].end - rStart) / regionLen) * w
-      s += `<polyline points="${x0},${baseline} ${pts} ${xN},${baseline}" fill="none" stroke="${outColor || theme.textPrimary || '#fff'}" stroke-width="1.5"/>\n`
+      const rawR = visibleBins.map(b => useLog ? svgLogScale(b.value, effMax) : b.value / effMax)
+      const smoothed = svgSmoothValues(rawR, outSmooth)
+      const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
+      const ys = smoothed.map(r => h - r * (h - 14) - 2)
+      s += svgOutlinePath(xs, ys, outColor || theme.textPrimary || '#fff', outSmooth > 0)
     }
     const lbl = useLog ? ' log\u2082' : ''
     s += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${effMax.toFixed(1)}${lbl}</text>\n`

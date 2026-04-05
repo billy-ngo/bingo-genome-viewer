@@ -101,20 +101,22 @@ export default function ReadTrack({ track, width, height, onWarning }) {
         }
       }
       if (track.showOutline && data.bins.length > 0) {
-        ctx.beginPath()
-        const baseline = height - 2
-        ctx.moveTo(((data.bins[0].start - regionStart) / regionLen) * width, baseline)
-        for (const bin of data.bins) {
-          const x = ((bin.start - regionStart) / regionLen) * width
-          const xEnd = ((bin.end - regionStart) / regionLen) * width
-          const ratio = Math.min(1, bin.value / maxVal)
-          const y = height - ratio * (height - 14) - 2
-          ctx.lineTo(x, y); ctx.lineTo(xEnd, y)
+        const sm = track.outlineSmooth || 0
+        const rawRatios = data.bins.map(b => Math.min(1, b.value / maxVal))
+        const smoothed = smoothVals(rawRatios, sm)
+        const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
+        const ys = smoothed.map(r => height - r * (height - 14) - 2)
+        const strokeColor = track.outlineColor || theme.textPrimary || '#fff'
+        ctx.beginPath(); ctx.moveTo(xs[0], ys[0])
+        if (sm > 0) {
+          for (let i = 0; i < xs.length - 1; i++) {
+            ctx.quadraticCurveTo(xs[i], ys[i], (xs[i]+xs[i+1])/2, (ys[i]+ys[i+1])/2)
+          }
+          ctx.lineTo(xs[xs.length-1], ys[ys.length-1])
+        } else {
+          for (let i = 0; i < xs.length; i++) ctx.lineTo(xs[i], ys[i])
         }
-        ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, baseline)
-        ctx.strokeStyle = track.outlineColor || theme.textPrimary || '#fff'
-        ctx.lineWidth = 1.5
-        ctx.stroke()
+        ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5; ctx.stroke()
       }
 
       drawLabel(ctx, maxVal.toFixed(1), 2, 2, theme)
@@ -268,10 +270,22 @@ export default function ReadTrack({ track, width, height, onWarning }) {
         : null)
     }
   }, [data, loading, width, height, region, refSeq, track.color, track.scaleMax, track.scaleMin,
-      track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.showBars,
+      track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars,
       track.showNucleotides, track.useArrows, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
+}
+
+function smoothVals(values, radius) {
+  if (radius <= 0 || values.length === 0) return values
+  const out = new Array(values.length)
+  for (let i = 0; i < values.length; i++) {
+    let sum = 0, count = 0
+    const lo = Math.max(0, i - radius), hi = Math.min(values.length - 1, i + radius)
+    for (let j = lo; j <= hi; j++) { sum += values[j]; count++ }
+    out[i] = sum / count
+  }
+  return out
 }
 
 function drawLabel(ctx, text, x, y, theme, muted = false) {

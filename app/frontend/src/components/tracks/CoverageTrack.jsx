@@ -11,6 +11,20 @@ import { useTrackData } from '../../hooks/useTrackData'
 
 const log2 = Math.log2
 
+/** Smooth an array of values using a moving average window. */
+function smoothValues(values, radius) {
+  if (radius <= 0 || values.length === 0) return values
+  const out = new Array(values.length)
+  for (let i = 0; i < values.length; i++) {
+    let sum = 0, count = 0
+    const lo = Math.max(0, i - radius)
+    const hi = Math.min(values.length - 1, i + radius)
+    for (let j = lo; j <= hi; j++) { sum += values[j]; count++ }
+    out[i] = sum / count
+  }
+  return out
+}
+
 function logScale(val, max) {
   // Maps val ∈ [0, max] → [0, 1] on a log₂ scale
   if (val <= 0 || max <= 0) return 0
@@ -65,6 +79,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const barFixedPx = track.barWidth || 2
     const showOutline = track.showOutline === true
     const outlineColor = track.outlineColor || null
+    const outlineSmooth = track.outlineSmooth || 0
     const showBars = track.showBars !== false
     const fwdColor = color
     const revColor = adjustColor(color, -40)
@@ -113,28 +128,14 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       if (showOutline && data.bins.length > 0) {
         const fwdStroke = outlineColor || fwdColor
         const revStroke = outlineColor || revColor
-        ctx.beginPath()
-        ctx.moveTo(((data.bins[0].start - regionStart) / regionLen) * width, midY)
-        for (const bin of data.bins) {
-          const x = ((bin.start - regionStart) / regionLen) * width
-          const xEnd = ((bin.end - regionStart) / regionLen) * width
-          const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
-          const ratio = fwd > 0 ? (useLog ? logScale(fwd, posMax) : fwd / posMax) : 0
-          ctx.lineTo(x, midY - ratio * topH); ctx.lineTo(xEnd, midY - ratio * topH)
-        }
-        ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, midY)
-        ctx.strokeStyle = fwdStroke; ctx.lineWidth = 1.5; ctx.stroke()
-        ctx.beginPath()
-        ctx.moveTo(((data.bins[0].start - regionStart) / regionLen) * width, midY)
-        for (const bin of data.bins) {
-          const x = ((bin.start - regionStart) / regionLen) * width
-          const xEnd = ((bin.end - regionStart) / regionLen) * width
-          const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
-          const ratio = rev < 0 ? (useLog ? logScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax) : 0
-          ctx.lineTo(x, midY + ratio * botH); ctx.lineTo(xEnd, midY + ratio * botH)
-        }
-        ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, midY)
-        ctx.strokeStyle = revStroke; ctx.lineWidth = 1.5; ctx.stroke()
+        // Compute smoothed Y values
+        const fwdRaw = data.bins.map(b => { const v = b.forward != null ? b.forward : Math.max(0, b.value); return v > 0 ? (useLog ? logScale(v, posMax) : v / posMax) : 0 })
+        const revRaw = data.bins.map(b => { const v = b.reverse != null ? b.reverse : Math.min(0, b.value); return v < 0 ? (useLog ? logScale(Math.abs(v), negMax) : Math.abs(v) / negMax) : 0 })
+        const fwdSmooth = smoothValues(fwdRaw, outlineSmooth)
+        const revSmooth = smoothValues(revRaw, outlineSmooth)
+        const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
+        drawSmoothLine(ctx, xs, fwdSmooth.map(r => midY - r * topH), fwdStroke, outlineSmooth > 0)
+        drawSmoothLine(ctx, xs, revSmooth.map(r => midY + r * botH), revStroke, outlineSmooth > 0)
       }
 
       const scaleLabel = useLog ? ' log\u2082' : ''
@@ -155,20 +156,11 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
         }
       }
       if (showOutline && data.bins.length > 0) {
-        ctx.beginPath()
-        const baseline = height - 2
-        ctx.moveTo(((data.bins[0].start - regionStart) / regionLen) * width, baseline)
-        for (const bin of data.bins) {
-          const x = ((bin.start - regionStart) / regionLen) * width
-          const xEnd = ((bin.end - regionStart) / regionLen) * width
-          const ratio = useLog ? logScale(bin.value, effectiveMax) : bin.value / effectiveMax
-          const y = height - ratio * (height - 14) - 2
-          ctx.lineTo(x, y); ctx.lineTo(xEnd, y)
-        }
-        ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, baseline)
-        ctx.strokeStyle = outlineColor || theme.textPrimary || '#fff'
-        ctx.lineWidth = 1.5
-        ctx.stroke()
+        const rawRatios = data.bins.map(b => useLog ? logScale(b.value, effectiveMax) : b.value / effectiveMax)
+        const smoothed = smoothValues(rawRatios, outlineSmooth)
+        const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
+        const ys = smoothed.map(r => height - r * (height - 14) - 2)
+        drawSmoothLine(ctx, xs, ys, outlineColor || theme.textPrimary || '#fff', outlineSmooth > 0)
       }
 
       const scaleLabel = useLog ? ' log\u2082' : ''
@@ -187,9 +179,32 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       }
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.showBars, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
+}
+
+/** Draw a smooth or step line through an array of (x, y) points. */
+function drawSmoothLine(ctx, xs, ys, color, smooth) {
+  if (xs.length < 2) return
+  ctx.beginPath()
+  ctx.moveTo(xs[0], ys[0])
+  if (smooth) {
+    // Catmull-Rom style: quadratic curves through midpoints
+    for (let i = 0; i < xs.length - 1; i++) {
+      const mx = (xs[i] + xs[i + 1]) / 2
+      const my = (ys[i] + ys[i + 1]) / 2
+      ctx.quadraticCurveTo(xs[i], ys[i], mx, my)
+    }
+    ctx.lineTo(xs[xs.length - 1], ys[ys.length - 1])
+  } else {
+    for (let i = 0; i < xs.length; i++) {
+      ctx.lineTo(xs[i], ys[i])
+    }
+  }
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1.5
+  ctx.stroke()
 }
 
 /** Draw a scale label with a semi-transparent background so it's always readable. */

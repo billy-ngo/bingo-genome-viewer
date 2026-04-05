@@ -68,6 +68,7 @@ export function TrackProvider({ children }) {
         barWidth: 2,
         showOutline: false,
         outlineColor: null,
+        outlineSmooth: 0,
         showBars: true,
         showNucleotides: true,
         targetChromosomes: info.target_chromosomes || null,

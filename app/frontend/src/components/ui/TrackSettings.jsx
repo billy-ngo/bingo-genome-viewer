@@ -37,6 +37,7 @@ export default function TrackSettings({ onClose }) {
   const commonBarWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barWidth === selectedTracks[0].barWidth) ? selectedTracks[0].barWidth : undefined
   const commonShowOutline = selectedTracks.length > 0 && selectedTracks.every(t => t.showOutline === selectedTracks[0].showOutline) ? selectedTracks[0].showOutline : null
   const commonOutlineColor = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineColor === selectedTracks[0].outlineColor) ? selectedTracks[0].outlineColor : undefined
+  const commonOutlineSmooth = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineSmooth === selectedTracks[0].outlineSmooth) ? selectedTracks[0].outlineSmooth : undefined
   const commonShowBars = selectedTracks.length > 0 && selectedTracks.every(t => t.showBars === selectedTracks[0].showBars) ? selectedTracks[0].showBars : null
   const commonShowNucleotides = selectedTracks.length > 0 && selectedTracks.every(t => t.showNucleotides === selectedTracks[0].showNucleotides) ? selectedTracks[0].showNucleotides : null
 
@@ -96,6 +97,15 @@ export default function TrackSettings({ onClose }) {
             <div style={S.controlRow}>
               <span style={S.controlLabel}>Color</span>
               <input type="color" value={commonColor} style={S.colorInput} onChange={e => applyToSelected({ color: e.target.value })} />
+              {hasBars && (
+                <label style={S.cbLabel}>
+                  <input type="checkbox" checked={commonShowBars !== false}
+                    ref={el => { if (el) el.indeterminate = commonShowBars === null }}
+                    onChange={e => applyToSelected({ showBars: e.target.checked })}
+                    style={{ cursor: 'pointer' }} />
+                  Fill bars
+                </label>
+              )}
             </div>
             <div style={S.controlRow}>
               <span style={S.controlLabel}>Height (px)</span>
@@ -145,16 +155,6 @@ export default function TrackSettings({ onClose }) {
             {hasBars && (
               <>
                 <div style={S.controlRow}>
-                  <span style={S.controlLabel}>Show bars</span>
-                  <label style={S.cbLabel}>
-                    <input type="checkbox" checked={commonShowBars !== false}
-                      ref={el => { if (el) el.indeterminate = commonShowBars === null }}
-                      onChange={e => applyToSelected({ showBars: e.target.checked })}
-                      style={{ cursor: 'pointer' }} />
-                    Fill bars
-                  </label>
-                </div>
-                <div style={S.controlRow}>
                   <span style={S.controlLabel}>Peak outline</span>
                   <label style={S.cbLabel}>
                     <input type="checkbox" checked={commonShowOutline === true}
@@ -170,6 +170,15 @@ export default function TrackSettings({ onClose }) {
                       style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0, marginLeft: 4 }} />
                   )}
                 </div>
+                {commonShowOutline === true && (
+                  <div style={S.controlRow}>
+                    <span style={S.controlLabel}>Smoothness</span>
+                    <input type="range" min={0} max={10} step={1} value={commonOutlineSmooth ?? 0}
+                      onChange={e => applyToSelected({ outlineSmooth: parseInt(e.target.value) })}
+                      style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
+                    <span style={{ fontSize: 11, color: t.textTertiary, width: 24, textAlign: 'right' }}>{commonOutlineSmooth ?? 0}</span>
+                  </div>
+                )}
               </>
             )}
 
