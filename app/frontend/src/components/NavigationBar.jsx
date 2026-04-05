@@ -132,8 +132,8 @@ export default function NavigationBar() {
         <input style={S.coordInput} value={coordText} onChange={e => setCoordText(e.target.value)} placeholder="chr1:start-end" />
         <button style={S.btn} type="submit">Go</button>
       </form>
-      <button style={S.btn} onClick={() => zoom(0.5)} title="Zoom in">{'\uFF0B'}</button>
       <button style={S.btn} onClick={() => zoom(2)} title="Zoom out">{'\uFF0D'}</button>
+      <button style={S.btn} onClick={() => zoom(0.5)} title="Zoom in">{'\uFF0B'}</button>
       <button style={S.btn} onClick={() => pan(-regionLen * 0.5)} title="Pan left">{'\u25C0'}</button>
       <button style={S.btn} onClick={() => pan(regionLen * 0.5)} title="Pan right">{'\u25B6'}</button>
 
