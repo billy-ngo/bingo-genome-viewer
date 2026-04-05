@@ -104,6 +104,29 @@ export default function TrackSettings({ onClose }) {
           <div style={S.section}>
             <div style={S.sectionTitle}>Edit {selectedTracks.length} selected track{selectedTracks.length > 1 ? 's' : ''}</div>
 
+            {/* 1. Height */}
+            <div style={S.controlRow}>
+              <span style={S.controlLabel}>Height (px)</span>
+              <input type="range" min={30} max={500} step={1} value={commonHeight || 80}
+                onChange={e => applyToSelected({ height: parseInt(e.target.value) })}
+                style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
+              <input type="text" inputMode="numeric" value={commonHeight} placeholder="mixed" style={{ ...S.input, width: 48 }}
+                onChange={e => { const v = parseInt(e.target.value); if (v >= 30 && v <= 500) applyToSelected({ height: v }) }}
+                onBlur={e => { const v = parseInt(e.target.value); if (!v || v < 30) applyToSelected({ height: 30 }); if (v > 500) applyToSelected({ height: 500 }) }} />
+            </div>
+
+            {/* 2. Visible */}
+            <div style={S.controlRow}>
+              <span style={S.controlLabel}>Visible</span>
+              <label style={S.cbLabel}>
+                <input type="checkbox" checked={commonVisible === true}
+                  ref={el => { if (el) el.indeterminate = commonVisible === null }}
+                  onChange={e => applyToSelected({ visible: e.target.checked })} style={{ cursor: 'pointer' }} />
+                Show
+              </label>
+            </div>
+
+            {/* 3. Fill bars + color (bar tracks only) */}
             {hasBars && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Fill bars</span>
@@ -121,34 +144,16 @@ export default function TrackSettings({ onClose }) {
                 )}
               </div>
             )}
+
+            {/* Color for non-bar, non-annotation tracks */}
             {!hasBars && !hasAnnotation && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Color</span>
                 <input type="color" value={commonColor} style={S.colorInput} onChange={e => applyToSelected({ color: e.target.value })} />
               </div>
             )}
-            {hasAnnotation && (
-              <AnnotationColorSection tracks={selectedTracks} applyToSelected={applyToSelected} theme={t} />
-            )}
-            <div style={S.controlRow}>
-              <span style={S.controlLabel}>Height (px)</span>
-              <input type="range" min={30} max={500} step={1} value={commonHeight || 80}
-                onChange={e => applyToSelected({ height: parseInt(e.target.value) })}
-                style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
-              <input type="text" inputMode="numeric" value={commonHeight} placeholder="mixed" style={{ ...S.input, width: 48 }}
-                onChange={e => { const v = parseInt(e.target.value); if (v >= 30 && v <= 500) applyToSelected({ height: v }) }}
-                onBlur={e => { const v = parseInt(e.target.value); if (!v || v < 30) applyToSelected({ height: 30 }); if (v > 500) applyToSelected({ height: 500 }) }} />
-            </div>
-            <div style={S.controlRow}>
-              <span style={S.controlLabel}>Visible</span>
-              <label style={S.cbLabel}>
-                <input type="checkbox" checked={commonVisible === true}
-                  ref={el => { if (el) el.indeterminate = commonVisible === null }}
-                  onChange={e => applyToSelected({ visible: e.target.checked })} style={{ cursor: 'pointer' }} />
-                Show
-              </label>
-            </div>
 
+            {/* 4. Bar width (bar tracks only) */}
             {hasBars && (
               <>
                 <div style={S.controlRow}>
@@ -175,6 +180,7 @@ export default function TrackSettings({ onClose }) {
               </>
             )}
 
+            {/* 5. Peak outline (bar tracks only) */}
             {hasBars && (
               <>
                 <div style={S.controlRow}>
@@ -205,6 +211,52 @@ export default function TrackSettings({ onClose }) {
               </>
             )}
 
+            {/* 6. Y Scale (coverage tracks only) */}
+            {hasCoverage && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Y Scale</span>
+                <label style={S.cbLabel}>
+                  <input type="checkbox" checked={isAutoScale}
+                    onChange={e => applyToSelected(e.target.checked ? { scaleMax: null, scaleMin: null } : { scaleMax: 100, scaleMin: 100 })}
+                    style={{ cursor: 'pointer' }} />
+                  Auto
+                </label>
+              </div>
+            )}
+            {hasCoverage && !isAutoScale && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}></span>
+                <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>+Ymax</span>
+                <input type="number" min={1} step={10} value={commonScaleMax ?? ''} placeholder="max" style={S.input}
+                  onChange={e => { const v = parseFloat(e.target.value); if (v > 0) applyToSelected({ scaleMax: v }) }} />
+                <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>{'\u2212'}Ymax</span>
+                <input type="number" min={1} step={10} value={commonScaleMin ?? ''} placeholder="min" style={S.input}
+                  onChange={e => { const v = parseFloat(e.target.value); if (v > 0) applyToSelected({ scaleMin: v }) }} />
+              </div>
+            )}
+
+            {/* 7. Log2 (coverage tracks only) */}
+            {hasCoverage && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Log scale</span>
+                <label style={S.cbLabel}>
+                  <input type="checkbox" checked={commonLogScale === true}
+                    ref={el => { if (el) el.indeterminate = commonLogScale === null }}
+                    onChange={e => applyToSelected({ logScale: e.target.checked })}
+                    style={{ cursor: 'pointer' }} />
+                  log{'\u2082'}
+                </label>
+              </div>
+            )}
+
+            {/* ── Type-specific sections ────────────────────── */}
+
+            {/* Annotation colors */}
+            {hasAnnotation && (
+              <AnnotationColorSection tracks={selectedTracks} applyToSelected={applyToSelected} theme={t} />
+            )}
+
+            {/* Gene style */}
             {hasAnnotation && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Gene style</span>
@@ -217,6 +269,7 @@ export default function TrackSettings({ onClose }) {
               </div>
             )}
 
+            {/* Nucleotides */}
             {(hasReads || hasAnnotation) && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Nucleotides</span>
@@ -230,6 +283,7 @@ export default function TrackSettings({ onClose }) {
               </div>
             )}
 
+            {/* Read Appearance */}
             {hasReads && (
               <>
                 <div style={{ ...S.sectionTitle, marginTop: 12 }}>Read Appearance</div>
@@ -270,41 +324,6 @@ export default function TrackSettings({ onClose }) {
                     <span style={{ fontSize: 11, color: t.textTertiary, width: 20, textAlign: 'right' }}>{commonArrowSize || 4}</span>
                   </div>
                 )}
-              </>
-            )}
-
-            {hasCoverage && (
-              <>
-                <div style={S.controlRow}>
-                  <span style={S.controlLabel}>Y Scale</span>
-                  <label style={S.cbLabel}>
-                    <input type="checkbox" checked={isAutoScale}
-                      onChange={e => applyToSelected(e.target.checked ? { scaleMax: null, scaleMin: null } : { scaleMax: 100, scaleMin: 100 })}
-                      style={{ cursor: 'pointer' }} />
-                    Auto
-                  </label>
-                </div>
-                {!isAutoScale && (
-                  <div style={S.controlRow}>
-                    <span style={S.controlLabel}></span>
-                    <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>+Ymax</span>
-                    <input type="number" min={1} step={10} value={commonScaleMax ?? ''} placeholder="max" style={S.input}
-                      onChange={e => { const v = parseFloat(e.target.value); if (v > 0) applyToSelected({ scaleMax: v }) }} />
-                    <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>{'\u2212'}Ymax</span>
-                    <input type="number" min={1} step={10} value={commonScaleMin ?? ''} placeholder="min" style={S.input}
-                      onChange={e => { const v = parseFloat(e.target.value); if (v > 0) applyToSelected({ scaleMin: v }) }} />
-                  </div>
-                )}
-                <div style={S.controlRow}>
-                  <span style={S.controlLabel}>Log scale</span>
-                  <label style={S.cbLabel}>
-                    <input type="checkbox" checked={commonLogScale === true}
-                      ref={el => { if (el) el.indeterminate = commonLogScale === null }}
-                      onChange={e => applyToSelected({ logScale: e.target.checked })}
-                      style={{ cursor: 'pointer' }} />
-                    log{'\u2082'}
-                  </label>
-                </div>
               </>
             )}
           </div>
