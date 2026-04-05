@@ -87,39 +87,34 @@ async def load_track(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _ensure_index_hint(bam_dest: Path):
-    """Check if an index exists; if not, the BamReader will raise a clear error."""
-    # Nothing to do here — BamReader._find_index handles the check.
-    # This is a hook for future auto-indexing support.
-    pass
 
 
 @router.post("/load-path")
 async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     """Load track from a local file path (no upload needed)."""
     from pathlib import Path as P
-    p = P(path)
 
     # If a .bai path is given, look for the matching .bam
     if path.lower().endswith('.bai'):
         bam_path = None
-        # reads.bam.bai → reads.bam
         if path.lower().endswith('.bam.bai'):
-            bam_path = path[:-4]  # strip .bai
+            bam_path = path[:-4]
         else:
-            # reads.bai → reads.bam
             bam_path = str(P(path).with_suffix('.bam'))
-        if bam_path and P(bam_path).exists():
+        if bam_path and P(bam_path).resolve().exists():
             path = bam_path
-            p = P(path)
         else:
             raise HTTPException(
                 status_code=400,
                 detail=f"Index file detected. Matching BAM not found at '{bam_path}'. Load the .bam file instead."
             )
 
+    p = P(path).resolve()
     if not p.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not p.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {path}")
+    path = str(p)
     try:
         display_name = _clean_name(name) if name else p.name
         track = app_state.load_track(path, display_name)

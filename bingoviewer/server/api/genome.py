@@ -71,16 +71,19 @@ async def add_chromosomes(file: UploadFile = File(...)):
 
 @router.post("/load-path")
 async def load_genome_from_path(path: str = Form(...)):
-    """Re-load genome from an existing file path (for session restore)."""
+    """Load genome from a local file path."""
     from pathlib import Path as P
-    if not P(path).exists():
+    resolved = P(path).resolve()
+    if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a file: {path}")
     try:
-        app_state.load_genome(path)
+        app_state.load_genome(str(resolved))
         genome = app_state.genome
         return {
             "name": genome.name,
-            "file_path": path,
+            "file_path": str(resolved),
             "chromosomes": genome.chromosomes,
             "is_annotated": genome.is_annotated(),
             "annotated_chromosomes": genome.annotated_chromosomes,

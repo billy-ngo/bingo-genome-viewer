@@ -1,6 +1,13 @@
 # BiNgo Genome Viewer
 
+[![PyPI version](https://img.shields.io/pypi/v/bingoviewer)](https://pypi.org/project/bingoviewer/)
+[![Python 3.10+](https://img.shields.io/pypi/pyversions/bingoviewer)](https://pypi.org/project/bingoviewer/)
+[![License](https://img.shields.io/badge/license-proprietary-blue)](LICENSE)
+
 A lightweight, browser-based genomics viewer for visualizing genomes, coverage tracks, read alignments, variants, and annotations. Built as a modern alternative to IGV.
+
+<!-- Screenshot placeholder: replace with an actual screenshot of the viewer -->
+<!-- ![BiNgo Genome Viewer](screenshot.png) -->
 
 ## Supported File Formats
 
@@ -28,9 +35,13 @@ bingo
 Options:
 
 ```bash
+bingo                    # launch on default port 8000
 bingo --port 9000        # use a custom port
 bingo --no-browser       # start without opening the browser
 bingo --install          # create a desktop shortcut
+bingo --update           # check for updates
+bingo --version          # show installed version
+bingo --no-update        # skip automatic update check
 ```
 
 ### Windows (one-click)
@@ -69,12 +80,21 @@ Then open [http://localhost:8000](http://localhost:8000).
 
 ## Usage
 
-1. **Load files** — Use the file picker or drag and drop. Genome and track files are auto-classified by extension.
-2. **Navigate** — Click and drag on tracks to pan; scroll wheel to zoom; use the coordinate bar to jump to a region.
-3. **Track settings** — Click the gear icon to adjust height, color, scale, and bar width.
-4. **Reorder tracks** — Drag the grip handle on any track label.
-5. **Export** — Save the current view as SVG or PNG.
+1. **Load files** — Use the file picker, drag and drop, or paste a local file path (recommended for large BAM files).
+2. **Navigate** — Left-click drag to pan, scroll to zoom, use the chromosome scrubber to jump across the genome.
+3. **Select regions** — Right-click drag to select a region; hover for stats (coverage, variants, reads).
+4. **Zoom to gene** — Double-click a gene annotation to zoom in with context.
+5. **Track settings** — Adjust height, color, scale, bar width, peak outline trace, and nucleotide display.
+6. **Reorder tracks** — Drag the grip handle on any track label.
+7. **Export** — Save the current view as SVG or PNG with layered groups.
+8. **Save session** — Export/restore your entire workspace including zoom, colors, and settings.
 6. **Save session** — Store your workspace and restore it later.
+
+## API Documentation
+
+When the server is running, interactive API documentation is available at:
+- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
 ## Project Structure
 
