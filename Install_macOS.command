@@ -107,14 +107,38 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# ── Get installed version ──────────────────────────────────────
+VER=$("$VENV/bin/python" -c "from bingoviewer import __version__; print(__version__)" 2>/dev/null || echo "?")
+
+# ── Success summary ────────────────────────────────────────────
 echo ""
-echo "  Install complete."
+echo "  =========================================="
+echo "    BiNgo Genome Viewer v$VER installed"
+echo "  =========================================="
+echo ""
+echo "  Supported file formats:"
+echo "    Genome:    .fasta .fa .gb .gbk .genbank"
+echo "    Reads:     .bam (+ .bai index)"
+echo "    Coverage:  .bw .bigwig .wig .bedgraph"
+echo "    Variants:  .vcf .vcf.gz"
+echo "    Features:  .bed .gtf .gff .gff3"
+echo ""
+echo "  Quick start:"
+echo "    - Load a genome file, then add tracks"
+echo "    - Left-click drag to pan, scroll to zoom"
+echo "    - Right-click drag to select a region"
+echo "    - Session auto-saves to your browser"
+echo ""
+echo "  Commands (from any terminal):"
+echo "    bingo              Launch the viewer"
+echo "    bingo --update     Check for updates"
+echo "    bingo --install    Create a desktop shortcut"
+echo "    bingo --version    Show installed version"
+echo ""
 
 # ── Shortcut prompt ────────────────────────────────────────────
-echo ""
 printf "  Create a desktop shortcut? [Y/n]: "
 read -r SHORTCUT
-# Portable lowercase check (works on macOS bash 3.x)
 case "$SHORTCUT" in
     n|N) ;;
     *)
@@ -123,7 +147,19 @@ case "$SHORTCUT" in
         ;;
 esac
 
-# ── Launch ─────────────────────────────────────────────────────
+# ── Launch prompt ──────────────────────────────────────────────
+echo ""
+printf "  Launch BiNgo Genome Viewer now? [Y/n]: "
+read -r LAUNCH
+case "$LAUNCH" in
+    n|N)
+        echo ""
+        echo "  To launch later, run:  bingo"
+        echo ""
+        exit 0
+        ;;
+esac
+
 echo ""
 echo "  [3/3] Starting BiNgo Genome Viewer..."
 echo ""

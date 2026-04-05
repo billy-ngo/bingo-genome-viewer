@@ -126,14 +126,40 @@ if !errorlevel! NEQ 0 (
     exit /b 1
 )
 
+:: ── Get installed version ────────────────────────────────────
+set "VER="
+for /f %%V in ('"!VENV!\Scripts\python.exe" -c "from bingoviewer import __version__; print(__version__)"') do set "VER=%%V"
+
+:: ── Success summary ──────────────────────────────────────────
 echo.
-echo   Install complete.
+echo   ==========================================
+echo     BiNgo Genome Viewer v!VER! installed
+echo   ==========================================
+echo.
+echo   Supported file formats:
+echo     Genome:    .fasta .fa .gb .gbk .genbank
+echo     Reads:     .bam (+ .bai index)
+echo     Coverage:  .bw .bigwig .wig .bedgraph
+echo     Variants:  .vcf .vcf.gz
+echo     Features:  .bed .gtf .gff .gff3
+echo.
+echo   Quick start:
+echo     - Load a genome file, then add tracks
+echo     - Left-click drag to pan, scroll to zoom
+echo     - Right-click drag to select a region
+echo     - Session auto-saves to your browser
+echo.
+echo   Commands (from any terminal):
+echo     bingo              Launch the viewer
+echo     bingo --update     Check for updates
+echo     bingo --install    Create a desktop shortcut
+echo     bingo --version    Show installed version
+echo.
 
 :: ── Shortcut prompt ───────────────────────────────────────────
-echo.
 set "SHORTCUT=Y"
 set /p "SHORTCUT=  Create a desktop shortcut? [Y/n]: "
-if /i "!SHORTCUT!" EQU "n" goto :launch
+if /i "!SHORTCUT!" EQU "n" goto :ask_launch
 
 echo.
 "!VENV!\Scripts\python.exe" -m bingoviewer --install 2>nul
@@ -141,8 +167,19 @@ if !errorlevel! NEQ 0 (
     echo   ^(Shortcut skipped - you can create one later with: bingo --install^)
 )
 
-:: ── Launch ────────────────────────────────────────────────────
-:launch
+:: ── Launch prompt ────────────────────────────────────────────
+:ask_launch
+echo.
+set "LAUNCH=Y"
+set /p "LAUNCH=  Launch BiNgo Genome Viewer now? [Y/n]: "
+if /i "!LAUNCH!" EQU "n" (
+    echo.
+    echo   To launch later, run:  bingo
+    echo.
+    pause
+    exit /b 0
+)
+
 echo.
 echo   [3/3] Starting BiNgo Genome Viewer...
 echo.
