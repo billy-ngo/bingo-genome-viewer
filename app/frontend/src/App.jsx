@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '2.2.3'
+const APP_VERSION = '2.2.4'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -412,16 +412,23 @@ function BrowserApp() {
           </div>
           <button
             onClick={() => setShowAbout(true)}
-            title="About"
+            title="About / References"
             style={{
-              background: 'none', border: `1px solid ${theme.border}`, borderRadius: '50%',
-              width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: 'pointer', color: theme.textSecondary, fontSize: 12, fontWeight: 700,
-              lineHeight: 1, padding: 0, flexShrink: 0,
+              background: 'none', border: `1px solid ${theme.border}`, borderRadius: 10,
+              padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4,
+              cursor: 'pointer', color: theme.textSecondary, fontSize: 11, fontWeight: 600,
+              lineHeight: 1, flexShrink: 0,
             }}
             onMouseEnter={e => { e.currentTarget.style.color = theme.textPrimary; e.currentTarget.style.borderColor = theme.textSecondary }}
             onMouseLeave={e => { e.currentTarget.style.color = theme.textSecondary; e.currentTarget.style.borderColor = theme.border }}
-          >?</button>
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ flexShrink: 0 }}>
+              <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+              <circle cx="8" cy="4.5" r="1.2"/>
+              <rect x="7" y="6.5" width="2" height="5.5" rx="0.8"/>
+            </svg>
+            Info
+          </button>
           <button
             onClick={() => setShowTour(true)}
             title="Guided Tour"
