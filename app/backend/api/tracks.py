@@ -94,8 +94,10 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     """Load track from a local file path (no upload needed)."""
     from pathlib import Path as P
 
-    # If a .bai path is given, look for the matching .bam
-    path = path.strip()
+    # Clean up the path: strip whitespace, quotes, and shell escape backslashes
+    path = path.strip().strip('"').strip("'")
+    # Remove shell-escaped spaces (e.g., /path/to/Sequencing\ Results/ → /path/to/Sequencing Results/)
+    path = path.replace('\\ ', ' ')
     if path.lower().endswith('.bai'):
         bam_path = None
         if path.lower().endswith('.bam.bai'):
