@@ -132,9 +132,20 @@ def _record_update_check():
 
 def _do_upgrade():
     """Run pip install --upgrade bingoviewer. Returns True on success."""
+    # Try normal install first
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "--upgrade", "bingoviewer", "-q"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0:
+            return True
+    except Exception:
+        pass
+    # Fallback: try with --user flag (permission issues on some systems)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "--user", "bingoviewer", "-q"],
             capture_output=True, text=True, timeout=120,
         )
         return result.returncode == 0
@@ -161,11 +172,13 @@ def check_and_update(force=False):
     """Check PyPI for a newer version and upgrade if found.
 
     Returns:
-        None if no update needed/available
-        new_version string if updated successfully
+        ('updated', new_version) if updated successfully
+        ('failed', latest_version) if update was found but install failed
+        ('current', None) if already up to date
+        ('skip', None) if check was skipped or PyPI unreachable
     """
     if not force and not _should_check_update():
-        return None
+        return ('skip', None)
 
     _record_update_check()
 
@@ -173,18 +186,18 @@ def check_and_update(force=False):
     latest = _get_pypi_version()
 
     if latest is None:
-        return None  # couldn't reach PyPI
+        return ('skip', None)  # couldn't reach PyPI
 
     if _version_tuple(latest) <= _version_tuple(installed):
-        return None  # already up to date
+        return ('current', None)
 
     _log(f"  Updating BiNgo Genome Viewer: {installed} → {latest} ...")
     if _do_upgrade():
-        _log(f"  Updated to {latest}. Restarting...")
-        return latest
+        _log(f"  Updated to {latest}.")
+        return ('updated', latest)
     else:
         _log(f"  Update failed (you can retry with: bingo --update)")
-        return None
+        return ('failed', latest)
 
 
 def _check_update_with_prompt():
@@ -408,10 +421,15 @@ def main():
 
     # ── Manual update command ────────────────────────────────────
     if args.update:
-        new_ver = check_and_update(force=True)
-        if new_ver:
-            print(f"  BiNgo Genome Viewer updated to {new_ver}.")
+        status, ver = check_and_update(force=True)
+        if status == 'updated':
+            print(f"  BiNgo Genome Viewer updated to {ver}.")
             print(f"  Run 'bingo' to launch the new version.")
+        elif status == 'failed':
+            print(f"  Update to {ver} failed. Try running as administrator or:")
+            print(f"    pip install --upgrade bingoviewer")
+        elif status == 'skip':
+            print(f"  Could not reach PyPI. Check your internet connection.")
         else:
             print(f"  BiNgo Genome Viewer {_get_installed_version()} is up to date.")
         return 0
