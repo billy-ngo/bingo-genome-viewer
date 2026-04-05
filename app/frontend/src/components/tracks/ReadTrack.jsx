@@ -40,6 +40,10 @@ export default function ReadTrack({ track, width, height, onWarning }) {
   const showNucleotides = track.showNucleotides !== false
   const useArrows = track.useArrows !== false
   const useLog = track.logScale === true
+  const fwdStrandColor = track.fwdColor || '#90a4ae'
+  const revStrandColor = track.revColor || '#f06292'
+  const arrowStyle = track.arrowStyle || 'pointed'
+  const arrowSizePx = track.arrowSize || 4
 
   // Reset scroll when region changes significantly
   const prevRegionRef = useRef(null)
@@ -185,7 +189,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       const rowY = (read.row - safeScrollRow) * (rh + rg) + 2
       if (rowY + rh < 0 || rowY > height) { hiddenReads++; continue }
 
-      const readColor = read.strand === '+' ? '#90a4ae' : '#f06292'
+      const readColor = read.strand === '+' ? fwdStrandColor : revStrandColor
       const segments = read.segments
 
       if (segments && segments.length > 0) {
@@ -236,17 +240,15 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       } else {
         const x = toX(read.start)
         const w = Math.max(2, toX(read.end) - x)
-        ctx.fillStyle = read.strand === '+' ? '#90a4ae' : '#f06292'
+        ctx.fillStyle = read.strand === '+' ? fwdStrandColor : revStrandColor
         ctx.fillRect(x, rowY, w, rh)
       }
 
-      if (useArrows) {
+      if (useArrows && arrowStyle !== 'flat') {
         const rx = toX(read.start); const rw = Math.max(2, toX(read.end) - rx)
-        const arrowSize = Math.min(showBases ? 6 : 4, rw / 2)
-        if (arrowSize >= 2) {
-          ctx.fillStyle = theme.canvasBg
-          if (read.strand === '+') { ctx.beginPath(); ctx.moveTo(rx + rw, rowY + rh / 2); ctx.lineTo(rx + rw - arrowSize, rowY); ctx.lineTo(rx + rw - arrowSize, rowY + rh); ctx.fill() }
-          else { ctx.beginPath(); ctx.moveTo(rx, rowY + rh / 2); ctx.lineTo(rx + arrowSize, rowY); ctx.lineTo(rx + arrowSize, rowY + rh); ctx.fill() }
+        const as = Math.min(arrowSizePx, rw / 2)
+        if (as >= 2) {
+          drawReadArrow(ctx, arrowStyle, read.strand, rx, rowY, rw, rh, as, readColor, theme.canvasBg)
         }
       }
 
@@ -283,7 +285,8 @@ export default function ReadTrack({ track, width, height, onWarning }) {
     }
   }, [data, loading, width, height, region, refSeq, scrollRow, track.color, track.scaleMax, track.scaleMin,
       track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars,
-      track.showNucleotides, track.useArrows, track.logScale, theme])
+      track.showNucleotides, track.useArrows, track.logScale,
+      track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize, theme])
 
   // Scrollbar drag handler
   const onMouseDown = useCallback((e) => {
@@ -327,6 +330,53 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       onMouseDown={onMouseDown}
     />
   )
+}
+
+/**
+ * Draw a directional arrow indicator on a read.
+ * Styles: 'pointed' (triangle cutout), 'chevron' (V notch), 'fade' (gradient)
+ */
+function drawReadArrow(ctx, style, strand, rx, ry, rw, rh, size, readColor, bgColor) {
+  const isFwd = strand === '+'
+  if (style === 'pointed') {
+    // Triangle cutout at the tip (classic IGV style)
+    ctx.fillStyle = bgColor
+    if (isFwd) {
+      ctx.beginPath(); ctx.moveTo(rx + rw, ry + rh / 2)
+      ctx.lineTo(rx + rw - size, ry); ctx.lineTo(rx + rw - size, ry + rh); ctx.fill()
+    } else {
+      ctx.beginPath(); ctx.moveTo(rx, ry + rh / 2)
+      ctx.lineTo(rx + size, ry); ctx.lineTo(rx + size, ry + rh); ctx.fill()
+    }
+  } else if (style === 'chevron') {
+    // V-shaped notch at the tip
+    ctx.strokeStyle = bgColor
+    ctx.lineWidth = 1.5
+    if (isFwd) {
+      ctx.beginPath()
+      ctx.moveTo(rx + rw - size, ry); ctx.lineTo(rx + rw, ry + rh / 2); ctx.lineTo(rx + rw - size, ry + rh)
+      ctx.stroke()
+    } else {
+      ctx.beginPath()
+      ctx.moveTo(rx + size, ry); ctx.lineTo(rx, ry + rh / 2); ctx.lineTo(rx + size, ry + rh)
+      ctx.stroke()
+    }
+  } else if (style === 'fade') {
+    // Gradient fade at the tip
+    if (isFwd) {
+      const grad = ctx.createLinearGradient(rx + rw - size * 2, 0, rx + rw, 0)
+      grad.addColorStop(0, 'rgba(0,0,0,0)')
+      grad.addColorStop(1, bgColor)
+      ctx.fillStyle = grad
+      ctx.fillRect(rx + rw - size * 2, ry, size * 2, rh)
+    } else {
+      const grad = ctx.createLinearGradient(rx, 0, rx + size * 2, 0)
+      grad.addColorStop(0, bgColor)
+      grad.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.fillStyle = grad
+      ctx.fillRect(rx, ry, size * 2, rh)
+    }
+  }
 }
 
 function smoothVals(values, radius) {

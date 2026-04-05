@@ -41,6 +41,10 @@ export default function TrackSettings({ onClose }) {
   const commonOutlineSmooth = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineSmooth === selectedTracks[0].outlineSmooth) ? selectedTracks[0].outlineSmooth : undefined
   const commonShowBars = selectedTracks.length > 0 && selectedTracks.every(t => t.showBars === selectedTracks[0].showBars) ? selectedTracks[0].showBars : null
   const commonShowNucleotides = selectedTracks.length > 0 && selectedTracks.every(t => t.showNucleotides === selectedTracks[0].showNucleotides) ? selectedTracks[0].showNucleotides : null
+  const commonFwdColor = selectedTracks.length > 0 && selectedTracks.every(t => (t.fwdColor || '#90a4ae') === (selectedTracks[0].fwdColor || '#90a4ae')) ? (selectedTracks[0].fwdColor || '#90a4ae') : undefined
+  const commonRevColor = selectedTracks.length > 0 && selectedTracks.every(t => (t.revColor || '#f06292') === (selectedTracks[0].revColor || '#f06292')) ? (selectedTracks[0].revColor || '#f06292') : undefined
+  const commonArrowStyle = selectedTracks.length > 0 && selectedTracks.every(t => (t.arrowStyle || 'pointed') === (selectedTracks[0].arrowStyle || 'pointed')) ? (selectedTracks[0].arrowStyle || 'pointed') : undefined
+  const commonArrowSize = selectedTracks.length > 0 && selectedTracks.every(t => (t.arrowSize || 4) === (selectedTracks[0].arrowSize || 4)) ? (selectedTracks[0].arrowSize || 4) : undefined
 
   function applyToSelected(updates) { updateMultipleTracks([...selected], updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
@@ -206,6 +210,49 @@ export default function TrackSettings({ onClose }) {
                   Show when zoomed in
                 </label>
               </div>
+            )}
+
+            {hasReads && (
+              <>
+                <div style={{ ...S.sectionTitle, marginTop: 12 }}>Read Appearance</div>
+                <div style={S.controlRow}>
+                  <span style={S.controlLabel}>Strand colors</span>
+                  <span style={{ fontSize: 10, color: t.textTertiary, marginRight: 2 }}>{'\u25B6'}</span>
+                  <input type="color" value={commonFwdColor || '#90a4ae'}
+                    onChange={e => applyToSelected({ fwdColor: e.target.value })}
+                    title="Forward strand color"
+                    style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+                  <span style={{ fontSize: 10, color: t.textTertiary, marginLeft: 6, marginRight: 2 }}>{'\u25C0'}</span>
+                  <input type="color" value={commonRevColor || '#f06292'}
+                    onChange={e => applyToSelected({ revColor: e.target.value })}
+                    title="Reverse strand color"
+                    style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+                  <button style={{ ...S.smallBtn, marginLeft: 'auto' }}
+                    onClick={() => applyToSelected({ fwdColor: null, revColor: null })}
+                    title="Reset to defaults"
+                  >Reset</button>
+                </div>
+                <div style={S.controlRow}>
+                  <span style={S.controlLabel}>Arrow style</span>
+                  <select value={commonArrowStyle || 'pointed'}
+                    onChange={e => applyToSelected({ arrowStyle: e.target.value })}
+                    style={{ background: t.inputBg, border: `1px solid ${t.borderAccent}`, borderRadius: 4, color: t.textPrimary, padding: '2px 6px', fontSize: 11, cursor: 'pointer' }}>
+                    <option value="pointed">Pointed</option>
+                    <option value="chevron">Chevron</option>
+                    <option value="fade">Fade</option>
+                    <option value="flat">Flat (none)</option>
+                  </select>
+                </div>
+                {(commonArrowStyle || 'pointed') !== 'flat' && (
+                  <div style={S.controlRow}>
+                    <span style={S.controlLabel}>Arrow size</span>
+                    <input type="range" min={2} max={12} step={1} value={commonArrowSize || 4}
+                      onChange={e => applyToSelected({ arrowSize: parseInt(e.target.value) })}
+                      style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
+                    <span style={{ fontSize: 11, color: t.textTertiary, width: 20, textAlign: 'right' }}>{commonArrowSize || 4}</span>
+                  </div>
+                )}
+              </>
             )}
 
             {hasCoverage && (
