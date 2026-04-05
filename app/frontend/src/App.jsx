@@ -20,34 +20,30 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.7.1'
+const APP_VERSION = '1.7.2'
 
+let _logoId = 0
 function BingoLogo({ size = 32 }) {
+  const [id] = React.useState(() => `blogo${++_logoId}`)
   return (
-    <svg width={size} height={size} viewBox="0 0 100 100" style={{ flexShrink: 0 }}>
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ flexShrink: 0 }} xmlns="http://www.w3.org/2000/svg">
       <defs>
-        <radialGradient id="ballGrad" cx="35%" cy="30%" r="65%">
+        <radialGradient id={`${id}_bg`} cx="35%" cy="30%" r="65%">
           <stop offset="0%" stopColor="#5eb8ff"/>
           <stop offset="50%" stopColor="#1976d2"/>
           <stop offset="100%" stopColor="#0d47a1"/>
         </radialGradient>
-        <radialGradient id="shine" cx="30%" cy="25%" r="30%">
-          <stop offset="0%" stopColor="rgba(255,255,255,0.7)"/>
-          <stop offset="100%" stopColor="rgba(255,255,255,0)"/>
+        <radialGradient id={`${id}_sh`} cx="30%" cy="25%" r="30%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="0.7"/>
+          <stop offset="100%" stopColor="#ffffff" stopOpacity="0"/>
         </radialGradient>
       </defs>
-      {/* Ball body */}
-      <circle cx="50" cy="50" r="48" fill="url(#ballGrad)"/>
-      {/* White center circle */}
+      <circle cx="50" cy="50" r="48" fill={`url(#${id}_bg)`}/>
       <circle cx="50" cy="48" r="28" fill="white"/>
-      {/* Blue ring around center */}
       <circle cx="50" cy="48" r="28" fill="none" stroke="#1565c0" strokeWidth="2.5"/>
-      {/* BN text at top */}
       <text x="50" y="39" textAnchor="middle" fontSize="13" fontWeight="800" fontFamily="Arial, sans-serif" fill="#0d47a1">BN</text>
-      {/* Number 1 */}
       <text x="50" y="64" textAnchor="middle" fontSize="30" fontWeight="900" fontFamily="Arial, sans-serif" fill="#0d47a1">1</text>
-      {/* Glossy highlight */}
-      <circle cx="50" cy="50" r="48" fill="url(#shine)"/>
+      <circle cx="50" cy="50" r="48" fill={`url(#${id}_sh)`}/>
     </svg>
   )
 }
