@@ -22,6 +22,7 @@ export default function TrackSettings({ onClose }) {
   const selectedTracks = tracks.filter(t => selected.has(t.id))
   const hasAnnotation = selectedTracks.some(t => t.track_type === 'annotations' || t.track_type === 'genome_annotations')
   const hasCoverage = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads')
+  const hasReads = selectedTracks.some(t => t.track_type === 'reads')
   const hasBars = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads' || t.track_type === 'variants')
 
   const commonHeight = selectedTracks.length > 0 && selectedTracks.every(t => t.height === selectedTracks[0].height) ? selectedTracks[0].height : ''
@@ -37,6 +38,7 @@ export default function TrackSettings({ onClose }) {
   const commonShowOutline = selectedTracks.length > 0 && selectedTracks.every(t => t.showOutline === selectedTracks[0].showOutline) ? selectedTracks[0].showOutline : null
   const commonOutlineColor = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineColor === selectedTracks[0].outlineColor) ? selectedTracks[0].outlineColor : undefined
   const commonShowBars = selectedTracks.length > 0 && selectedTracks.every(t => t.showBars === selectedTracks[0].showBars) ? selectedTracks[0].showBars : null
+  const commonShowNucleotides = selectedTracks.length > 0 && selectedTracks.every(t => t.showNucleotides === selectedTracks[0].showNucleotides) ? selectedTracks[0].showNucleotides : null
 
   function applyToSelected(updates) { updateMultipleTracks([...selected], updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
@@ -179,6 +181,19 @@ export default function TrackSettings({ onClose }) {
                     ref={el => { if (el) el.indeterminate = commonArrows === null }}
                     onChange={e => applyToSelected({ useArrows: e.target.checked })} style={{ cursor: 'pointer' }} />
                   Pointed arrows
+                </label>
+              </div>
+            )}
+
+            {hasReads && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Nucleotides</span>
+                <label style={S.cbLabel}>
+                  <input type="checkbox" checked={commonShowNucleotides !== false}
+                    ref={el => { if (el) el.indeterminate = commonShowNucleotides === null }}
+                    onChange={e => applyToSelected({ showNucleotides: e.target.checked })}
+                    style={{ cursor: 'pointer' }} />
+                  Show when zoomed in
                 </label>
               </div>
             )}

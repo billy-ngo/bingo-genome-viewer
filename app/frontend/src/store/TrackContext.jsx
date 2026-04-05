@@ -69,6 +69,7 @@ export function TrackProvider({ children }) {
         showOutline: false,
         outlineColor: null,
         showBars: true,
+        showNucleotides: true,
         targetChromosomes: info.target_chromosomes || null,
         ...(isAnnotation ? { annotationColors: null } : {}),
       }]
