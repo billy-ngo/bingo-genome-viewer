@@ -239,8 +239,26 @@ def _check_update_with_prompt():
         _log(f"  Updating BiNgo Genome Viewer: {installed} → {latest} ...")
         if _do_upgrade():
             _log(f"  Updated to {latest}.")
-            print(f"\n  Please run 'bingo' again to launch the new version.\n")
-            sys.exit(0)
+            if has_terminal:
+                print(f"\n  Please run 'bingo' again to launch the new version.\n")
+                sys.exit(0)
+            else:
+                # Running from shortcut (pythonw) — show dialog and relaunch
+                try:
+                    import tkinter as tk
+                    from tkinter import messagebox
+                    root = tk.Tk()
+                    root.withdraw()
+                    messagebox.showinfo(
+                        "BiNgo Genome Viewer",
+                        f"Updated to v{latest}.\n\nThe viewer will now relaunch."
+                    )
+                    root.destroy()
+                except Exception:
+                    pass
+                # Relaunch via subprocess (new process gets new code)
+                subprocess.Popen([sys.executable, "-m", "bingoviewer", "--no-update"])
+                sys.exit(0)
         else:
             _log(f"  Update failed. You can retry with: bingo --update")
 
