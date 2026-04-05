@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "BiNgoViewer"
-version = "1.7.5"
+version = "1.7.6"
 description = "BiNgo Genome Viewer — a lightweight browser-based genomics viewer"
 readme = "README.md"
 license = {text = "Proprietary"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Billy Ngo", email = "billy.ngo0108@gmail.com"},
+    {name = "Billy M Ngo", email = "billy.ngo0108@gmail.com"},
 ]
 keywords = ["genomics", "genome", "viewer", "browser", "bioinformatics", "igv"]
 classifiers = [

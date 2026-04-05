@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.7.5'
+const APP_VERSION = '1.7.6'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -569,7 +569,7 @@ function BrowserApp() {
               <strong style={{ color: theme.textPrimary }}>Version:</strong> {APP_VERSION}
             </div>
             <div style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 12 }}>
-              <strong style={{ color: theme.textPrimary }}>Publisher:</strong> Billy Ngo
+              <strong style={{ color: theme.textPrimary }}>Publisher:</strong> Billy M Ngo
             </div>
             <div style={{ fontSize: 13, color: theme.textSecondary, marginBottom: 20 }}>
               <strong style={{ color: theme.textPrimary }}>Published:</strong> April 2026
