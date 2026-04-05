@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.4.7'
+const APP_VERSION = '1.5.0'
 
 function BingoLogo({ size = 32 }) {
   return (
@@ -127,6 +127,7 @@ function BrowserApp() {
   // Full-screen drag-and-drop support
   const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
   const TRACK_EXTS = new Set(['.bam', '.bw', '.bigwig', '.wig', '.bedgraph', '.bdg', '.vcf', '.bed', '.gtf', '.gff', '.gff2', '.gff3'])
+  const INDEX_EXTS = new Set(['.bai'])
 
   function getFileExt(name) {
     if (!name) return ''
@@ -170,14 +171,18 @@ function BrowserApp() {
 
     const genomeFiles = []
     const trackFiles = []
+    const indexFiles = []
     const unknownFiles = []
 
     for (const f of files) {
       const ext = getFileExt(f.name)
+      const lower = f.name.toLowerCase()
       if (GENOME_EXTS.has(ext)) genomeFiles.push(f)
       else if (TRACK_EXTS.has(ext) || ext === '.vcf.gz') trackFiles.push(f)
+      else if (INDEX_EXTS.has(ext) || lower.endsWith('.bam.bai')) indexFiles.push(f)
       else unknownFiles.push(f)
     }
+    // .bai files without a matching .bam are silently accepted (not shown as unsupported)
 
     if (unknownFiles.length && !genomeFiles.length && !trackFiles.length) {
       setDropStatus({ error: `Unsupported file${unknownFiles.length > 1 ? 's' : ''}: ${unknownFiles.map(f => f.name).join(', ')}` })

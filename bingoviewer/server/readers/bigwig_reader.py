@@ -346,23 +346,27 @@ class WigReader:
         step = span = 1
         pos = 1
         fixed = False
-        bedgraph_mode = False
-        raw: dict[str, list] = {}  # collect unsorted first: chrom -> [(pos, val), ...]
+        has_fwd_rev = False  # 3-column format: pos fwd rev
+        raw: dict[str, list] = {}
+        raw_rev: dict[str, list] = {}  # separate reverse values for 3-col format
 
         with open(self.file_path) as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith(("#", "browser")):
+                if not line or line.startswith(("browser",)):
                     continue
-                if line.startswith("track"):
-                    # Check if track line indicates bedGraph format
-                    if "bedGraph" in line or "bedgraph" in line:
-                        bedgraph_mode = True
+                # Skip comment lines but check for bedGraph hint
+                if line.startswith("#"):
                     continue
-                if line.startswith("fixedStep"):
+
+                # Extract variableStep/fixedStep even if embedded in another line
+                # e.g. "color 5:150:55 225:0:0 variableStep chrom=LS1 span=1"
+                vs_match = re.search(r'variableStep\s', line)
+                fs_match = re.search(r'fixedStep\s', line)
+                if fs_match:
                     fixed = True
-                    bedgraph_mode = False
-                    params = dict(re.findall(r"(\w+)=(\S+)", line))
+                    tail = line[fs_match.start():]
+                    params = dict(re.findall(r"(\w+)=(\S+)", tail))
                     chrom = params.get("chrom")
                     if not chrom:
                         continue
@@ -370,54 +374,67 @@ class WigReader:
                     step = int(params.get("step", 1))
                     span = int(params.get("span", 1))
                     raw.setdefault(chrom, [])
-                elif line.startswith("variableStep"):
+                    raw_rev.setdefault(chrom, [])
+                    continue
+                if vs_match:
                     fixed = False
-                    bedgraph_mode = False
-                    params = dict(re.findall(r"(\w+)=(\S+)", line))
+                    tail = line[vs_match.start():]
+                    params = dict(re.findall(r"(\w+)=(\S+)", tail))
                     chrom = params.get("chrom")
                     if not chrom:
                         continue
                     span = int(params.get("span", 1))
                     raw.setdefault(chrom, [])
-                else:
-                    parts = line.split()
-                    try:
-                        if chrom and not bedgraph_mode:
-                            # Standard WIG data line (under fixedStep or variableStep header)
-                            if fixed:
-                                v = float(parts[0])
-                                p0 = pos - 1
-                                raw[chrom].append((p0, v))
-                                self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
-                                pos += step
-                            elif len(parts) >= 2:
-                                p0 = int(parts[0]) - 1
-                                v = float(parts[1])
-                                raw[chrom].append((p0, v))
-                                self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
-                        elif len(parts) >= 4:
-                            # BedGraph-style line: chrom start end value
-                            # (handles .wig files that are actually BedGraph format)
-                            bedgraph_mode = True
-                            c = parts[0]
-                            s = int(parts[1])
-                            e = int(parts[2])
-                            v = float(parts[3])
-                            # Store as single point at the start position with the value
-                            raw.setdefault(c, []).append((s, v))
-                            self._chroms[c] = max(self._chroms.get(c, 0), e)
-                        elif len(parts) >= 2 and not chrom:
-                            # Two-column data without header — try as variableStep
-                            # with an unknown chromosome. Skip these lines.
-                            pass
-                    except (ValueError, IndexError):
-                        continue
+                    raw_rev.setdefault(chrom, [])
+                    continue
+
+                if line.startswith("track"):
+                    continue
+
+                if not chrom:
+                    continue
+
+                parts = line.split()
+                try:
+                    if fixed:
+                        # fixedStep: 1 value per line, or 2 values (fwd rev)
+                        v = float(parts[0])
+                        p0 = pos - 1
+                        raw[chrom].append((p0, v))
+                        if len(parts) >= 2:
+                            has_fwd_rev = True
+                            raw_rev[chrom].append((p0, float(parts[1])))
+                        self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
+                        pos += step
+                    elif len(parts) >= 3:
+                        # 3-column variableStep: position fwd rev
+                        p0 = int(parts[0])  # 0-based in this format
+                        fwd = float(parts[1])
+                        rev = float(parts[2])
+                        has_fwd_rev = True
+                        raw[chrom].append((p0, fwd))
+                        raw_rev[chrom].append((p0, rev))
+                        self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
+                    elif len(parts) >= 2:
+                        # Standard 2-column variableStep: position value (1-based)
+                        p0 = int(parts[0]) - 1
+                        v = float(parts[1])
+                        raw[chrom].append((p0, v))
+                        self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
+                except (ValueError, IndexError):
+                    continue
 
         # Build sorted parallel arrays for fast binary-search queries
+        self._has_fwd_rev = has_fwd_rev
+        self._rev_values: dict[str, list] = {}
         for chrom, entries in raw.items():
             entries.sort(key=lambda x: x[0])
             self._positions[chrom] = [e[0] for e in entries]
             self._values[chrom] = [e[1] for e in entries]
+        if has_fwd_rev:
+            for chrom, entries in raw_rev.items():
+                entries.sort(key=lambda x: x[0])
+                self._rev_values[chrom] = [e[1] for e in entries]
 
     def close(self): pass
 
@@ -429,6 +446,7 @@ class WigReader:
         chrom = self._resolve_chrom(chrom)
         positions = self._positions.get(chrom, [])
         values = self._values.get(chrom, [])
+        rev_values = self._rev_values.get(chrom, []) if self._has_fwd_rev else []
         region_len = end - start
         if region_len <= 0 or not positions:
             return []
@@ -439,20 +457,32 @@ class WigReader:
         neg_totals = [0.0] * n_bins
         counts = [0] * n_bins
 
-        # Binary search for start of relevant data
         lo = bisect.bisect_left(positions, start)
 
-        for i in range(lo, len(positions)):
-            p = positions[i]
-            if p >= end:
-                break
-            v = values[i]
-            bi = min(int((p - start) / bin_size), n_bins - 1)
-            counts[bi] += 1
-            if v >= 0:
-                pos_totals[bi] += v
-            else:
-                neg_totals[bi] += v
+        if self._has_fwd_rev and rev_values:
+            # 3-column format: forward values in `values`, reverse in `rev_values`
+            for i in range(lo, len(positions)):
+                p = positions[i]
+                if p >= end:
+                    break
+                bi = min(int((p - start) / bin_size), n_bins - 1)
+                counts[bi] += 1
+                pos_totals[bi] += values[i]
+                if i < len(rev_values):
+                    neg_totals[bi] += rev_values[i]
+        else:
+            # Standard format: single value, split by sign
+            for i in range(lo, len(positions)):
+                p = positions[i]
+                if p >= end:
+                    break
+                v = values[i]
+                bi = min(int((p - start) / bin_size), n_bins - 1)
+                counts[bi] += 1
+                if v >= 0:
+                    pos_totals[bi] += v
+                else:
+                    neg_totals[bi] += v
 
         return [
             {
@@ -469,14 +499,26 @@ class WigReader:
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 def _sniff_wig_format(file_path: str) -> str:
-    """Peek at the first non-comment lines to detect if a .wig file is
-    actually BedGraph format (4+ tab/space columns with chrom, start, end, value)."""
+    """Peek at the first lines to detect if a .wig file is actually BedGraph format."""
     try:
         with open(file_path) as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith(("#", "browser", "track")):
+                if not line or line.startswith(("browser",)):
                     continue
+                # #bedGraph header is a strong signal
+                if line.startswith("#bedGraph") or line.startswith("#bedgraph"):
+                    return "bedgraph"
+                if line.startswith("#"):
+                    continue
+                if line.startswith("track"):
+                    if "bedGraph" in line or "bedgraph" in line:
+                        return "bedgraph"
+                    continue
+                # Check for variableStep/fixedStep anywhere in the line
+                # (handles non-standard files where it's embedded in metadata)
+                if "variableStep" in line or "fixedStep" in line:
+                    return "wig"
                 if line.startswith(("fixedStep", "variableStep")):
                     return "wig"
                 parts = line.split()
