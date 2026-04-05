@@ -77,7 +77,9 @@ export default function TrackSettings({ onClose }) {
     section: { padding: '12px 16px', borderTop: `1px solid ${t.border}` },
     sectionTitle: { fontSize: 11, color: t.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
     controlRow: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 },
+    subRow: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, paddingLeft: 16, borderLeft: `2px solid ${t.border}`, marginLeft: 4 },
     controlLabel: { fontSize: 12, color: t.textSecondary, width: 90 },
+    subLabel: { fontSize: 11, color: t.textTertiary, width: 76 },
     input: { background: t.inputBg, border: `1px solid ${t.borderAccent}`, borderRadius: 4, color: t.textPrimary, padding: '3px 6px', fontSize: 12, width: 70 },
     colorInput: { width: 28, height: 22, border: 'none', background: 'none', cursor: 'pointer', padding: 0 },
     btn: { background: t.btnBg, border: 'none', borderRadius: 4, color: t.btnText, padding: '5px 14px', cursor: 'pointer', fontSize: 12, fontWeight: 600 },
@@ -169,8 +171,8 @@ export default function TrackSettings({ onClose }) {
                   </label>
                 </div>
                 {commonBarAutoWidth === false && (
-                  <div style={S.controlRow}>
-                    <span style={S.controlLabel}></span>
+                  <div style={S.subRow}>
+                    <span style={S.subLabel}>Width</span>
                     <input type="range" min={1} max={50} step={1} value={commonBarWidth ?? 2}
                       onChange={e => applyToSelected({ barWidth: parseInt(e.target.value) })}
                       style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
@@ -202,8 +204,8 @@ export default function TrackSettings({ onClose }) {
                   )}
                 </div>
                 {commonShowOutline === true && (
-                  <div style={S.controlRow}>
-                    <span style={S.controlLabel}>Smoothness</span>
+                  <div style={S.subRow}>
+                    <span style={S.subLabel}>Smoothness</span>
                     <input type="range" min={0} max={10} step={1} value={commonOutlineSmooth ?? 0}
                       onChange={e => applyToSelected({ outlineSmooth: parseInt(e.target.value) })}
                       style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
@@ -226,8 +228,7 @@ export default function TrackSettings({ onClose }) {
               </div>
             )}
             {hasCoverage && !isAutoScale && (
-              <div style={S.controlRow}>
-                <span style={S.controlLabel}></span>
+              <div style={S.subRow}>
                 <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>+Ymax</span>
                 <input type="number" min={1} step={10} value={commonScaleMax ?? ''} placeholder="max" style={S.input}
                   onChange={e => { const v = parseFloat(e.target.value); if (v > 0) applyToSelected({ scaleMax: v }) }} />
@@ -318,8 +319,8 @@ export default function TrackSettings({ onClose }) {
                   </select>
                 </div>
                 {(commonArrowStyle || 'pointed') !== 'flat' && (
-                  <div style={S.controlRow}>
-                    <span style={S.controlLabel}>Arrow size</span>
+                  <div style={S.subRow}>
+                    <span style={S.subLabel}>Arrow size</span>
                     <input type="range" min={2} max={12} step={1} value={commonArrowSize || 4}
                       onChange={e => applyToSelected({ arrowSize: parseInt(e.target.value) })}
                       style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
