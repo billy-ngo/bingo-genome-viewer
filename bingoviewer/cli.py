@@ -25,9 +25,58 @@ _CONFIG_DIR = Path.home() / ".bingoviewer"
 _LOCK_FILE = _CONFIG_DIR / "server.lock"
 _FIRST_RUN_MARKER = _CONFIG_DIR / ".shortcut_prompted"
 _UPDATE_CHECK_FILE = _CONFIG_DIR / ".last_update_check"
+_VERSION_MARKER = _CONFIG_DIR / ".installed_version"
 
 # Minimum seconds between automatic update checks (1 hour)
 _UPDATE_CHECK_INTERVAL = 3600
+
+
+def _show_welcome_if_new():
+    """Show welcome message on first run or after upgrade."""
+    ver = _get_installed_version()
+    try:
+        prev = _VERSION_MARKER.read_text().strip() if _VERSION_MARKER.exists() else None
+    except Exception:
+        prev = None
+
+    if prev == ver:
+        return
+
+    try:
+        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _VERSION_MARKER.write_text(ver)
+    except Exception:
+        pass
+
+    is_upgrade = prev is not None
+    print()
+    print(f"  {'=' * 44}")
+    if is_upgrade:
+        print(f"    BiNgo Genome Viewer updated to v{ver}")
+    else:
+        print(f"    BiNgo Genome Viewer v{ver} installed")
+    print(f"  {'=' * 44}")
+    print()
+    if not is_upgrade:
+        print("  Supported formats:")
+        print("    Genome:    .fasta .fa .gb .gbk .genbank")
+        print("    Reads:     .bam (+ .bai index)")
+        print("    Coverage:  .bw .bigwig .wig .bedgraph")
+        print("    Variants:  .vcf .vcf.gz")
+        print("    Features:  .bed .gtf .gff .gff3")
+        print()
+        print("  Quick start:")
+        print("    - Load a genome file, then add tracks")
+        print("    - Left-click drag to pan, scroll to zoom")
+        print("    - Right-click drag to select a region")
+        print("    - Double-click a gene to zoom in")
+        print()
+        print("  Commands:")
+        print("    bingo              Launch the viewer")
+        print("    bingo --update     Check for updates")
+        print("    bingo --install    Create a desktop shortcut")
+        print("    bingo --version    Show installed version")
+        print()
 
 
 # ── Auto-update ──────────────────────────────────────────────────
@@ -293,6 +342,9 @@ def main():
         else:
             print(f"  BiNgo Genome Viewer {_get_installed_version()} is up to date.")
         return 0
+
+    # ── Welcome message on first run / upgrade ─────────────────────
+    _show_welcome_if_new()
 
     # ── Single-instance check (fast: PID probe → quick HTTP) ──────
     existing = _check_existing_server(args.host, args.port)
