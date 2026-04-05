@@ -47,11 +47,19 @@ export default function TrackPanel({
   const isAnnotation = track.track_type === 'annotations' || track.track_type === 'genome_annotations'
   useCanvasInteraction(containerRef)
 
+  // Ordered by hue: reds → oranges → yellows → greens → cyans → blues → purples → grays
   const QUICK_COLORS = [
-    '#78909c', '#66bb6a', '#42a5f5', '#ffa726', '#f06292',
-    '#ab47bc', '#26c6da', '#ef5350', '#8d6e63', '#fff176',
-    '#ff8a65', '#80cbc4', '#9575cd', '#aed581', '#4dd0e1',
-    '#e57373', '#ffb74d', '#81c784', '#64b5f6', '#ce93d8',
+    '#f44336', '#ef5350', '#e57373',
+    '#ff5722', '#ff8a65', '#ff9800', '#ffa726', '#ffb74d',
+    '#ffc107', '#fff176',
+    '#4caf50', '#66bb6a', '#81c784', '#aed581',
+    '#009688', '#26c6da', '#80cbc4',
+    '#2196f3', '#42a5f5', '#64b5f6',
+    '#7e57c2', '#9575cd',
+    '#9c27b0', '#ab47bc', '#ce93d8',
+    '#e91e63', '#f06292',
+    '#795548', '#8d6e63',
+    '#607d8b', '#78909c',
   ]
 
   const width = containerWidth - labelWidth
@@ -263,11 +271,17 @@ const ANNOTATION_TYPES = [
 ]
 
 const ANNO_QUICK_COLORS = [
-  '#66bb6a', '#42a5f5', '#7e57c2', '#ab47bc', '#26c6da',
-  '#ffa726', '#ef5350', '#8d6e63', '#80cbc4', '#78909c',
-  '#4caf50', '#2196f3', '#9c27b0', '#e91e63', '#00bcd4',
-  '#ff9800', '#f44336', '#795548', '#009688', '#607d8b',
-  '#aed581', '#64b5f6', '#ce93d8', '#f06292', '#4dd0e1',
+  '#f44336', '#ef5350', '#e57373',
+  '#ff5722', '#ff8a65', '#ff9800', '#ffa726', '#ffb74d',
+  '#ffc107', '#fff176',
+  '#4caf50', '#66bb6a', '#81c784', '#aed581',
+  '#009688', '#26c6da', '#80cbc4',
+  '#2196f3', '#42a5f5', '#64b5f6',
+  '#7e57c2', '#9575cd',
+  '#9c27b0', '#ab47bc', '#ce93d8',
+  '#e91e63', '#f06292',
+  '#795548', '#8d6e63',
+  '#607d8b', '#78909c',
 ]
 
 // Maps annotation color key → theme property name

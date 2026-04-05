@@ -4,10 +4,25 @@
  * Allows adjusting visibility, height, color, scale (linear/log),
  * Y-axis range, and bar width for selected tracks.
  */
-import React, { useState } from 'react'
-import { useTracks } from '../../store/TrackContext'
+import React, { useState, useRef } from 'react'
+import { useTracks, DEFAULT_ANNOTATION_COLORS } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import DraggablePanel from './DraggablePanel'
+
+// Ordered by hue: reds → oranges → yellows → greens → cyans → blues → purples → grays
+const ORDERED_COLORS = [
+  '#f44336', '#e53935', '#ef5350', '#e57373',
+  '#ff5722', '#ff8a65', '#ff9800', '#ffa726', '#ffb74d',
+  '#ffc107', '#ffd54f', '#fff176',
+  '#4caf50', '#66bb6a', '#81c784', '#aed581',
+  '#009688', '#26c6da', '#4dd0e1', '#80cbc4',
+  '#2196f3', '#42a5f5', '#64b5f6',
+  '#3f51b5', '#7e57c2', '#9575cd',
+  '#9c27b0', '#ab47bc', '#ce93d8',
+  '#e91e63', '#f06292',
+  '#795548', '#8d6e63',
+  '#607d8b', '#78909c',
+]
 
 export default function TrackSettings({ onClose }) {
   const { theme } = useTheme()
@@ -106,11 +121,14 @@ export default function TrackSettings({ onClose }) {
                 )}
               </div>
             )}
-            {!hasBars && (
+            {!hasBars && !hasAnnotation && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Color</span>
                 <input type="color" value={commonColor} style={S.colorInput} onChange={e => applyToSelected({ color: e.target.value })} />
               </div>
+            )}
+            {hasAnnotation && (
+              <AnnotationColorSection tracks={selectedTracks} applyToSelected={applyToSelected} theme={t} />
             )}
             <div style={S.controlRow}>
               <span style={S.controlLabel}>Height (px)</span>
@@ -302,5 +320,112 @@ export default function TrackSettings({ onClose }) {
           </div>
         </div>
     </DraggablePanel>
+  )
+}
+
+const ANNOTATION_TYPES = [
+  { key: 'cds', label: 'CDS' },
+  { key: 'exon', label: 'Exon' },
+  { key: 'gene', label: 'Gene' },
+  { key: 'transcript', label: 'Transcript' },
+  { key: 'utr', label: 'UTR' },
+  { key: 'rrna', label: 'rRNA' },
+  { key: 'trna', label: 'tRNA' },
+  { key: 'repeat', label: 'Repeat' },
+  { key: 'default', label: 'Other' },
+]
+
+function AnnotationColorSection({ tracks, applyToSelected, theme }) {
+  const [expandedType, setExpandedType] = useState(null)
+  const nativeRef = useRef(null)
+  const [nativeTarget, setNativeTarget] = useState(null) // key being edited via native picker
+
+  // Use first selected track's annotation colors as the baseline
+  const overrides = tracks[0]?.annotationColors || {}
+
+  function resolveColor(key) {
+    return overrides[key] || DEFAULT_ANNOTATION_COLORS[key] || '#80cbc4'
+  }
+
+  function setColor(key, color) {
+    for (const t of tracks) {
+      const updated = { ...(t.annotationColors || {}), [key]: color }
+      applyToSelected({ annotationColors: updated })
+    }
+  }
+
+  function resetAll() {
+    applyToSelected({ annotationColors: null })
+  }
+
+  function openNativePicker(key) {
+    setNativeTarget(key)
+    if (nativeRef.current) {
+      nativeRef.current.value = resolveColor(key)
+      nativeRef.current.click()
+    }
+  }
+
+  return (
+    <div style={{ padding: '4px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, padding: '0 0 0 0' }}>
+        <span style={{ fontSize: 12, color: theme.textSecondary, width: 90 }}>Annotation colors</span>
+        <button
+          style={{ background: 'none', border: `1px solid ${theme.borderAccent}`, borderRadius: 3,
+            color: theme.textTertiary, cursor: 'pointer', fontSize: 10, padding: '1px 6px' }}
+          onClick={resetAll}
+        >Reset</button>
+      </div>
+      {ANNOTATION_TYPES.map(({ key, label }) => {
+        const current = resolveColor(key)
+        return (
+          <div key={key}>
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '3px 4px',
+                cursor: 'pointer', fontSize: 11, color: theme.textPrimary, borderRadius: 3,
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = theme.selectedRow || 'rgba(255,255,255,0.05)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              onClick={() => setExpandedType(expandedType === key ? null : key)}
+            >
+              <span
+                style={{
+                  width: 14, height: 14, borderRadius: 3, background: current,
+                  border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0, cursor: 'pointer',
+                }}
+                onDoubleClick={(e) => { e.stopPropagation(); openNativePicker(key) }}
+                title="Click to expand swatches, double-click for full color picker"
+              />
+              <span style={{ flex: 1 }}>{label}</span>
+              <span style={{ fontSize: 9, color: theme.textTertiary }}>
+                {expandedType === key ? '\u25B2' : '\u25BC'}
+              </span>
+            </div>
+            {expandedType === key && (
+              <div style={{ padding: '3px 4px 6px 24px', display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+                {ORDERED_COLORS.map(c => (
+                  <span
+                    key={c}
+                    style={{
+                      width: 16, height: 16, borderRadius: 3, background: c, cursor: 'pointer',
+                      border: c === current ? `2px solid ${theme.textPrimary}` : '1px solid rgba(255,255,255,0.1)',
+                      boxSizing: 'border-box',
+                    }}
+                    onClick={() => { setColor(key, c); setExpandedType(null) }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <input
+        ref={nativeRef}
+        type="color"
+        style={{ position: 'absolute', left: -9999, top: -9999, opacity: 0, width: 0, height: 0 }}
+        onChange={(e) => { if (nativeTarget) setColor(nativeTarget, e.target.value) }}
+      />
+    </div>
   )
 }
