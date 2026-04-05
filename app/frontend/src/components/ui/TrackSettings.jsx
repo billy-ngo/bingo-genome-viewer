@@ -39,7 +39,9 @@ export default function TrackSettings({ onClose }) {
   const hasAnnotation = selectedTracks.some(t => t.track_type === 'annotations' || t.track_type === 'genome_annotations')
   const hasCoverage = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads')
   const hasReads = selectedTracks.some(t => t.track_type === 'reads')
+  const hasVariants = selectedTracks.some(t => t.track_type === 'variants')
   const hasBars = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads' || t.track_type === 'variants')
+  const hasCoverageBars = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads')
 
   const commonHeight = selectedTracks.length > 0 && selectedTracks.every(t => t.height === selectedTracks[0].height) ? selectedTracks[0].height : ''
   const commonColor = selectedTracks.length > 0 && selectedTracks.every(t => t.color === selectedTracks[0].color) ? selectedTracks[0].color : '#888888'
@@ -126,8 +128,8 @@ export default function TrackSettings({ onClose }) {
               </label>
             </div>
 
-            {/* 3. Fill bars + color (bar tracks only) */}
-            {hasBars && (
+            {/* 3. Fill bars + color (coverage/read tracks only, not variants) */}
+            {hasCoverageBars && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Fill bars</span>
                 <label style={S.cbLabel}>
@@ -145,8 +147,8 @@ export default function TrackSettings({ onClose }) {
               </div>
             )}
 
-            {/* Color for non-bar, non-annotation tracks */}
-            {!hasBars && !hasAnnotation && (
+            {/* Color for variant and other non-coverage, non-annotation tracks */}
+            {(hasVariants || (!hasBars && !hasAnnotation)) && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Color</span>
                 <input type="color" value={commonColor} style={S.colorInput} onChange={e => applyToSelected({ color: e.target.value })} />
@@ -180,8 +182,8 @@ export default function TrackSettings({ onClose }) {
               </>
             )}
 
-            {/* 5. Peak outline (bar tracks only) */}
-            {hasBars && (
+            {/* 5. Peak outline (coverage/read tracks only, not variants) */}
+            {hasCoverageBars && (
               <>
                 <div style={S.controlRow}>
                   <span style={S.controlLabel}>Peak outline</span>
