@@ -239,12 +239,8 @@ def _check_update_with_prompt():
         _log(f"  Updating BiNgo Genome Viewer: {installed} → {latest} ...")
         if _do_upgrade():
             _log(f"  Updated to {latest}.")
-            # Re-exec to pick up new version
-            try:
-                args = [a for a in sys.argv[1:] if a != '--update']
-                os.execv(sys.executable, [sys.executable, "-m", "bingoviewer", "--no-update"] + args)
-            except Exception:
-                _log(f"  Restart failed. Please run 'bingo' again.")
+            print(f"\n  Please run 'bingo' again to launch the new version.\n")
+            sys.exit(0)
         else:
             _log(f"  Update failed. You can retry with: bingo --update")
 
