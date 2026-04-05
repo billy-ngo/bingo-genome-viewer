@@ -29,13 +29,16 @@ class GenomeReader:
             reader = Fasta(file_path)
         idx = len(self._sub_readers)
         self._sub_readers.append((fmt, reader))
-        # Build explicit chromosome→reader index so lookups are exact
+        # Build explicit chromosome→reader index
+        # Skip duplicates: first file's chromosome takes precedence
         if fmt == "genbank":
             for info in reader.chromosomes:
-                self._chrom_index[info["name"]] = idx
+                if info["name"] not in self._chrom_index:
+                    self._chrom_index[info["name"]] = idx
         else:
             for key in reader.keys():
-                self._chrom_index[key] = idx
+                if key not in self._chrom_index:
+                    self._chrom_index[key] = idx
 
     def add_chromosomes_from(self, file_path: str):
         """Load another file and merge its chromosomes into this genome."""

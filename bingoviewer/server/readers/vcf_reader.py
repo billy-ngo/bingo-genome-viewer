@@ -127,6 +127,12 @@ class VcfReader:
                 return key
             if key.lower() == chrom.lower():
                 return key
+        # Accession version stripping (NC_000001.11 matches NC_000001)
+        chrom_base = chrom.rsplit(".", 1)[0] if "." in chrom else chrom
+        for key in self._by_chrom:
+            key_base = key.rsplit(".", 1)[0] if "." in key else key
+            if key_base == chrom_base:
+                return key
         return chrom
 
     def get_variants(self, chrom: str, start: int, end: int) -> list[dict]:

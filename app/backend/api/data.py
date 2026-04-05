@@ -16,8 +16,17 @@ router = APIRouter(prefix="/api/tracks", tags=["data"])
 READ_DETAIL_THRESHOLD = 50_000  # bp
 
 
+def _validate_region(start: int, end: int):
+    """Validate region coordinates. Raises HTTPException on invalid input."""
+    if start < 0:
+        raise HTTPException(status_code=400, detail="start must be >= 0")
+    if end <= start:
+        raise HTTPException(status_code=400, detail="end must be > start")
+
+
 @router.get("/{track_id}/coverage")
 def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Query(default=1000, le=5000)):
+    _validate_region(start, end)
     reader = _get_reader(track_id)
     track_type = app_state.tracks[track_id]["track_type"]
 
@@ -45,6 +54,7 @@ def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Qu
 
 @router.get("/{track_id}/reads")
 def get_reads(track_id: str, chrom: str, start: int, end: int):
+    _validate_region(start, end)
     reader = _get_reader(track_id)
     if app_state.tracks[track_id]["track_type"] != "reads":
         raise HTTPException(status_code=400, detail="Track does not support read-level data")
@@ -66,6 +76,7 @@ def get_reads(track_id: str, chrom: str, start: int, end: int):
 
 @router.get("/{track_id}/variants")
 def get_variants(track_id: str, chrom: str, start: int, end: int):
+    _validate_region(start, end)
     reader = _get_reader(track_id)
     if app_state.tracks[track_id]["track_type"] != "variants":
         raise HTTPException(status_code=400, detail="Track does not support variants")
@@ -80,6 +91,7 @@ def get_variants(track_id: str, chrom: str, start: int, end: int):
 
 @router.get("/{track_id}/features")
 def get_features(track_id: str, chrom: str, start: int, end: int):
+    _validate_region(start, end)
     if track_id not in app_state.tracks:
         raise HTTPException(status_code=404, detail="Track not found")
     track_type = app_state.tracks[track_id]["track_type"]
