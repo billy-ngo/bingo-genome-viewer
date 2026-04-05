@@ -14,49 +14,75 @@ const STEPS = [
     target: 'file-loader',
     title: 'Load Files',
     description:
-      'Select genome and track files using the file picker or drag and drop. Files are auto-classified by extension.',
+      'Select genome and track files using the file picker, drag and drop, or paste a local file path. ' +
+      'Supported formats: FASTA, GenBank, BAM (+BAI), BigWig, WIG, BedGraph, VCF, BED, GTF, GFF.',
     position: 'bottom',
   },
   {
     target: 'nav-bar',
-    title: 'Navigation',
+    title: 'Navigation & Scrubber',
     description:
-      'Switch chromosomes, type coordinates to jump to a region, zoom in/out, and pan.',
+      'Switch chromosomes, type coordinates (chr1:1000-5000) to jump, zoom with \uFF0D/\uFF0B, and pan with \u25C0/\u25B6. ' +
+      'The blue scrubber bar shows your position \u2014 click or drag it to scroll across the entire chromosome.',
     position: 'bottom',
   },
   {
     target: 'track-area',
-    title: 'Track Viewing',
+    title: 'Track Interaction',
     description:
-      'Click and drag to pan, scroll to zoom. Hover over features for details.',
+      'Left-click drag to pan, scroll to zoom. Right-click drag to select a region \u2014 hover the blue highlight for stats. ' +
+      'Double-click a gene to zoom in with context. Hover features for detailed tooltips.',
     position: 'inside',
   },
   {
     target: 'skeleton-track-label',
     title: 'Track Controls',
     description:
-      'Drag \u2261 to reorder, click the color swatch to change colors, and click \u00D7 to remove.',
+      'Drag \u2261 to reorder tracks, click the color swatch to change colors, and click \u00D7 to remove. ' +
+      'Drag the bottom edge of a track to resize its height.',
     position: 'right',
-  },
-  {
-    target: 'btn-export',
-    title: 'Export Image',
-    description:
-      'Export your current view as SVG or PNG.',
-    position: 'bottom',
   },
   {
     target: 'btn-settings',
     title: 'Track Settings',
     description:
-      'Adjust height, color, Y-axis scale, bar width, and more.',
+      'Select tracks and adjust: height, color, Y-axis scale (auto/manual/log), bar width, peak outline trace with color picker, ' +
+      'show/hide bars, pointed arrows, and nucleotide display for BAM reads (shows A/C/G/T with mismatch highlighting when zoomed in).',
+    position: 'bottom',
+    action: 'open-settings',
+  },
+  {
+    target: 'header-btns',
+    title: 'Themes',
+    description:
+      'Choose from built-in themes (Dark, Light, Colorblind, Soft, High Contrast) or create a fully custom theme. ' +
+      'Theme preferences persist across sessions.',
+    position: 'bottom',
+    action: 'open-theme',
+  },
+  {
+    target: 'btn-export',
+    title: 'Export Image',
+    description:
+      'Export your current view as SVG or PNG. The export respects all track settings including peak outlines, bar visibility, and scale labels.',
     position: 'bottom',
   },
   {
     target: 'header-btns',
-    title: 'Sessions & Themes',
+    title: 'Sessions',
     description:
-      'Save and restore sessions, and switch color themes.',
+      'Save Session exports your entire state (genome, tracks, region, zoom, colors, settings) as a JSON file. ' +
+      'Restore it later or share with collaborators. Sessions also auto-save to your browser. ' +
+      'An exit guard warns you before closing if you have unsaved work.',
+    position: 'bottom',
+  },
+  {
+    target: 'file-loader',
+    title: 'Large File Tips',
+    description:
+      'For large BAM files, use the \uD83D\uDCC2 Path button to paste a local file path \u2014 the server reads directly from disk without uploading. ' +
+      'For large WIG files, convert to BigWig format for instant loading. ' +
+      'The app checks for updates automatically in the background.',
     position: 'bottom',
   },
 ]
@@ -67,7 +93,7 @@ const CARD_W = 340
 const EST_CARD_H = 230
 const DIM = 'rgba(0,0,0,0.55)'
 
-export default function HelpTour({ onClose, theme }) {
+export default function HelpTour({ onClose, theme, onAction }) {
   const [step, setStep] = useState(0)
   const [rect, setRect] = useState(null)
   const [cardH, setCardH] = useState(EST_CARD_H)
@@ -77,14 +103,28 @@ export default function HelpTour({ onClose, theme }) {
   const isFirst = step === 0
   const isLast = step === STEPS.length - 1
 
+  // Fire actions when entering a step (open panels briefly)
+  useEffect(() => {
+    const action = STEPS[step]?.action
+    if (action && onAction) onAction(action)
+  }, [step, onAction])
+
+  // Close panels when leaving action steps
+  const closeAction = useCallback((fromStep) => {
+    const action = STEPS[fromStep]?.action
+    if (action && onAction) onAction(null)
+  }, [onAction])
+
   const next = useCallback(() => {
+    closeAction(step)
     if (step < STEPS.length - 1) setStep(s => s + 1)
     else onClose()
-  }, [step, onClose])
+  }, [step, onClose, closeAction])
 
   const prev = useCallback(() => {
+    closeAction(step)
     if (step > 0) setStep(s => s - 1)
-  }, [step])
+  }, [step, closeAction])
 
   // Keyboard navigation
   useEffect(() => {

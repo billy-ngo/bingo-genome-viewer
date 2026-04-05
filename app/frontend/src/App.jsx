@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.8.0'
+const APP_VERSION = '1.8.1'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -550,7 +550,15 @@ function BrowserApp() {
       {showTheme && <ThemeSettings onClose={() => setShowTheme(false)} />}
       {showExport && <ExportImage onClose={() => setShowExport(false)} />}
       {showSession && <SessionManager onClose={() => setShowSession(false)} labelWidth={labelWidth} setLabelWidth={setLabelWidth} />}
-      {showTour && <HelpTour onClose={() => setShowTour(false)} theme={theme} />}
+      {showTour && <HelpTour
+        onClose={() => { setShowTour(false); setShowSettings(false); setShowTheme(false) }}
+        theme={theme}
+        onAction={(action) => {
+          if (action === 'open-settings') { setShowSettings(true); setShowTheme(false) }
+          else if (action === 'open-theme') { setShowTheme(true); setShowSettings(false) }
+          else { setShowSettings(false); setShowTheme(false) }
+        }}
+      />}
 
       {showAbout && (
         <div style={{
