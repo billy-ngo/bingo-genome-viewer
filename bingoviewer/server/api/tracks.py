@@ -110,9 +110,25 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
                 detail=f"Index file detected. Matching BAM not found at '{bam_path}'. Load the .bam file instead."
             )
 
-    p = P(path.strip()).expanduser().resolve()
-    if not p.exists():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}. Please provide the full absolute path (e.g., /Users/name/data/file.bam or C:\\Users\\name\\data\\file.bam).")
+    p = P(path.strip()).expanduser()
+    # Try both the raw path and the resolved path (symlinks may differ)
+    if not p.exists() and not p.resolve().exists():
+        # Give a helpful diagnostic
+        parent = p.parent
+        if parent.exists():
+            detail = f"File not found: {p.name} in {parent}. Check the filename for typos."
+        else:
+            # Walk up to find where the path breaks
+            broken = p
+            while not broken.parent.exists() and broken.parent != broken:
+                broken = broken.parent
+            detail = f"Directory not found: {broken.parent}. Check the path for typos."
+        raise HTTPException(status_code=404, detail=detail)
+    # Use whichever path form exists
+    if p.exists():
+        p = p.resolve()
+    else:
+        p = p.resolve()
     if not p.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {path}")
     path = str(p)
