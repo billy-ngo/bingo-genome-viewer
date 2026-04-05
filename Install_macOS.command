@@ -4,6 +4,11 @@
 #  Double-click (or run) this file to install and launch.
 # ──────────────────────────────────────────────────────────────
 
+# Ensure stdin is connected to the terminal (needed when double-clicked)
+if [ ! -t 0 ]; then
+    exec < /dev/tty
+fi
+
 clear
 echo ""
 echo "  =========================================="
@@ -89,13 +94,15 @@ if [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
     echo "  Installing from local source..."
     echo ""
     "$VENV/bin/python" -m pip install "$SCRIPT_DIR" -q
+    INSTALL_OK=$?
 else
     echo "  Installing latest version from PyPI..."
     echo ""
     "$VENV/bin/python" -m pip install bingoviewer
+    INSTALL_OK=$?
 fi
 
-if [ $? -ne 0 ]; then
+if [ "$INSTALL_OK" -ne 0 ]; then
     echo ""
     echo "  Install failed."
     echo ""
@@ -156,6 +163,7 @@ case "$LAUNCH" in
         echo ""
         echo "  To launch later, run:  bingo"
         echo ""
+        read -n1 -s -p "  Press any key to close..."
         exit 0
         ;;
 esac
