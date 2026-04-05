@@ -144,15 +144,20 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
 
   for (const track of tracks) {
     const data = getLiveTrackData(track.id)
-    // Draw track data first (clipped to track area)
-    svg += `<g transform="translate(${labelW},${yOff})" clip-path="url(#trackClip)">\n`
-    svg += `<rect width="${trackW}" height="${track.height}" fill="${theme.canvasBg}"/>\n`
+    const trackName = esc(track.name).replace(/\s+/g, '_')
+    svg += `<g transform="translate(${labelW},${yOff})" clip-path="url(#trackClip)" id="track-${trackName}">\n`
+    // Background (separate element)
+    svg += `<rect width="${trackW}" height="${track.height}" fill="${theme.canvasBg}" class="track-bg"/>\n`
+    // Track content in grouped layers
     if (track.track_type === 'coverage' || track.track_type === 'reads') {
-      svg += svgCoverage(data, region, track, trackW, track.height, theme)
+      const parts = svgCoverageParts(data, region, track, trackW, track.height, theme)
+      if (parts.bars) svg += `<g class="track-bars">\n${parts.bars}</g>\n`
+      if (parts.outline) svg += `<g class="track-outline">\n${parts.outline}</g>\n`
+      if (parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
     } else if (track.track_type === 'annotations' || track.track_type === 'genome_annotations') {
-      svg += svgAnnotations(data, region, track, trackW, track.height, theme)
+      svg += `<g class="track-features">\n${svgAnnotations(data, region, track, trackW, track.height, theme)}</g>\n`
     } else if (track.track_type === 'variants') {
-      svg += svgVariants(data, region, track, trackW, track.height, theme)
+      svg += `<g class="track-variants">\n${svgVariants(data, region, track, trackW, track.height, theme)}</g>\n`
     }
     svg += `</g>\n`
     // Draw labels ON TOP so they are never obscured
@@ -224,9 +229,10 @@ function svgLogScale(val, max) {
   return Math.log2(val + 1) / Math.log2(max + 1)
 }
 
-function svgCoverage(data, region, track, w, h, theme) {
-  if (!data?.bins?.length) return ''
-  let s = ''
+/** Returns { bars, outline, labels } as separate SVG strings for grouping. */
+function svgCoverageParts(data, region, track, w, h, theme) {
+  if (!data?.bins?.length) return { bars: '', outline: '', labels: '' }
+  let bars = '', outline = '', labels = ''
   const maxVal = data.max_value || 0
   const minVal = data.min_value || 0
   const hasNeg = minVal < 0
@@ -236,7 +242,6 @@ function svgCoverage(data, region, track, w, h, theme) {
   const userScaleMax = track.scaleMax
   const userScaleMin = track.scaleMin
   const useLog = track.logScale === true
-  // Filter to only bins overlapping the visible region
   const visibleBins = data.bins.filter(b => b.end > rStart && b.start < rEnd)
 
   const barAuto = track.barAutoWidth !== false
@@ -260,15 +265,15 @@ function svgCoverage(data, region, track, w, h, theme) {
     const botH = h - midY - 6
     const posMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
     const negMax = userScaleMin != null ? userScaleMin : (Math.abs(minVal) || 1)
-    s += `<line x1="0" y1="${midY}" x2="${w}" y2="${midY}" stroke="${theme.centerLine}" stroke-width="1"/>\n`
+    bars += `<line x1="0" y1="${midY}" x2="${w}" y2="${midY}" stroke="${theme.centerLine}" stroke-width="1"/>\n`
     if (showBars) {
       for (const bin of visibleBins) {
         const x = ((bin.start - rStart) / regionLen) * w
         const bw = autoW(((bin.end - bin.start) / regionLen) * w)
         const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
         const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
-        if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; s += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${color}"/>\n` }
-        if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; s += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${adjustColorSvg(color, -40)}"/>\n` }
+        if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; bars += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${color}"/>\n` }
+        if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; bars += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${adjustColorSvg(color, -40)}"/>\n` }
       }
     }
     if (showOutline && visibleBins.length > 0) {
@@ -277,12 +282,12 @@ function svgCoverage(data, region, track, w, h, theme) {
       const fwdS = svgSmoothValues(fwdRaw, outSmooth)
       const revS = svgSmoothValues(revRaw, outSmooth)
       const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
-      s += svgOutlinePath(xs, fwdS.map(r => midY - r * topH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
-      s += svgOutlinePath(xs, revS.map(r => midY + r * botH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
+      outline += svgOutlinePath(xs, fwdS.map(r => midY - r * topH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
+      outline += svgOutlinePath(xs, revS.map(r => midY + r * botH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
     }
     const lbl = useLog ? ' log\u2082' : ''
-    s += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${posMax.toFixed(1)}${lbl}</text>\n`
-    s += `<text x="2" y="${h - 2}" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">\u2212${negMax.toFixed(1)}${lbl}</text>\n`
+    labels += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${posMax.toFixed(1)}${lbl}</text>\n`
+    labels += `<text x="2" y="${h - 2}" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">\u2212${negMax.toFixed(1)}${lbl}</text>\n`
   } else {
     const effMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
     if (showBars) {
@@ -291,7 +296,7 @@ function svgCoverage(data, region, track, w, h, theme) {
         const bw = autoW(((bin.end - bin.start) / regionLen) * w)
         const r = useLog ? svgLogScale(bin.value, effMax) : bin.value / effMax
         const bh = r * (h - 14)
-        s += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${color}"/>\n`
+        bars += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${color}"/>\n`
       }
     }
     if (showOutline && visibleBins.length > 0) {
@@ -299,12 +304,12 @@ function svgCoverage(data, region, track, w, h, theme) {
       const smoothed = svgSmoothValues(rawR, outSmooth)
       const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
       const ys = smoothed.map(r => h - r * (h - 14) - 2)
-      s += svgOutlinePath(xs, ys, outColor || theme.textPrimary || '#fff', outSmooth > 0)
+      outline += svgOutlinePath(xs, ys, outColor || theme.textPrimary || '#fff', outSmooth > 0)
     }
     const lbl = useLog ? ' log\u2082' : ''
-    s += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${effMax.toFixed(1)}${lbl}</text>\n`
+    labels += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${effMax.toFixed(1)}${lbl}</text>\n`
   }
-  return s
+  return { bars, outline, labels }
 }
 
 function svgAnnotations(data, region, track, w, h, theme) {
