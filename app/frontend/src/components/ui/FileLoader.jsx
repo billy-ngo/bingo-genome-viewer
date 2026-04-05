@@ -413,7 +413,7 @@ export default function FileLoader() {
       setBamPrompt(p => ({ ...p, error: 'Please select a .bam file' }))
       return
     }
-    setBamPrompt(p => ({ ...p, bamFile: f, bamPath: f.name, error: null }))
+    setBamPrompt(p => ({ ...p, bamFile: f, bamPath: '', error: null }))
   }
 
   function bamPromptOnBaiFile(e) {
@@ -424,33 +424,53 @@ export default function FileLoader() {
       setBamPrompt(p => ({ ...p, error: 'Please select a .bai index file' }))
       return
     }
-    setBamPrompt(p => ({ ...p, indexFile: f, indexPath: f.name, error: null }))
+    setBamPrompt(p => ({ ...p, indexFile: f, indexPath: '', error: null }))
+  }
+
+  function bamPromptHasBam(p) {
+    return p && (p.bamFile || p.bamPath.trim())
+  }
+  function bamPromptHasBai(p) {
+    return p && (p.indexFile || p.indexPath.trim())
+  }
+  function bamPromptReady(p) {
+    return bamPromptHasBam(p) && bamPromptHasBai(p)
   }
 
   async function bamPromptLoad() {
     if (!bamPrompt) return
     const { bamFile, indexFile, bamPath, indexPath } = bamPrompt
+    const hasBamPath = bamPath.trim()
+    const hasBaiPath = indexPath.trim()
 
-    // Validate both files are present
-    const usePath = bamPath && !bamFile && bamPath.includes('/')
-    if (!bamFile && !bamPath) {
-      setBamPrompt(p => ({ ...p, error: 'BAM file is required' }))
+    if (!bamFile && !hasBamPath) {
+      setBamPrompt(p => ({ ...p, error: 'BAM file or path is required' }))
       return
     }
-    if (!indexFile && !indexPath) {
-      setBamPrompt(p => ({ ...p, error: 'BAM index (.bai) file is required' }))
+    if (!indexFile && !hasBaiPath) {
+      setBamPrompt(p => ({ ...p, error: 'BAM index (.bai) file or path is required' }))
+      return
+    }
+
+    // Validate path extensions
+    if (hasBamPath && !hasBamPath.toLowerCase().endsWith('.bam')) {
+      setBamPrompt(p => ({ ...p, error: 'BAM path must end with .bam' }))
+      return
+    }
+    if (hasBaiPath && !hasBaiPath.toLowerCase().endsWith('.bai')) {
+      setBamPrompt(p => ({ ...p, error: 'Index path must end with .bai' }))
       return
     }
 
     setBamPrompt(null)
 
-    // If using file path (typed), load via path endpoint
-    if (!bamFile && bamPath) {
-      await loadFromPath(bamPath)
+    // If both are paths, load via path endpoint (server reads directly)
+    if (!bamFile && hasBamPath) {
+      await loadFromPath(hasBamPath)
       return
     }
 
-    // Upload both files together
+    // Upload files
     await loadTrackEntries([{ file: bamFile, indexFile: indexFile }])
   }
 
@@ -606,45 +626,71 @@ export default function FileLoader() {
       )}
 
       {/* BAM + BAI pairing dialog */}
-      {bamPrompt && (
+      {bamPrompt && (() => {
+        const ready = bamPromptReady(bamPrompt)
+        const bamSizeMb = bamPrompt.bamFile ? bamPrompt.bamFile.size / (1024 * 1024) : 0
+        const isLargeUpload = bamPrompt.bamFile && bamSizeMb > 50
+        const bamOk = bamPromptHasBam(bamPrompt)
+        const baiOk = bamPromptHasBai(bamPrompt)
+        const pathInputStyle = {
+          flex: 1, padding: '5px 8px', borderRadius: 4, fontSize: 11,
+          background: theme.inputBg, color: theme.textPrimary,
+          fontFamily: 'monospace',
+        }
+        return (
         <div style={S.promptOverlay} onClick={bamPromptCancel}>
-          <div style={{ ...S.promptBox, maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+          <div style={{ ...S.promptBox, maxWidth: 500 }} onClick={e => e.stopPropagation()}>
             <div style={S.promptTitle}>Load BAM Track</div>
             <div style={{ ...S.promptText, marginBottom: 12 }}>
-              BAM files require a matching <strong>.bai</strong> index file. Select both files to load the track.
+              BAM files require a matching <strong>.bai</strong> index. Browse for files or paste local paths.
             </div>
 
-            {/* BAM file slot */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: theme.textSecondary, width: 65, flexShrink: 0 }}>.bam file</span>
-              <div style={{
-                flex: 1, padding: '6px 10px', borderRadius: 4, fontSize: 12,
-                background: theme.inputBg, border: `1px solid ${bamPrompt.bamFile ? '#66bb6a' : theme.borderAccent}`,
-                color: bamPrompt.bamFile ? theme.textPrimary : theme.textTertiary,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>
-                {bamPrompt.bamFile ? bamPrompt.bamFile.name : 'No file selected'}
+            {/* BAM slot */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 4, fontWeight: 600 }}>
+                .bam file {bamOk && <span style={{ color: '#66bb6a' }}>{'\u2713'}</span>}
               </div>
-              <button style={{ ...S.promptBtn, padding: '4px 12px' }} onClick={bamPromptPickBam}>Browse</button>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={bamPrompt.bamFile ? bamPrompt.bamFile.name : bamPrompt.bamPath}
+                  onChange={e => setBamPrompt(p => ({ ...p, bamPath: e.target.value, bamFile: null, error: null }))}
+                  placeholder="/path/to/reads.bam"
+                  style={{ ...pathInputStyle, border: `1px solid ${bamOk ? '#66bb6a' : theme.borderAccent}` }}
+                />
+                <button style={{ ...S.promptBtn, padding: '4px 12px', whiteSpace: 'nowrap' }} onClick={bamPromptPickBam}>Browse</button>
+              </div>
             </div>
 
-            {/* BAI file slot */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 11, color: theme.textSecondary, width: 65, flexShrink: 0 }}>.bai index</span>
-              <div style={{
-                flex: 1, padding: '6px 10px', borderRadius: 4, fontSize: 12,
-                background: theme.inputBg, border: `1px solid ${bamPrompt.indexFile ? '#66bb6a' : theme.borderAccent}`,
-                color: bamPrompt.indexFile ? theme.textPrimary : theme.textTertiary,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>
-                {bamPrompt.indexFile ? bamPrompt.indexFile.name : 'No file selected'}
+            {/* BAI slot */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 4, fontWeight: 600 }}>
+                .bai index {baiOk && <span style={{ color: '#66bb6a' }}>{'\u2713'}</span>}
               </div>
-              <button style={{ ...S.promptBtn, padding: '4px 12px' }} onClick={bamPromptPickBai}>Browse</button>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={bamPrompt.indexFile ? bamPrompt.indexFile.name : bamPrompt.indexPath}
+                  onChange={e => setBamPrompt(p => ({ ...p, indexPath: e.target.value, indexFile: null, error: null }))}
+                  placeholder="/path/to/reads.bam.bai"
+                  style={{ ...pathInputStyle, border: `1px solid ${baiOk ? '#66bb6a' : theme.borderAccent}` }}
+                />
+                <button style={{ ...S.promptBtn, padding: '4px 12px', whiteSpace: 'nowrap' }} onClick={bamPromptPickBai}>Browse</button>
+              </div>
             </div>
 
             {/* Hidden file inputs */}
             <input ref={bamPickerRef} type="file" accept=".bam" style={{ display: 'none' }} onChange={bamPromptOnBamFile} />
             <input ref={baiPickerRef} type="file" accept=".bai,.bam.bai" style={{ display: 'none' }} onChange={bamPromptOnBaiFile} />
+
+            {/* Large file warning — only when a file (not path) is selected */}
+            {isLargeUpload && (
+              <div style={{ fontSize: 11, color: '#ffb74d', marginBottom: 8, padding: '6px 10px',
+                background: 'rgba(255,183,77,0.1)', borderRadius: 4, border: '1px solid rgba(255,183,77,0.3)' }}>
+                <strong>Large file ({bamSizeMb.toFixed(0)} MB)</strong> — uploading may be slow.
+                Paste the file path instead for instant loading (the server reads directly from disk).
+              </div>
+            )}
 
             {/* Error message */}
             {bamPrompt.error && (
@@ -653,20 +699,23 @@ export default function FileLoader() {
               </div>
             )}
 
-            {/* Hint */}
-            <div style={{ fontSize: 10, color: theme.textTertiary, marginBottom: 12 }}>
-              Tip: For large BAM files, use the <strong>Path</strong> button instead — the server reads directly from disk without uploading.
-            </div>
+            {/* Path hint */}
+            {!isLargeUpload && (
+              <div style={{ fontSize: 10, color: theme.textTertiary, marginBottom: 10 }}>
+                Tip: Paste a local file path to skip uploading — the server reads directly from disk.
+                The .bai is auto-discovered if next to the .bam.
+              </div>
+            )}
 
             <div style={S.promptBtns}>
               <button style={S.promptBtn} onClick={bamPromptCancel}>Cancel</button>
               <button
                 style={{
                   ...S.promptBtnPrimary,
-                  opacity: (bamPrompt.bamFile && bamPrompt.indexFile) ? 1 : 0.4,
-                  cursor: (bamPrompt.bamFile && bamPrompt.indexFile) ? 'pointer' : 'default',
+                  opacity: ready ? 1 : 0.4,
+                  cursor: ready ? 'pointer' : 'default',
                 }}
-                disabled={!bamPrompt.bamFile || !bamPrompt.indexFile}
+                disabled={!ready}
                 onClick={bamPromptLoad}
               >
                 Open
@@ -674,7 +723,8 @@ export default function FileLoader() {
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
