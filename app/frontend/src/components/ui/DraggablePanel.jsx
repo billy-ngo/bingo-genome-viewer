@@ -13,6 +13,7 @@ const MIN_W = 260
 const MIN_H = 180
 const SCALE_BASE_W = 440     // width at which scale = 1.0
 const MIN_SCALE = 0.78       // don't scale below this (keeps text ≥ ~11px)
+const MAX_SCALE = 1.4        // don't scale above this
 
 export default function DraggablePanel({ title, onClose, theme, children, defaultWidth = 440, defaultHeight = 500 }) {
   const [pos, setPos] = useState(() => ({
@@ -25,12 +26,10 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
 
   const scale = useMemo(() => {
     const raw = size.w / SCALE_BASE_W
-    if (raw >= 1) return 1
-    return Math.max(MIN_SCALE, raw)
+    return Math.max(MIN_SCALE, Math.min(MAX_SCALE, raw))
   }, [size.w])
 
-  // When scaled down, the content is larger than the container in logical pixels
-  // so scrolling kicks in naturally via overflowY: auto on the body
+  // Content width in logical pixels (before scaling)
   const contentWidth = size.w / scale
 
   const onDragStart = useCallback((e) => {
@@ -103,9 +102,9 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
       flex: 1, overflowY: 'auto', overflowX: 'hidden',
     },
     scaledContent: {
-      transform: scale < 1 ? `scale(${scale})` : undefined,
+      transform: scale !== 1 ? `scale(${scale})` : undefined,
       transformOrigin: 'top left',
-      width: scale < 1 ? contentWidth : '100%',
+      width: scale !== 1 ? contentWidth : '100%',
     },
     resizeHandle: {
       position: 'absolute', right: 0, bottom: 0, width: 14, height: 14,
