@@ -24,7 +24,7 @@ from api.genome import router as genome_router
 from api.tracks import router as tracks_router
 from api.data import router as data_router
 
-app = FastAPI(title="BiNgo Genome Viewer API", version="2.0.5")
+app = FastAPI(title="BiNgo Genome Viewer API", version="2.0.6")
 
 app.add_middleware(
     CORSMiddleware,

@@ -115,6 +115,16 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     if not p.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {path}")
     path = str(p)
+
+    # Verify the file is actually readable (catches OneDrive "online only" files)
+    try:
+        with open(path, 'rb') as f:
+            f.read(1)
+    except PermissionError:
+        raise HTTPException(status_code=400, detail=f"Cannot read file: {p.name}. If this is a cloud-synced file (OneDrive, Dropbox), make sure it is downloaded locally (not 'online only').")
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"Cannot read file: {p.name}. {e}")
+
     try:
         display_name = _clean_name(name) if name else p.name
         track = app_state.load_track(path, display_name)

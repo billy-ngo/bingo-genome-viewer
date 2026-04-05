@@ -78,6 +78,14 @@ async def load_genome_from_path(path: str = Form(...)):
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {path}")
+    # Verify file is readable (catches cloud-synced "online only" files)
+    try:
+        with open(str(resolved), 'rb') as f:
+            f.read(1)
+    except PermissionError:
+        raise HTTPException(status_code=400, detail=f"Cannot read file: {resolved.name}. If this is a cloud-synced file (OneDrive, Dropbox), make sure it is downloaded locally (not 'online only').")
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"Cannot read file: {resolved.name}. {e}")
     try:
         app_state.load_genome(str(resolved))
         genome = app_state.genome
