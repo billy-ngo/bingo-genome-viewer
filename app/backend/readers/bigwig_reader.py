@@ -363,7 +363,14 @@ class WigReader:
                     continue
 
                 # Data lines start with a digit or '-'
-                if header_seen and (c0.isdigit() or c0 == '-'):
+                if c0.isdigit() or c0 == '-':
+                    # Headerless file: use placeholder chrom name
+                    if not chrom:
+                        chrom = "_headerless"
+                        positions.setdefault(chrom, [])
+                        values.setdefault(chrom, [])
+                        header_seen = True
+
                     parts = line.split()
                     try:
                         if fixed:
@@ -391,6 +398,14 @@ class WigReader:
                             positions[chrom].append(p0)
                             values[chrom].append(v)
                             chroms[chrom] = max(chroms.get(chrom, 0), p0 + span)
+                        else:
+                            # Single column — treat as fixedStep value
+                            v = float(parts[0])
+                            p0 = pos - 1
+                            positions[chrom].append(p0)
+                            values[chrom].append(v)
+                            chroms[chrom] = max(chroms.get(chrom, 0), p0 + 1)
+                            pos += 1
                     except (ValueError, IndexError):
                         pass
                     continue
