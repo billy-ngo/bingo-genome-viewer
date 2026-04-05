@@ -9,80 +9,118 @@
  */
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 
+const B = (t) => <strong>{t}</strong>
+const Li = ({ children }) => <div style={{ display: 'flex', gap: 6, marginTop: 4 }}><span style={{ opacity: 0.5 }}>{'\u2022'}</span><span>{children}</span></div>
+const Kbd = ({ children }) => <span style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 3, padding: '0 4px', fontSize: 11, fontFamily: 'monospace' }}>{children}</span>
+
 const STEPS = [
   {
     target: 'file-loader',
     title: 'Load Files',
-    description:
-      'Select genome and track files using the file picker, drag and drop, or paste a local file path. ' +
-      'Supported formats: FASTA, GenBank, BAM (+BAI), BigWig, WIG, BedGraph, VCF, BED, GTF, GFF.',
+    description: <>
+      Upload genome and track files via:
+      <Li>{B('File picker')} — click "Choose Files"</Li>
+      <Li>{B('Drag & drop')} — drop files anywhere on the app</Li>
+      <Li>{B('Local path')} — paste a file path (best for large files)</Li>
+      <div style={{ marginTop: 8, opacity: 0.7 }}>
+        Supported: FASTA, GenBank, BAM, BigWig, WIG, BedGraph, VCF, BED, GTF, GFF
+      </div>
+    </>,
     position: 'bottom',
   },
   {
     target: 'nav-bar',
-    title: 'Navigation & Scrubber',
-    description:
-      'Switch chromosomes, type coordinates (chr1:1000-5000) to jump, zoom with \uFF0D/\uFF0B, and pan with \u25C0/\u25B6. ' +
-      'The blue scrubber bar shows your position \u2014 click or drag it to scroll across the entire chromosome.',
+    title: 'Navigation',
+    description: <>
+      <Li>{B('Chromosome selector')} — switch between chromosomes</Li>
+      <Li>{B('Coordinate input')} — type <Kbd>chr1:1000-5000</Kbd> and press Go</Li>
+      <Li>{B('\uFF0D \uFF0B')} — zoom out / zoom in</Li>
+      <Li>{B('\u25C0 \u25B6')} — pan left / pan right</Li>
+      <Li>{B('Blue scrubber bar')} — click or drag to jump across the chromosome</Li>
+    </>,
     position: 'bottom',
   },
   {
     target: 'track-area',
     title: 'Track Interaction',
-    description:
-      'Left-click drag to pan, scroll to zoom. Right-click drag to select a region \u2014 hover the blue highlight for stats. ' +
-      'Double-click a gene to zoom in with context. Hover features for detailed tooltips.',
+    description: <>
+      <Li>{B('Left-click drag')} — pan the viewport</Li>
+      <Li>{B('Scroll wheel')} — zoom in/out at cursor position</Li>
+      <Li>{B('Right-click drag')} — select a region (hover for stats)</Li>
+      <Li>{B('Double-click gene')} — zoom to fit that gene with context</Li>
+      <Li>{B('Hover features')} — view detailed tooltips</Li>
+    </>,
     position: 'inside',
   },
   {
     target: 'skeleton-track-label',
-    title: 'Track Controls',
-    description:
-      'Drag \u2261 to reorder tracks, click the color swatch to change colors, and click \u00D7 to remove. ' +
-      'Drag the bottom edge of a track to resize its height.',
+    title: 'Track Labels',
+    description: <>
+      <Li>{B('\u2261 Drag handle')} — reorder tracks by dragging</Li>
+      <Li>{B('Color swatch')} — click to pick a color</Li>
+      <Li>{B('\u00D7 Button')} — remove the track</Li>
+      <Li>{B('Bottom edge')} — drag to resize track height</Li>
+    </>,
     position: 'right',
   },
   {
     target: 'btn-settings',
     title: 'Track Settings',
-    description:
-      'Select tracks and adjust: height, color, Y-axis scale (auto/manual/log), bar width, peak outline trace with color picker, ' +
-      'show/hide bars, pointed arrows, and nucleotide display for BAM reads (shows A/C/G/T with mismatch highlighting when zoomed in).',
+    description: <>
+      Select one or more tracks to adjust:
+      <Li>Height, visibility, and fill color</Li>
+      <Li>Bar width, peak outline trace + smoothness</Li>
+      <Li>Y-axis scale (auto / manual / log{'\u2082'})</Li>
+      <Li>Annotation colors per feature type</Li>
+      <Li>Read appearance — strand colors, arrow style & size</Li>
+      <Li>Nucleotide display with mismatch highlighting</Li>
+      <div style={{ marginTop: 6, opacity: 0.7 }}>The panel is draggable — adjust settings while viewing your data.</div>
+    </>,
     position: 'bottom',
     action: 'open-settings',
   },
   {
     target: 'header-btns',
     title: 'Themes',
-    description:
-      'Choose from built-in themes (Dark, Light, Colorblind, Soft, High Contrast) or create a fully custom theme. ' +
-      'Theme preferences persist across sessions.',
+    description: <>
+      <Li>{B('5 built-in themes')} — Dark, Light, Colorblind, Soft, High Contrast</Li>
+      <Li>{B('Custom themes')} — clone any preset and edit every color</Li>
+      <div style={{ marginTop: 6, opacity: 0.7 }}>Theme preferences persist across sessions.</div>
+    </>,
     position: 'bottom',
     action: 'open-theme',
   },
   {
     target: 'btn-export',
     title: 'Export Image',
-    description:
-      'Export your current view as SVG or PNG. The export respects all track settings including peak outlines, bar visibility, and scale labels.',
+    description: <>
+      Export the current view as {B('SVG')} or {B('PNG')}.
+      <Li>Background, bars, outlines, and labels are separate SVG groups</Li>
+      <Li>All track settings (colors, outlines, visibility) are respected</Li>
+      <Li>Edit exported SVGs in Illustrator, Inkscape, or Figma</Li>
+    </>,
     position: 'bottom',
   },
   {
     target: 'header-btns',
     title: 'Sessions',
-    description:
-      'Save Session exports your entire state (genome, tracks, region, zoom, colors, settings) as a JSON file. ' +
-      'Restore it later or share with collaborators. Sessions also auto-save to your browser. ' +
-      'An exit guard warns you before closing if you have unsaved work.',
+    description: <>
+      <Li>{B('Save to file')} — exports genome, tracks, region, zoom, colors, and all settings as JSON</Li>
+      <Li>{B('Restore')} — reload a saved session or the last auto-save</Li>
+      <Li>{B('Auto-save')} — your session saves to the browser automatically</Li>
+      <div style={{ marginTop: 6, opacity: 0.7 }}>An exit guard warns you before closing with unsaved work.</div>
+    </>,
     position: 'bottom',
   },
   {
     target: 'file-loader',
-    title: 'Large File Tips',
-    description:
-      'For large BAM files, use the \uD83D\uDCC2 Path button to paste a local file path \u2014 the server reads directly from disk without uploading. ' +
-      'For large WIG files, convert to BigWig format for instant loading. ' +
-      'The app checks for updates automatically in the background.',
+    title: 'Tips',
+    description: <>
+      <Li>{B('Large BAM files')} — use the <Kbd>{'\uD83D\uDCC2'} Path</Kbd> button to load by file path (no upload needed)</Li>
+      <Li>{B('Large WIG files')} — convert to BigWig for instant loading</Li>
+      <Li>{B('BAM + BAI')} — select both together, or load by path (index auto-discovered)</Li>
+      <Li>{B('Updates')} — the app checks for updates automatically on launch</Li>
+    </>,
     position: 'bottom',
   },
 ]
