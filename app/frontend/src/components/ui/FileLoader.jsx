@@ -73,17 +73,19 @@ function classifyFiles(files) {
 
   // Pair BAM files with their index files by name
   const trackEntries = []
+  const unpairedBams = []
   for (const bam of bamFiles) {
     const baseName = bam.name.replace(/\.bam$/i, '')
     const paired = indexFiles.find(idx => {
       const idxName = idx.name.toLowerCase()
       return idxName === bam.name.toLowerCase() + '.bai' || idxName === baseName.toLowerCase() + '.bai'
     })
-    trackEntries.push({ file: bam, indexFile: paired || null })
-    // Remove paired index from pool
     if (paired) {
+      trackEntries.push({ file: bam, indexFile: paired })
       const i = indexFiles.indexOf(paired)
       if (i !== -1) indexFiles.splice(i, 1)
+    } else {
+      unpairedBams.push(bam)
     }
   }
 
@@ -98,7 +100,7 @@ function classifyFiles(files) {
   }
   unknownFiles.push(...indexFiles)
 
-  return { genomeFiles, trackEntries, unknownFiles }
+  return { genomeFiles, trackEntries, unpairedBams, unknownFiles }
 }
 
 export default function FileLoader() {
@@ -111,11 +113,12 @@ export default function FileLoader() {
   const [progress, setProgress] = useState(null) // { percent, loaded, total, label }
   const [prompt, setPrompt] = useState(null) // { files: File[] }
   const [trackMismatch, setTrackMismatch] = useState(null) // { tracks: [...] }
-  const [baiPrompt, setBaiPrompt] = useState(null) // { indexFiles: File[] }
+  const [bamPrompt, setBamPrompt] = useState(null) // { bamFile, indexFile, bamPath, indexPath, error }
   const [pathText, setPathText] = useState('')
   const [showPathInput, setShowPathInput] = useState(false)
   const inputRef = useRef(null)
   const bamPickerRef = useRef(null)
+  const baiPickerRef = useRef(null)
 
   const ALL_ACCEPT = [
     ...Array.from(GENOME_EXTS),
@@ -262,17 +265,23 @@ export default function FileLoader() {
     const files = Array.from(fileList)
     if (!files.length) return
 
-    const { genomeFiles, trackEntries, unknownFiles } = classifyFiles(files)
+    const { genomeFiles, trackEntries, unpairedBams, unknownFiles } = classifyFiles(files)
 
     if (unknownFiles.length) {
       const orphanBai = unknownFiles.filter(f => f._indexOrphan)
       const otherUnknown = unknownFiles.filter(f => !f._indexOrphan)
       if (orphanBai.length) {
-        setBaiPrompt({ indexFiles: orphanBai })
+        // Lone .bai without .bam — open BAM pairing dialog
+        setBamPrompt({ bamFile: null, indexFile: orphanBai[0], bamPath: '', indexPath: '', error: null })
       }
       if (otherUnknown.length) {
         setErr(`Unsupported: ${otherUnknown.map(f => f.name).join(', ')}`)
       }
+    }
+
+    // Unpaired BAM files — open pairing dialog
+    if (unpairedBams.length > 0) {
+      setBamPrompt({ bamFile: unpairedBams[0], indexFile: null, bamPath: '', indexPath: '', error: null })
     }
 
     // Case 1: No genome loaded — auto-load first genome file
@@ -392,32 +401,60 @@ export default function FileLoader() {
     setPrompt(null)
   }
 
-  function handleBaiPromptPick() {
-    bamPickerRef.current?.click()
-  }
+  // ── BAM pairing dialog handlers ────────────────────────────────
+  function bamPromptPickBam() { bamPickerRef.current?.click() }
+  function bamPromptPickBai() { baiPickerRef.current?.click() }
 
-  async function handleBaiPromptFile(e) {
-    const bamFiles = Array.from(e.target.files || [])
+  function bamPromptOnBamFile(e) {
+    const f = e.target.files?.[0]
     e.target.value = ''
-    if (!bamFiles.length || !baiPrompt) return
-    const idxFiles = baiPrompt.indexFiles
-    setBaiPrompt(null)
-    // Pair each BAM with the best matching index
-    const entries = []
-    for (const bam of bamFiles) {
-      const baseName = bam.name.replace(/\.bam$/i, '')
-      const paired = idxFiles.find(idx => {
-        const n = idx.name.toLowerCase()
-        return n === bam.name.toLowerCase() + '.bai' || n === baseName.toLowerCase() + '.bai'
-      }) || idxFiles[0] || null
-      entries.push({ file: bam, indexFile: paired })
+    if (!f) return
+    if (!f.name.toLowerCase().endsWith('.bam')) {
+      setBamPrompt(p => ({ ...p, error: 'Please select a .bam file' }))
+      return
     }
-    await loadTrackEntries(entries)
+    setBamPrompt(p => ({ ...p, bamFile: f, bamPath: f.name, error: null }))
   }
 
-  function handleBaiPromptSkip() {
-    setBaiPrompt(null)
+  function bamPromptOnBaiFile(e) {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    if (!f.name.toLowerCase().endsWith('.bai')) {
+      setBamPrompt(p => ({ ...p, error: 'Please select a .bai index file' }))
+      return
+    }
+    setBamPrompt(p => ({ ...p, indexFile: f, indexPath: f.name, error: null }))
   }
+
+  async function bamPromptLoad() {
+    if (!bamPrompt) return
+    const { bamFile, indexFile, bamPath, indexPath } = bamPrompt
+
+    // Validate both files are present
+    const usePath = bamPath && !bamFile && bamPath.includes('/')
+    if (!bamFile && !bamPath) {
+      setBamPrompt(p => ({ ...p, error: 'BAM file is required' }))
+      return
+    }
+    if (!indexFile && !indexPath) {
+      setBamPrompt(p => ({ ...p, error: 'BAM index (.bai) file is required' }))
+      return
+    }
+
+    setBamPrompt(null)
+
+    // If using file path (typed), load via path endpoint
+    if (!bamFile && bamPath) {
+      await loadFromPath(bamPath)
+      return
+    }
+
+    // Upload both files together
+    await loadTrackEntries([{ file: bamFile, indexFile: indexFile }])
+  }
+
+  function bamPromptCancel() { setBamPrompt(null) }
 
   async function handleMismatchSkip() {
     if (!trackMismatch) return
@@ -568,26 +605,71 @@ export default function FileLoader() {
         </div>
       )}
 
-      {/* Prompt to select matching BAM for orphaned .bai files */}
-      {baiPrompt && (
-        <div style={S.promptOverlay} onClick={handleBaiPromptSkip}>
-          <div style={S.promptBox} onClick={e => e.stopPropagation()}>
-            <div style={S.promptTitle}>BAM index file detected</div>
-            <div style={S.promptText}>
-              <span style={S.promptFile}>{baiPrompt.indexFiles.map(f => f.name).join(', ')}</span>
-              {' '}is an index file. Please select the matching <strong>.bam</strong> file to load the track.
+      {/* BAM + BAI pairing dialog */}
+      {bamPrompt && (
+        <div style={S.promptOverlay} onClick={bamPromptCancel}>
+          <div style={{ ...S.promptBox, maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+            <div style={S.promptTitle}>Load BAM Track</div>
+            <div style={{ ...S.promptText, marginBottom: 12 }}>
+              BAM files require a matching <strong>.bai</strong> index file. Select both files to load the track.
             </div>
-            <input
-              ref={bamPickerRef}
-              type="file"
-              accept=".bam"
-              style={{ display: 'none' }}
-              onChange={handleBaiPromptFile}
-            />
+
+            {/* BAM file slot */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: theme.textSecondary, width: 65, flexShrink: 0 }}>.bam file</span>
+              <div style={{
+                flex: 1, padding: '6px 10px', borderRadius: 4, fontSize: 12,
+                background: theme.inputBg, border: `1px solid ${bamPrompt.bamFile ? '#66bb6a' : theme.borderAccent}`,
+                color: bamPrompt.bamFile ? theme.textPrimary : theme.textTertiary,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {bamPrompt.bamFile ? bamPrompt.bamFile.name : 'No file selected'}
+              </div>
+              <button style={{ ...S.promptBtn, padding: '4px 12px' }} onClick={bamPromptPickBam}>Browse</button>
+            </div>
+
+            {/* BAI file slot */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span style={{ fontSize: 11, color: theme.textSecondary, width: 65, flexShrink: 0 }}>.bai index</span>
+              <div style={{
+                flex: 1, padding: '6px 10px', borderRadius: 4, fontSize: 12,
+                background: theme.inputBg, border: `1px solid ${bamPrompt.indexFile ? '#66bb6a' : theme.borderAccent}`,
+                color: bamPrompt.indexFile ? theme.textPrimary : theme.textTertiary,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {bamPrompt.indexFile ? bamPrompt.indexFile.name : 'No file selected'}
+              </div>
+              <button style={{ ...S.promptBtn, padding: '4px 12px' }} onClick={bamPromptPickBai}>Browse</button>
+            </div>
+
+            {/* Hidden file inputs */}
+            <input ref={bamPickerRef} type="file" accept=".bam" style={{ display: 'none' }} onChange={bamPromptOnBamFile} />
+            <input ref={baiPickerRef} type="file" accept=".bai,.bam.bai" style={{ display: 'none' }} onChange={bamPromptOnBaiFile} />
+
+            {/* Error message */}
+            {bamPrompt.error && (
+              <div style={{ fontSize: 11, color: '#ef9a9a', marginBottom: 8, padding: '4px 0' }}>
+                {bamPrompt.error}
+              </div>
+            )}
+
+            {/* Hint */}
+            <div style={{ fontSize: 10, color: theme.textTertiary, marginBottom: 12 }}>
+              Tip: For large BAM files, use the <strong>Path</strong> button instead — the server reads directly from disk without uploading.
+            </div>
+
             <div style={S.promptBtns}>
-              <button style={S.promptBtn} onClick={handleBaiPromptSkip}>Skip</button>
-              <button style={S.promptBtnPrimary} onClick={handleBaiPromptPick}>
-                Select .bam file
+              <button style={S.promptBtn} onClick={bamPromptCancel}>Cancel</button>
+              <button
+                style={{
+                  ...S.promptBtnPrimary,
+                  opacity: (bamPrompt.bamFile && bamPrompt.indexFile) ? 1 : 0.4,
+                  cursor: (bamPrompt.bamFile && bamPrompt.indexFile) ? 'pointer' : 'default',
+                }}
+                disabled={!bamPrompt.bamFile || !bamPrompt.indexFile}
+                onClick={bamPromptLoad}
+              >
+                Open
               </button>
             </div>
           </div>
