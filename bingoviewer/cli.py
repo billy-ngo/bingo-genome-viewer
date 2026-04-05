@@ -187,6 +187,78 @@ def check_and_update(force=False):
         return None
 
 
+def _check_update_with_prompt():
+    """Check for updates before launch. If an update is available, prompt the user.
+
+    Works in both terminal mode (interactive prompt) and pythonw mode
+    (shows a tkinter dialog if available, otherwise updates silently).
+    """
+    if not _should_check_update():
+        return
+
+    _record_update_check()
+
+    installed = _get_installed_version()
+    latest = _get_pypi_version()
+
+    if latest is None or _version_tuple(latest) <= _version_tuple(installed):
+        return
+
+    # Determine if we have a terminal for interactive prompt
+    has_terminal = sys.stdout is not None and hasattr(sys.stdout, 'write')
+    try:
+        if has_terminal:
+            sys.stdout.write('')
+        else:
+            has_terminal = False
+    except Exception:
+        has_terminal = False
+
+    should_update = False
+
+    if has_terminal:
+        try:
+            print(f"\n  Update available: {installed} → {latest}")
+            answer = input("  Install update now? [Y/n]: ").strip()
+            should_update = answer.lower() != 'n'
+        except (EOFError, OSError):
+            # No stdin (e.g. pythonw) — try tkinter
+            should_update = _tk_update_prompt(installed, latest)
+    else:
+        should_update = _tk_update_prompt(installed, latest)
+
+    if should_update:
+        _log(f"  Updating BiNgo Genome Viewer: {installed} → {latest} ...")
+        if _do_upgrade():
+            _log(f"  Updated to {latest}.")
+            # Re-exec to pick up new version
+            try:
+                args = [a for a in sys.argv[1:] if a != '--update']
+                os.execv(sys.executable, [sys.executable, "-m", "bingoviewer", "--no-update"] + args)
+            except Exception:
+                _log(f"  Restart failed. Please run 'bingo' again.")
+        else:
+            _log(f"  Update failed. You can retry with: bingo --update")
+
+
+def _tk_update_prompt(installed, latest):
+    """Show a tkinter yes/no dialog for update. Returns True to update."""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        answer = messagebox.askyesno(
+            "BiNgo Genome Viewer Update",
+            f"A new version is available: {installed} → {latest}\n\n"
+            f"Install the update now?",
+        )
+        root.destroy()
+        return answer
+    except Exception:
+        return False  # Can't prompt, skip update
+
+
 def _restart():
     """Restart the process to pick up the new version.
 
@@ -338,13 +410,18 @@ def main():
     if args.update:
         new_ver = check_and_update(force=True)
         if new_ver:
-            _restart()
+            print(f"  BiNgo Genome Viewer updated to {new_ver}.")
+            print(f"  Run 'bingo' to launch the new version.")
         else:
             print(f"  BiNgo Genome Viewer {_get_installed_version()} is up to date.")
         return 0
 
     # ── Welcome message on first run / upgrade ─────────────────────
     _show_welcome_if_new()
+
+    # ── Pre-launch update check (prompt user) ──────────────────────
+    if not args.no_update:
+        _check_update_with_prompt()
 
     # ── Single-instance check (fast: PID probe → quick HTTP) ──────
     existing = _check_existing_server(args.host, args.port)
@@ -374,16 +451,6 @@ def main():
     # Write lock file and register cleanup
     _write_lock(args.host, args.port)
     atexit.register(_remove_lock)
-
-    # ── Background update check (runs while server is active) ─────
-    if not args.no_update:
-        def _bg_update():
-            """Check for updates after a short delay, only while the server is running."""
-            time.sleep(5)  # let the server finish starting
-            new_ver = check_and_update(force=False)
-            if new_ver:
-                _log(f"  Update to {new_ver} installed. Restart bingo to use it.")
-        threading.Thread(target=_bg_update, daemon=True).start()
 
     # ── Start server ──────────────────────────────────────────────
     # On Windows, Python's default ProactorEventLoop has a known bug where
