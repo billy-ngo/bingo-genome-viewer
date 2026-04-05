@@ -3,11 +3,16 @@
  *
  * Does NOT use an overlay — the rest of the app remains interactive.
  * Only one instance of each panel type should be rendered at a time.
+ *
+ * Content scales with panel width (down to a minimum font size),
+ * then switches to scrolling when the panel is too small to scale further.
  */
-import React, { useRef, useState, useCallback, useEffect } from 'react'
+import React, { useRef, useState, useCallback, useMemo } from 'react'
 
-const MIN_W = 320
-const MIN_H = 200
+const MIN_W = 260
+const MIN_H = 180
+const SCALE_BASE_W = 440     // width at which scale = 1.0
+const MIN_SCALE = 0.78       // don't scale below this (keeps text ≥ ~11px)
 
 export default function DraggablePanel({ title, onClose, theme, children, defaultWidth = 440, defaultHeight = 500 }) {
   const [pos, setPos] = useState(() => ({
@@ -17,9 +22,17 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
   const [size, setSize] = useState({ w: defaultWidth, h: Math.min(defaultHeight, window.innerHeight - 120) })
   const dragRef = useRef(null)
   const resizeRef = useRef(null)
-  const panelRef = useRef(null)
 
-  // Drag handler
+  const scale = useMemo(() => {
+    const raw = size.w / SCALE_BASE_W
+    if (raw >= 1) return 1
+    return Math.max(MIN_SCALE, raw)
+  }, [size.w])
+
+  // When scaled down, the content is larger than the container in logical pixels
+  // so scrolling kicks in naturally via overflowY: auto on the body
+  const contentWidth = size.w / scale
+
   const onDragStart = useCallback((e) => {
     if (e.target.closest('input, select, button, label, textarea')) return
     e.preventDefault()
@@ -40,7 +53,6 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
     window.addEventListener('mouseup', onUp)
   }, [pos])
 
-  // Resize handler (bottom-right corner)
   const onResizeStart = useCallback((e) => {
     e.preventDefault()
     e.stopPropagation()
@@ -78,16 +90,22 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
     },
     header: {
       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      padding: '8px 14px', borderBottom: `1px solid ${theme.border}`,
+      padding: `${6 * scale + 2}px ${12 * scale + 2}px`,
+      borderBottom: `1px solid ${theme.border}`,
       cursor: 'grab', userSelect: 'none', flexShrink: 0,
     },
-    title: { fontSize: 13, fontWeight: 700, color: theme.textPrimary },
+    title: { fontSize: Math.max(11, 13 * scale), fontWeight: 700, color: theme.textPrimary },
     closeBtn: {
       background: 'none', border: 'none', color: theme.textSecondary,
-      cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 4px',
+      cursor: 'pointer', fontSize: Math.max(14, 16 * scale), lineHeight: 1, padding: '0 4px',
     },
     body: {
       flex: 1, overflowY: 'auto', overflowX: 'hidden',
+    },
+    scaledContent: {
+      transform: scale < 1 ? `scale(${scale})` : undefined,
+      transformOrigin: 'top left',
+      width: scale < 1 ? contentWidth : '100%',
     },
     resizeHandle: {
       position: 'absolute', right: 0, bottom: 0, width: 14, height: 14,
@@ -96,13 +114,15 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
   }
 
   return (
-    <div ref={panelRef} style={S.panel}>
+    <div style={S.panel}>
       <div style={S.header} onMouseDown={onDragStart}>
         <span style={S.title}>{title}</span>
         <button style={S.closeBtn} onClick={onClose}>{'\u2715'}</button>
       </div>
       <div style={S.body}>
-        {children}
+        <div style={S.scaledContent}>
+          {children}
+        </div>
       </div>
       <div
         style={S.resizeHandle}
