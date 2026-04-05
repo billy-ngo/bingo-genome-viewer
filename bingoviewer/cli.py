@@ -71,12 +71,12 @@ def _show_welcome_if_new():
         print("    - Right-click drag to select a region")
         print("    - Double-click a gene to zoom in")
         print()
-        print("  Commands:")
-        print("    bingo              Launch the viewer")
-        print("    bingo --update     Check for updates")
-        print("    bingo --install    Create a desktop shortcut")
-        print("    bingo --version    Show installed version")
-        print()
+    print("  Commands:")
+    print("    bingo              Launch the viewer")
+    print("    bingo --update     Check for updates")
+    print("    bingo --install    Create a desktop shortcut")
+    print("    bingo --version    Show installed version")
+    print()
 
 
 # ── Auto-update ──────────────────────────────────────────────────
@@ -362,7 +362,8 @@ def _remove_lock():
 
 # ── First-run shortcut prompt ─────────────────────────────────────
 
-def _first_run_shortcut_prompt():
+def _offer_shortcut_install():
+    """Offer to install a desktop shortcut on first run."""
     if _FIRST_RUN_MARKER.exists():
         return
     try:
@@ -370,6 +371,18 @@ def _first_run_shortcut_prompt():
         _FIRST_RUN_MARKER.write_text("prompted")
     except Exception:
         return
+
+    # Try terminal prompt first
+    try:
+        answer = input("  Create a desktop shortcut? [Y/n]: ").strip()
+        if answer.lower() != 'n':
+            from bingoviewer.install_shortcut import main as install_main
+            install_main()
+        return
+    except (EOFError, OSError):
+        pass
+
+    # Fallback: tkinter dialog (pythonw / no terminal)
     try:
         import tkinter as tk
         from tkinter import messagebox
@@ -377,7 +390,7 @@ def _first_run_shortcut_prompt():
         root.withdraw()
         answer = messagebox.askyesno(
             "BiNgo Genome Viewer",
-            "Would you like to create a desktop shortcut for BiNgo Genome Viewer?\n\n"
+            "Would you like to create a desktop shortcut?\n\n"
             "You can also do this later with:  bingo --install",
         )
         root.destroy()
@@ -460,7 +473,7 @@ def main():
         return 0
 
     # First launch — offer desktop shortcut
-    _first_run_shortcut_prompt()
+    _offer_shortcut_install()
 
     # Resolve the URL the browser will open
     url = f"http://{'localhost' if args.host in ('0.0.0.0',) else args.host}:{args.port}"
