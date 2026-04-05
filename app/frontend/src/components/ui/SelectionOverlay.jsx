@@ -3,9 +3,11 @@
  * for right-click-drag selections on the track area.
  *
  * Positioned absolutely inside each track's canvas container.
- * Shows region coordinates, length, and summary stats on hover.
+ * Tooltip uses a portal to document.body so it's never clipped by
+ * overflow:hidden on parent containers.
  */
 import React, { useState, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
 
@@ -13,13 +15,12 @@ export default function SelectionOverlay({ width, height, trackData, trackType }
   const { region, selection, clearSelection } = useBrowser()
   const { theme } = useTheme()
   const [hover, setHover] = useState(false)
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 })
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 })  // viewport-fixed coords
   const overlayRef = useRef(null)
 
   const onMouseMove = useCallback((e) => {
-    if (!overlayRef.current) return
-    const rect = overlayRef.current.getBoundingClientRect()
-    setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    // Store viewport-fixed coords for portal positioning
+    setMousePos({ x: e.clientX, y: e.clientY })
     setHover(true)
   }, [])
 
@@ -41,13 +42,12 @@ export default function SelectionOverlay({ width, height, trackData, trackType }
 
   // Compute summary stats from track data
   const stats = computeStats(selection, trackData, trackType)
-
   const selLen = selection.end - selection.start
 
-  // Tooltip positioning: flip if too close to right edge
-  const tipWidth = 240
-  let tipX = tooltipPos.x + 12
-  if (tipX + tipWidth > width) tipX = tooltipPos.x - tipWidth - 12
+  // Tooltip positioning: fixed to viewport, offset from cursor
+  const tipWidth = 260
+  const tipX = Math.min(mousePos.x + 14, window.innerWidth - tipWidth - 10)
+  const tipY = Math.min(mousePos.y + 14, window.innerHeight - 200)
 
   return (
     <div
@@ -73,13 +73,13 @@ export default function SelectionOverlay({ width, height, trackData, trackType }
         onClick={(e) => { e.stopPropagation(); clearSelection() }}
       />
 
-      {/* Tooltip */}
-      {hover && (
+      {/* Tooltip — rendered via portal so it's never clipped */}
+      {hover && createPortal(
         <div
           style={{
-            position: 'absolute',
+            position: 'fixed',
             left: tipX,
-            top: Math.max(4, tooltipPos.y - 60),
+            top: tipY,
             background: theme.panelBg,
             border: `1px solid ${theme.borderAccent}`,
             borderRadius: 6,
@@ -88,7 +88,7 @@ export default function SelectionOverlay({ width, height, trackData, trackType }
             color: theme.textPrimary,
             lineHeight: 1.6,
             pointerEvents: 'none',
-            zIndex: 100,
+            zIndex: 10000,
             boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
             minWidth: 180,
             maxWidth: tipWidth,
@@ -105,7 +105,8 @@ export default function SelectionOverlay({ width, height, trackData, trackType }
           <div style={{ fontSize: 9, color: theme.textTertiary, marginTop: 4 }}>
             Click to dismiss
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
@@ -124,7 +125,6 @@ function computeStats(selection, trackData, trackType) {
     )
     stats.push({ label: 'Reads in region', value: reads.length.toLocaleString() })
 
-    // Count insertions from CIGAR strings
     let insertions = 0
     for (const r of reads) {
       if (r.cigar) {
@@ -138,7 +138,6 @@ function computeStats(selection, trackData, trackType) {
       stats.push({ label: 'Insertion bases', value: insertions.toLocaleString() })
     }
 
-    // Average MAPQ
     if (reads.length > 0) {
       const avgMapq = reads.reduce((s, r) => s + (r.mapq || 0), 0) / reads.length
       stats.push({ label: 'Avg MAPQ', value: avgMapq.toFixed(1) })

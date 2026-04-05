@@ -17,7 +17,7 @@ const ARROW_TIP = 8
 
 export default function AnnotationTrack({ track, width, height, onWarning }) {
   const canvasRef = useRef(null)
-  const { region } = useBrowser()
+  const { region, navigateTo } = useBrowser()
   const { tracks } = useTracks()
   const { theme } = useTheme()
   const { data, loading, error } = useTrackData(track, region, width)
@@ -154,6 +154,28 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
 
   const onMouseLeave = useCallback(() => setTooltip(null), [])
 
+  const onDoubleClick = useCallback((e) => {
+    const canvas = canvasRef.current
+    if (!canvas || !region) return
+    const rect = canvas.getBoundingClientRect()
+    const mx = (e.clientX - rect.left) * (width / rect.width)
+    const my = (e.clientY - rect.top) * (height / rect.height)
+
+    for (const box of hitBoxesRef.current) {
+      if (mx >= box.x && mx <= box.x + box.w && my >= box.y && my <= box.y + box.h) {
+        const feat = box.feat
+        const featLen = feat.end - feat.start
+        // Add ~15% context on each side
+        const context = featLen * 0.15 / (1 - 0.30)  // so gene occupies ~70% of view
+        const viewStart = feat.start - context
+        const viewEnd = feat.end + context
+        navigateTo(region.chrom, viewStart, viewEnd)
+        setTooltip(null)
+        return
+      }
+    }
+  }, [width, height, region, navigateTo])
+
   // Compute per-track stats for the hovered feature
   const trackStats = tooltip ? computeTrackStats(tooltip.feat, tracks, region?.chrom) : []
 
@@ -225,6 +247,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         style={{ display: 'block', width: '100%', height }}
         onMouseMove={onMouseMove}
         onMouseLeave={onMouseLeave}
+        onDoubleClick={onDoubleClick}
       />
       {tooltipEl}
     </div>
