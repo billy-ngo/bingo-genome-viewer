@@ -34,6 +34,7 @@ export default function TrackSettings({ onClose }) {
   const commonLogScale = selectedTracks.length > 0 && selectedTracks.every(t => t.logScale === selectedTracks[0].logScale) ? selectedTracks[0].logScale : null
   const commonBarAutoWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barAutoWidth === selectedTracks[0].barAutoWidth) ? selectedTracks[0].barAutoWidth : null
   const commonBarWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barWidth === selectedTracks[0].barWidth) ? selectedTracks[0].barWidth : undefined
+  const commonShowOutline = selectedTracks.length > 0 && selectedTracks.every(t => t.showOutline === selectedTracks[0].showOutline) ? selectedTracks[0].showOutline : null
 
   function applyToSelected(updates) { updateMultipleTracks([...selected], updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
@@ -135,6 +136,19 @@ export default function TrackSettings({ onClose }) {
                   </div>
                 )}
               </>
+            )}
+
+            {hasBars && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Peak outline</span>
+                <label style={S.cbLabel}>
+                  <input type="checkbox" checked={commonShowOutline === true}
+                    ref={el => { if (el) el.indeterminate = commonShowOutline === null }}
+                    onChange={e => applyToSelected({ showOutline: e.target.checked })}
+                    style={{ cursor: 'pointer' }} />
+                  Trace peaks
+                </label>
+              </div>
             )}
 
             {hasAnnotation && (

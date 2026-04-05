@@ -64,6 +64,24 @@ export default function ReadTrack({ track, width, height, onWarning }) {
         const barH = ratio * (height - 14)
         ctx.fillRect(x, height - barH - 2, w, barH)
       }
+      // Peak outline trace
+      if (track.showOutline && data.bins.length > 0) {
+        ctx.beginPath()
+        const baseline = height - 2
+        ctx.moveTo(((data.bins[0].start - regionStart) / regionLen) * width, baseline)
+        for (const bin of data.bins) {
+          const x = ((bin.start - regionStart) / regionLen) * width
+          const xEnd = ((bin.end - regionStart) / regionLen) * width
+          const ratio = Math.min(1, bin.value / maxVal)
+          const y = height - ratio * (height - 14) - 2
+          ctx.lineTo(x, y); ctx.lineTo(xEnd, y)
+        }
+        ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, baseline)
+        ctx.strokeStyle = theme.textPrimary || '#fff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      }
+
       drawLabel(ctx, maxVal.toFixed(1), 2, 2, theme)
       drawLabel(ctx, '0', 2, height - 12, theme, true)
       ctx.fillStyle = '#ffb74d'; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.textAlign = 'right'
@@ -189,7 +207,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
         ? `${hiddenReads} read${hiddenReads > 1 ? 's' : ''} hidden \u2014 increase track height to show all`
         : null)
     }
-  }, [data, loading, width, height, region, track.color, track.scaleMax, track.scaleMin, track.barAutoWidth, track.barWidth, theme])
+  }, [data, loading, width, height, region, track.color, track.scaleMax, track.scaleMin, track.barAutoWidth, track.barWidth, track.showOutline, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }
