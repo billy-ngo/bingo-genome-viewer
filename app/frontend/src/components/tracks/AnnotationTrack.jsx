@@ -10,10 +10,14 @@ import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTrackData, getCachedDataForTrack } from '../../hooks/useTrackData'
+import { genomeApi } from '../../api/client'
 
 const FEAT_HEIGHT = 16
+const NUCL_FEAT_HEIGHT = 22  // taller when showing nucleotides
 const ROW_GAP = 4
 const ARROW_TIP = 8
+const NUCL_PX_THRESHOLD = 6  // min px/bp to show nucleotide letters
+const BASE_COLORS = { A: '#4caf50', T: '#f44336', C: '#2196f3', G: '#ff9800', N: '#9e9e9e' }
 
 export default function AnnotationTrack({ track, width, height, onWarning }) {
   const canvasRef = useRef(null)
@@ -22,8 +26,32 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
   const { theme } = useTheme()
   const { data, loading, error } = useTrackData(track, region, width)
   const useArrows = track.useArrows !== false
+  const showNucleotides = track.showNucleotides !== false
   const hitBoxesRef = useRef([])   // [{feat, x, y, w, h}, ...]
   const [tooltip, setTooltip] = useState(null)  // { feat, x, y }
+  const [refSeq, setRefSeq] = useState(null)
+  const refFetchRef = useRef(null)
+
+  // Fetch reference sequence when zoomed in enough
+  useEffect(() => {
+    if (!region || !showNucleotides) { setRefSeq(null); return }
+    const regionLen = region.end - region.start
+    const pxPerBp = width / regionLen
+    if (pxPerBp < NUCL_PX_THRESHOLD || regionLen > 2000) { setRefSeq(null); return }
+
+    if (refSeq && refSeq.chrom === region.chrom &&
+        refSeq.start <= region.start && refSeq.end >= region.end) return
+
+    const fetchStart = Math.max(0, region.start - 500)
+    const fetchEnd = region.end + 500
+    const key = `${region.chrom}:${fetchStart}-${fetchEnd}`
+    if (refFetchRef.current === key) return
+    refFetchRef.current = key
+
+    genomeApi.sequence(region.chrom, fetchStart, fetchEnd)
+      .then(res => setRefSeq({ chrom: region.chrom, start: fetchStart, end: fetchEnd, sequence: res.data.sequence }))
+      .catch(() => {})
+  }, [region?.chrom, region?.start, region?.end, width, showNucleotides])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -64,6 +92,9 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
     }
 
     const regionLen = region.end - region.start
+    const pxPerBp = width / regionLen
+    const showBases = showNucleotides && pxPerBp >= NUCL_PX_THRESHOLD && refSeq != null
+    const fh = showBases ? NUCL_FEAT_HEIGHT : FEAT_HEIGHT
     const rowEnds = []
     const boxes = []
     let hiddenCount = 0
@@ -75,19 +106,19 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
 
       const x = ((feat.start - region.start) / regionLen) * width
       const w = Math.max(2, ((feat.end - feat.start) / regionLen) * width)
-      const y = row * (FEAT_HEIGHT + ROW_GAP) + 2
-      if (y + FEAT_HEIGHT > height) { hiddenCount++; continue }
+      const y = row * (fh + ROW_GAP) + 2
+      if (y + fh > height) { hiddenCount++; continue }
 
       const color = featureColor(feat.feature_type, track, theme)
 
       if (feat.sub_features && feat.sub_features.length > 0) {
         ctx.fillStyle = color + '66'
-        ctx.fillRect(x, y + FEAT_HEIGHT / 2 - 1, w, 2)
+        ctx.fillRect(x, y + fh / 2 - 1, w, 2)
         for (const sf of feat.sub_features) {
           const sx = ((sf.start - region.start) / regionLen) * width
           const sw = Math.max(1, ((sf.end - sf.start) / regionLen) * width)
           const sfColor = featureColor(sf.feature_type, track, theme)
-          const sfH = sf.feature_type === 'CDS' ? FEAT_HEIGHT : FEAT_HEIGHT - 6
+          const sfH = sf.feature_type === 'CDS' ? fh : fh - 6
           const sfY = sf.feature_type === 'CDS' ? y : y + 3
           if (useArrows) {
             drawArrowRect(ctx, sfColor, sx, sfY, sw, sfH, sf.strand || feat.strand)
@@ -98,26 +129,46 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         }
       } else {
         if (useArrows) {
-          drawArrowRect(ctx, color, x, y, w, FEAT_HEIGHT, feat.strand)
+          drawArrowRect(ctx, color, x, y, w, fh, feat.strand)
         } else {
           ctx.fillStyle = color
-          ctx.fillRect(x, y, w, FEAT_HEIGHT)
+          ctx.fillRect(x, y, w, fh)
         }
       }
 
-      if (w > 20) {
+      // Draw nucleotide bases when zoomed in
+      if (showBases) {
+        const featStart = Math.max(feat.start, region.start)
+        const featEnd = Math.min(feat.end, region.end)
+        for (let bp = featStart; bp < featEnd; bp++) {
+          if (refSeq && bp >= refSeq.start && bp < refSeq.end) {
+            const base = (refSeq.sequence[bp - refSeq.start] || '').toUpperCase()
+            const bx = ((bp - region.start) / regionLen) * width
+            const bw = pxPerBp
+            if (bw >= 6) {
+              ctx.fillStyle = BASE_COLORS[base] || '#999'
+              ctx.font = `bold ${Math.min(10, bw - 1)}px monospace`
+              ctx.textAlign = 'center'
+              ctx.textBaseline = 'middle'
+              ctx.fillText(base, bx + bw / 2, y + fh / 2)
+            }
+          }
+        }
+      } else if (w > 20) {
+        // Feature name label (only when not showing nucleotides)
         ctx.fillStyle = '#fff'
         ctx.font = '10px Arial, Helvetica, sans-serif'
         ctx.textAlign = 'left'
+        ctx.textBaseline = 'alphabetic'
         const label = feat.name || feat.feature_type
         const maxChars = Math.floor((w - (useArrows ? ARROW_TIP : 0) - 4) / 6)
         if (maxChars > 0) {
-          ctx.fillText(label.slice(0, maxChars), x + 3, y + FEAT_HEIGHT - 4)
+          ctx.fillText(label.slice(0, maxChars), x + 3, y + fh - 4)
         }
       }
 
       // Store hit-box for tooltip
-      boxes.push({ feat, x, y, w, h: FEAT_HEIGHT })
+      boxes.push({ feat, x, y, w, h: fh })
     }
 
     hitBoxesRef.current = boxes
@@ -127,7 +178,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         ? `${hiddenCount} feature${hiddenCount > 1 ? 's' : ''} hidden \u2014 increase track height to show all`
         : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.annotationColors, useArrows, theme])
+  }, [data, loading, error, width, height, region, refSeq, track.color, track.annotationColors, useArrows, track.showNucleotides, theme])
 
   const onMouseMove = useCallback((e) => {
     const canvas = canvasRef.current

@@ -204,7 +204,7 @@ export default function TrackSettings({ onClose }) {
               </div>
             )}
 
-            {hasReads && (
+            {(hasReads || hasAnnotation) && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Nucleotides</span>
                 <label style={S.cbLabel}>
