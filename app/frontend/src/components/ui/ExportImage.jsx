@@ -277,8 +277,8 @@ function svgCoverage(data, region, track, w, h, theme) {
       const fwdS = svgSmoothValues(fwdRaw, outSmooth)
       const revS = svgSmoothValues(revRaw, outSmooth)
       const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
-      s += svgOutlinePath(xs, fwdS.map(r => midY - r * topH), outColor || color, outSmooth > 0)
-      s += svgOutlinePath(xs, revS.map(r => midY + r * botH), outColor || adjustColorSvg(color, -40), outSmooth > 0)
+      s += svgOutlinePath(xs, fwdS.map(r => midY - r * topH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
+      s += svgOutlinePath(xs, revS.map(r => midY + r * botH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
     }
     const lbl = useLog ? ' log\u2082' : ''
     s += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${posMax.toFixed(1)}${lbl}</text>\n`

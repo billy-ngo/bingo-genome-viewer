@@ -126,8 +126,8 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       }
 
       if (showOutline && data.bins.length > 0) {
-        const fwdStroke = outlineColor || fwdColor
-        const revStroke = outlineColor || revColor
+        const fwdStroke = outlineColor || theme.textPrimary || '#fff'
+        const revStroke = outlineColor || theme.textPrimary || '#fff'
         // Compute smoothed Y values
         const fwdRaw = data.bins.map(b => { const v = b.forward != null ? b.forward : Math.max(0, b.value); return v > 0 ? (useLog ? logScale(v, posMax) : v / posMax) : 0 })
         const revRaw = data.bins.map(b => { const v = b.reverse != null ? b.reverse : Math.min(0, b.value); return v < 0 ? (useLog ? logScale(Math.abs(v), negMax) : Math.abs(v) / negMax) : 0 })

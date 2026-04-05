@@ -94,19 +94,29 @@ export default function TrackSettings({ onClose }) {
           <div style={S.section}>
             <div style={S.sectionTitle}>Edit {selectedTracks.length} selected track{selectedTracks.length > 1 ? 's' : ''}</div>
 
-            <div style={S.controlRow}>
-              <span style={S.controlLabel}>Color</span>
-              <input type="color" value={commonColor} style={S.colorInput} onChange={e => applyToSelected({ color: e.target.value })} />
-              {hasBars && (
+            {hasBars && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Fill bars</span>
                 <label style={S.cbLabel}>
                   <input type="checkbox" checked={commonShowBars !== false}
                     ref={el => { if (el) el.indeterminate = commonShowBars === null }}
                     onChange={e => applyToSelected({ showBars: e.target.checked })}
                     style={{ cursor: 'pointer' }} />
-                  Fill bars
+                  Show
                 </label>
-              )}
-            </div>
+                {commonShowBars !== false && (
+                  <input type="color" value={commonColor} style={S.colorInput}
+                    onChange={e => applyToSelected({ color: e.target.value })}
+                    title="Bar fill color" />
+                )}
+              </div>
+            )}
+            {!hasBars && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Color</span>
+                <input type="color" value={commonColor} style={S.colorInput} onChange={e => applyToSelected({ color: e.target.value })} />
+              </div>
+            )}
             <div style={S.controlRow}>
               <span style={S.controlLabel}>Height (px)</span>
               <input type="range" min={30} max={500} step={1} value={commonHeight || 80}
@@ -164,7 +174,7 @@ export default function TrackSettings({ onClose }) {
                     Trace peaks
                   </label>
                   {commonShowOutline === true && (
-                    <input type="color" value={commonOutlineColor || '#ffffff'}
+                    <input type="color" value={commonOutlineColor || commonColor || '#ffffff'}
                       onChange={e => applyToSelected({ outlineColor: e.target.value })}
                       title="Outline color"
                       style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0, marginLeft: 4 }} />
