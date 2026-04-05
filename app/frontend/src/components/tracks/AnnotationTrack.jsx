@@ -99,6 +99,33 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
     const boxes = []
     let hiddenCount = 0
 
+    // Draw reference nucleotide strip at the bottom of the track
+    if (showBases) {
+      const stripH = 14
+      const stripY = height - stripH
+      // Background for the strip
+      ctx.fillStyle = theme.canvasBg
+      ctx.fillRect(0, stripY, width, stripH)
+      ctx.strokeStyle = theme.border || '#333'
+      ctx.lineWidth = 0.5
+      ctx.beginPath(); ctx.moveTo(0, stripY); ctx.lineTo(width, stripY); ctx.stroke()
+      // Draw each base
+      const fontSize = Math.min(10, pxPerBp - 1)
+      if (fontSize >= 5) {
+        ctx.font = `bold ${fontSize}px monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        for (let bp = Math.floor(region.start); bp < Math.ceil(region.end); bp++) {
+          if (refSeq && bp >= refSeq.start && bp < refSeq.end) {
+            const base = (refSeq.sequence[bp - refSeq.start] || '').toUpperCase()
+            const bx = ((bp - region.start) / regionLen) * width
+            ctx.fillStyle = BASE_COLORS[base] || '#999'
+            ctx.fillText(base, bx + pxPerBp / 2, stripY + stripH / 2)
+          }
+        }
+      }
+    }
+
     for (const feat of data.features) {
       let row = rowEnds.findIndex(e => feat.start >= e)
       if (row === -1) row = rowEnds.length
