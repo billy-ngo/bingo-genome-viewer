@@ -346,95 +346,129 @@ class WigReader:
         step = span = 1
         pos = 1
         fixed = False
-        has_fwd_rev = False  # 3-column format: pos fwd rev
-        raw: dict[str, list] = {}
-        raw_rev: dict[str, list] = {}  # separate reverse values for 3-col format
+        has_fwd_rev = False
+        # Build arrays directly — avoid intermediate tuples
+        positions: dict[str, list] = {}
+        values: dict[str, list] = {}
+        rev_vals: dict[str, list] = {}
+        chroms: dict[str, int] = {}
+        header_seen = False
 
-        with open(self.file_path) as f:
+        with open(self.file_path, buffering=1 << 16) as f:
             for line in f:
-                line = line.strip()
-                if not line or line.startswith(("browser",)):
-                    continue
-                # Skip comment lines but check for bedGraph hint
-                if line.startswith("#"):
+                # Fast path: most lines are data. Check first char.
+                c0 = line[0] if line else '\n'
+
+                if c0 == '#' or c0 == '\n' or c0 == '\r':
                     continue
 
-                # Extract variableStep/fixedStep even if embedded in another line
-                # e.g. "color 5:150:55 225:0:0 variableStep chrom=LS1 span=1"
-                vs_match = re.search(r'variableStep\s', line)
-                fs_match = re.search(r'fixedStep\s', line)
-                if fs_match:
-                    fixed = True
-                    tail = line[fs_match.start():]
-                    params = dict(re.findall(r"(\w+)=(\S+)", tail))
-                    chrom = params.get("chrom")
-                    if not chrom:
-                        continue
-                    pos = int(params.get("start", 1))
-                    step = int(params.get("step", 1))
-                    span = int(params.get("span", 1))
-                    raw.setdefault(chrom, [])
-                    raw_rev.setdefault(chrom, [])
-                    continue
-                if vs_match:
-                    fixed = False
-                    tail = line[vs_match.start():]
-                    params = dict(re.findall(r"(\w+)=(\S+)", tail))
-                    chrom = params.get("chrom")
-                    if not chrom:
-                        continue
-                    span = int(params.get("span", 1))
-                    raw.setdefault(chrom, [])
-                    raw_rev.setdefault(chrom, [])
-                    continue
-
-                if line.startswith("track"):
-                    continue
-
-                if not chrom:
-                    continue
-
-                parts = line.split()
-                try:
-                    if fixed:
-                        # fixedStep: 1 value per line, or 2 values (fwd rev)
-                        v = float(parts[0])
-                        p0 = pos - 1
-                        raw[chrom].append((p0, v))
-                        if len(parts) >= 2:
+                # Data lines start with a digit or '-'
+                if header_seen and (c0.isdigit() or c0 == '-'):
+                    parts = line.split()
+                    try:
+                        if fixed:
+                            v = float(parts[0])
+                            p0 = pos - 1
+                            positions[chrom].append(p0)
+                            values[chrom].append(v)
+                            if len(parts) >= 2:
+                                has_fwd_rev = True
+                                rev_vals.setdefault(chrom, []).append(float(parts[1]))
+                            chroms[chrom] = max(chroms.get(chrom, 0), p0 + span)
+                            pos += step
+                        elif len(parts) >= 3:
+                            p0 = int(parts[0])
+                            fwd = float(parts[1])
+                            rev = float(parts[2])
                             has_fwd_rev = True
-                            raw_rev[chrom].append((p0, float(parts[1])))
-                        self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
-                        pos += step
-                    elif len(parts) >= 3:
-                        # 3-column variableStep: position fwd rev
-                        p0 = int(parts[0])  # 0-based in this format
-                        fwd = float(parts[1])
-                        rev = float(parts[2])
-                        has_fwd_rev = True
-                        raw[chrom].append((p0, fwd))
-                        raw_rev[chrom].append((p0, rev))
-                        self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
-                    elif len(parts) >= 2:
-                        # Standard 2-column variableStep: position value (1-based)
-                        p0 = int(parts[0]) - 1
-                        v = float(parts[1])
-                        raw[chrom].append((p0, v))
-                        self._chroms[chrom] = max(self._chroms.get(chrom, 0), p0 + span)
-                except (ValueError, IndexError):
+                            positions[chrom].append(p0)
+                            values[chrom].append(fwd)
+                            rev_vals.setdefault(chrom, []).append(rev)
+                            chroms[chrom] = max(chroms.get(chrom, 0), p0 + span)
+                        elif len(parts) >= 2:
+                            p0 = int(parts[0]) - 1
+                            v = float(parts[1])
+                            positions[chrom].append(p0)
+                            values[chrom].append(v)
+                            chroms[chrom] = max(chroms.get(chrom, 0), p0 + span)
+                    except (ValueError, IndexError):
+                        pass
                     continue
 
-        # Build sorted parallel arrays for fast binary-search queries
+                # Header lines — only checked until first data line
+                line = line.strip()
+                if not line:
+                    continue
+
+                if 'variableStep' in line:
+                    idx = line.index('variableStep')
+                    tail = line[idx:]
+                    params = dict(re.findall(r"(\w+)=(\S+)", tail))
+                    chrom = params.get("chrom")
+                    if chrom:
+                        fixed = False
+                        span = int(params.get("span", 1))
+                        positions.setdefault(chrom, [])
+                        values.setdefault(chrom, [])
+                        header_seen = True
+                    continue
+
+                if 'fixedStep' in line:
+                    idx = line.index('fixedStep')
+                    tail = line[idx:]
+                    params = dict(re.findall(r"(\w+)=(\S+)", tail))
+                    chrom = params.get("chrom")
+                    if chrom:
+                        fixed = True
+                        pos = int(params.get("start", 1))
+                        step = int(params.get("step", 1))
+                        span = int(params.get("span", 1))
+                        positions.setdefault(chrom, [])
+                        values.setdefault(chrom, [])
+                        header_seen = True
+                    continue
+
+                # BedGraph-style fallback (4+ columns with chrom)
+                if not header_seen:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        try:
+                            c = parts[0]
+                            s = int(parts[1])
+                            e = int(parts[2])
+                            v = float(parts[3])
+                            positions.setdefault(c, []).append(s)
+                            values.setdefault(c, []).append(v)
+                            chroms[c] = max(chroms.get(c, 0), e)
+                        except (ValueError, IndexError):
+                            pass
+
+        self._chroms = chroms
         self._has_fwd_rev = has_fwd_rev
         self._rev_values: dict[str, list] = {}
-        for chrom, entries in raw.items():
-            entries.sort(key=lambda x: x[0])
-            self._positions[chrom] = [e[0] for e in entries]
-            self._values[chrom] = [e[1] for e in entries]
+
+        # Positions are already sorted in WIG files — skip sort if so
+        for ch in positions:
+            pos_list = positions[ch]
+            val_list = values[ch]
+            if len(pos_list) >= 2 and pos_list[-1] < pos_list[0]:
+                # Unsorted — sort by position
+                paired = sorted(zip(pos_list, val_list))
+                self._positions[ch] = [p for p, _ in paired]
+                self._values[ch] = [v for _, v in paired]
+            else:
+                self._positions[ch] = pos_list
+                self._values[ch] = val_list
+
         if has_fwd_rev:
-            for chrom, entries in raw_rev.items():
-                entries.sort(key=lambda x: x[0])
-                self._rev_values[chrom] = [e[1] for e in entries]
+            for ch in rev_vals:
+                pos_list = positions.get(ch, [])
+                rv = rev_vals[ch]
+                if len(pos_list) >= 2 and pos_list[-1] < pos_list[0]:
+                    paired = sorted(zip(pos_list, rv))
+                    self._rev_values[ch] = [v for _, v in paired]
+                else:
+                    self._rev_values[ch] = rv
 
     def close(self): pass
 
