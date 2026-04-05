@@ -25,7 +25,7 @@ def _validate_region(start: int, end: int):
 
 
 @router.get("/{track_id}/coverage")
-def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Query(default=1000, le=5000)):
+def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Query(default=1000, ge=1, le=10000)):
     _validate_region(start, end)
     reader = _get_reader(track_id)
     track_type = app_state.tracks[track_id]["track_type"]
