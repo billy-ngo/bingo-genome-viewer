@@ -144,6 +144,17 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     except OSError as e:
         raise HTTPException(status_code=400, detail=f"Cannot read file: {p.name}. {e}")
 
+    # Validate BAM files have an index
+    ext = p.suffix.lower()
+    if ext in (".bam", ".cram"):
+        from readers.bam_reader import _find_index
+        if _find_index(path) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"BAM index (.bai) not found for '{p.name}'. "
+                       f"Expected '{p.name}.bai' or '{p.stem}.bai' in the same directory."
+            )
+
     try:
         display_name = _clean_name(name) if name else p.name
         track = app_state.load_track(path, display_name)
