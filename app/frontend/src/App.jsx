@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.8.2'
+const APP_VERSION = '1.8.3'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -567,7 +567,8 @@ function BrowserApp() {
         }} onClick={() => setShowAbout(false)}>
           <div style={{
             background: theme.panelBg, border: `1px solid ${theme.border}`, borderRadius: 8,
-            padding: '28px 36px', maxWidth: 400, color: theme.textPrimary, lineHeight: 1.7,
+            padding: '28px 36px', maxWidth: 520, maxHeight: '85vh', overflowY: 'auto',
+            color: theme.textPrimary, lineHeight: 1.7,
           }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
               <BingoLogo size={44} />
@@ -587,8 +588,41 @@ function BrowserApp() {
               border: `1px solid ${theme.border}`, borderRadius: 4, padding: '10px 14px',
               fontFamily: 'monospace', lineHeight: 1.6, marginBottom: 20, userSelect: 'all',
             }}>
-              Ngo, B. (2026). BiNgo Genome Viewer (v{APP_VERSION}) [Software].
+              Ngo, B.M. (2026). BiNgo Genome Viewer (v{APP_VERSION}) [Software].
             </div>
+
+            <details style={{ marginBottom: 20 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: theme.textPrimary, marginBottom: 8 }}>
+                References & Acknowledgments
+              </summary>
+              <div style={{ fontSize: 11, color: theme.textSecondary, lineHeight: 1.8, paddingTop: 8 }}>
+                <div style={{ fontWeight: 600, color: theme.textPrimary, marginBottom: 4 }}>Software Dependencies</div>
+                <div><strong>FastAPI</strong> {'\u2014'} Ram{'\u00ed'}rez, S. (2018). A modern web framework for building APIs with Python.</div>
+                <div><strong>Uvicorn</strong> {'\u2014'} Encode OSS. ASGI server implementation for Python.</div>
+                <div><strong>BioPython</strong> {'\u2014'} Cock, P.J.A. et al. (2009). <em>Bioinformatics</em>, 25(11), 1422{'\u2013'}1423.</div>
+                <div><strong>pyfaidx</strong> {'\u2014'} Shirley, M.D. et al. (2015). <em>PeerJ PrePrints</em>, 3:e1196.</div>
+                <div><strong>bamnostic</strong> {'\u2014'} Sherman, M.A. & Mills, R.E. (2019). Pure Python BAM parser.</div>
+                <div><strong>React</strong> {'\u2014'} Meta Platforms, Inc. JavaScript UI library.</div>
+                <div><strong>Vite</strong> {'\u2014'} You, E. (2020). Next generation frontend tooling.</div>
+
+                <div style={{ fontWeight: 600, color: theme.textPrimary, marginTop: 12, marginBottom: 4 }}>File Format Specifications</div>
+                <div><strong>SAM/BAM</strong> {'\u2014'} Li, H. et al. (2009). <em>Bioinformatics</em>, 25(16), 2078{'\u2013'}2079.</div>
+                <div><strong>VCF</strong> {'\u2014'} Danecek, P. et al. (2011). <em>Bioinformatics</em>, 27(15), 2156{'\u2013'}2158.</div>
+                <div><strong>BigWig/WIG</strong> {'\u2014'} Kent, W.J. et al. (2010). <em>Bioinformatics</em>, 26(17), 2204{'\u2013'}2207.</div>
+                <div><strong>BED</strong> {'\u2014'} UCSC Genome Browser, UC Santa Cruz.</div>
+                <div><strong>GFF3</strong> {'\u2014'} Sequence Ontology Project.</div>
+                <div><strong>GTF</strong> {'\u2014'} Ensembl genome database project.</div>
+                <div><strong>GenBank</strong> {'\u2014'} Benson, D.A. et al. (2013). <em>Nucleic Acids Res.</em>, 41(D1), D36{'\u2013'}D42.</div>
+
+                <div style={{ fontWeight: 600, color: theme.textPrimary, marginTop: 12, marginBottom: 4 }}>Inspiration</div>
+                <div><strong>IGV</strong> {'\u2014'} Robinson, J.T. et al. (2011). <em>Nature Biotechnology</em>, 29(1), 24{'\u2013'}26.</div>
+
+                <div style={{ fontWeight: 600, color: theme.textPrimary, marginTop: 12, marginBottom: 4 }}>Acknowledgments</div>
+                <div>Early version testing and feedback:</div>
+                <div>Amanda Antoch, Isaac Poarch, Otto Chipashvili, Jake Colautti</div>
+              </div>
+            </details>
+
             <div style={{ textAlign: 'right' }}>
               <button
                 onClick={() => setShowAbout(false)}
