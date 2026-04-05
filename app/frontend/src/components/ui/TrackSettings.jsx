@@ -7,6 +7,7 @@
 import React, { useState } from 'react'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
+import DraggablePanel from './DraggablePanel'
 
 export default function TrackSettings({ onClose }) {
   const { theme } = useTheme()
@@ -46,11 +47,6 @@ export default function TrackSettings({ onClose }) {
 
   const t = theme
   const S = {
-    overlay: { position: 'fixed', inset: 0, background: t.overlayBg, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-    panel: { background: t.panelBg, border: `1px solid ${t.borderAccent}`, borderRadius: 8, padding: 0, minWidth: 420, maxWidth: 560, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' },
-    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderBottom: `1px solid ${t.border}` },
-    title: { fontSize: 14, fontWeight: 700, color: t.textPrimary },
-    closeBtn: { background: 'none', border: 'none', color: t.textSecondary, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '0 4px' },
     body: { padding: '8px 0', overflowY: 'auto', flex: 1 },
     trackRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '5px 16px', cursor: 'pointer', transition: 'background 0.1s' },
     trackRowSelected: { background: t.selectedRow },
@@ -71,12 +67,7 @@ export default function TrackSettings({ onClose }) {
   }
 
   return (
-    <div style={S.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div style={S.panel}>
-        <div style={S.header}>
-          <span style={S.title}>Track Settings</span>
-          <button style={S.closeBtn} onClick={onClose}>{'\u2715'}</button>
-        </div>
+    <DraggablePanel title="Track Settings" onClose={onClose} theme={t} defaultWidth={460} defaultHeight={520}>
         <div style={S.body}>
           {tracks.length === 0 ? (
             <div style={{ padding: 16, color: t.textTertiary, fontSize: 12 }}>No tracks loaded.</div>
@@ -261,10 +252,8 @@ export default function TrackSettings({ onClose }) {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {selectedTracks.length > 0 && <button style={S.btnDanger} onClick={removeSelected}>Remove ({selectedTracks.length})</button>}
-            <button style={S.btn} onClick={onClose}>Done</button>
           </div>
         </div>
-      </div>
-    </div>
+    </DraggablePanel>
   )
 }

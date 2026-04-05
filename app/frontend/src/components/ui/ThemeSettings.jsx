@@ -7,6 +7,7 @@
 import React, { useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTheme, THEMES } from '../../store/ThemeContext'
+import DraggablePanel from './DraggablePanel'
 
 const PRESET_KEYS = ['dark', 'light', 'colorblind', 'soft', 'highContrast']
 
@@ -139,13 +140,7 @@ export default function ThemeSettings({ onClose }) {
   const activeTheme = themeName === 'custom' ? customTheme : (THEMES[themeName] || THEMES.dark)
 
   return (
-    <div style={S.overlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div style={S.panel}>
-        <div style={S.header}>
-          <span style={S.title}>Color Scheme</span>
-          <button style={S.closeBtn} onClick={onClose}>{'\u2715'}</button>
-        </div>
-
+    <DraggablePanel title="Color Scheme" onClose={onClose} theme={theme} defaultWidth={420} defaultHeight={480}>
         <div style={S.body}>
           {/* Preset palette buttons */}
           <div style={S.section}>
@@ -231,7 +226,6 @@ export default function ThemeSettings({ onClose }) {
         <div style={S.footer}>
           <button style={S.btn} onClick={onClose}>Close</button>
         </div>
-      </div>
 
       {/* Hidden native color input for double-click full picker */}
       <input
@@ -267,7 +261,7 @@ export default function ThemeSettings({ onClose }) {
         </div>,
         document.body
       )}
-    </div>
+    </DraggablePanel>
   )
 }
 
