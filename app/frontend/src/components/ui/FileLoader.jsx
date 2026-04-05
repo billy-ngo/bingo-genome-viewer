@@ -29,6 +29,7 @@ function formatBytes(bytes) {
 const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
 const TRACK_EXTS = new Set(['.bam', '.bw', '.bigwig', '.wig', '.bedgraph', '.bdg', '.vcf', '.bed', '.gtf', '.gff', '.gff2', '.gff3'])
 const INDEX_EXTS = new Set(['.bai'])
+const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  // 50 MB — prompt path instead of uploading
 
 function getFileExt(name) {
   if (!name) return ''
@@ -55,6 +56,7 @@ function classifyFiles(files) {
   const indexFiles = []
   const otherTrackFiles = []
   const unknownFiles = []
+  const largeFiles = []  // files over threshold — need path dialog
 
   for (const f of files) {
     const ext = getFileExt(f.name)
@@ -65,13 +67,18 @@ function classifyFiles(files) {
     } else if (isIndexFile(f.name)) {
       indexFiles.push(f)
     } else if (TRACK_EXTS.has(ext) || ext === '.vcf.gz') {
-      otherTrackFiles.push(f)
+      // Check if file is too large for upload
+      if (f.size > LARGE_FILE_THRESHOLD) {
+        largeFiles.push(f)
+      } else {
+        otherTrackFiles.push(f)
+      }
     } else {
       unknownFiles.push(f)
     }
   }
 
-  // Pair BAM files with their index files by name
+  // ALL BAM files go through the pairing dialog (they always need .bai)
   const trackEntries = []
   const unpairedBams = []
   for (const bam of bamFiles) {
@@ -81,7 +88,12 @@ function classifyFiles(files) {
       return idxName === bam.name.toLowerCase() + '.bai' || idxName === baseName.toLowerCase() + '.bai'
     })
     if (paired) {
-      trackEntries.push({ file: bam, indexFile: paired })
+      // Even paired BAMs go through dialog if large
+      if (bam.size > LARGE_FILE_THRESHOLD) {
+        largeFiles.push(bam)
+      } else {
+        trackEntries.push({ file: bam, indexFile: paired })
+      }
       const i = indexFiles.indexOf(paired)
       if (i !== -1) indexFiles.splice(i, 1)
     } else {
@@ -100,7 +112,7 @@ function classifyFiles(files) {
   }
   unknownFiles.push(...indexFiles)
 
-  return { genomeFiles, trackEntries, unpairedBams, unknownFiles }
+  return { genomeFiles, trackEntries, unpairedBams, largeFiles, unknownFiles }
 }
 
 export default function FileLoader() {
@@ -265,13 +277,12 @@ export default function FileLoader() {
     const files = Array.from(fileList)
     if (!files.length) return
 
-    const { genomeFiles, trackEntries, unpairedBams, unknownFiles } = classifyFiles(files)
+    const { genomeFiles, trackEntries, unpairedBams, largeFiles, unknownFiles } = classifyFiles(files)
 
     if (unknownFiles.length) {
       const orphanBai = unknownFiles.filter(f => f._indexOrphan)
       const otherUnknown = unknownFiles.filter(f => !f._indexOrphan)
       if (orphanBai.length) {
-        // Lone .bai without .bam — open BAM pairing dialog
         setBamPrompt({ bamFile: null, indexFile: orphanBai[0], bamPath: '', indexPath: '', error: null })
       }
       if (otherUnknown.length) {
@@ -279,8 +290,27 @@ export default function FileLoader() {
       }
     }
 
-    // Unpaired BAM files — open pairing dialog
-    if (unpairedBams.length > 0) {
+    // Large files — show path dialog with warning
+    if (largeFiles.length > 0) {
+      const f = largeFiles[0]
+      const sizeMb = (f.size / (1024 * 1024)).toFixed(0)
+      const isBam = f.name.toLowerCase().endsWith('.bam')
+      setBamPrompt({
+        bamFile: isBam ? f : null,
+        indexFile: null,
+        bamPath: isBam ? '' : '',
+        indexPath: '',
+        error: null,
+        _largeFile: f,
+        _largeWarning: `${f.name} is ${sizeMb} MB. Large files load much faster via file path — the server reads directly from disk without uploading.`,
+      })
+      if (largeFiles.length > 1) {
+        setErr(`${largeFiles.length - 1} additional large file(s) skipped — load one at a time via path.`)
+      }
+    }
+
+    // Unpaired BAM files (any size) — open pairing dialog
+    if (unpairedBams.length > 0 && largeFiles.length === 0) {
       setBamPrompt({ bamFile: unpairedBams[0], indexFile: null, bamPath: '', indexPath: '', error: null })
     }
 
@@ -439,10 +469,23 @@ export default function FileLoader() {
 
   async function bamPromptLoad() {
     if (!bamPrompt) return
-    const { bamFile, indexFile, bamPath, indexPath } = bamPrompt
+    const { bamFile, indexFile, bamPath, indexPath, _largeFile } = bamPrompt
     const hasBamPath = bamPath.trim()
     const hasBaiPath = indexPath.trim()
+    const isLargeNonBam = _largeFile && !_largeFile.name.toLowerCase().endsWith('.bam')
 
+    // For non-BAM large files, only need the path
+    if (isLargeNonBam) {
+      if (!hasBamPath) {
+        setBamPrompt(p => ({ ...p, error: 'File path is required' }))
+        return
+      }
+      setBamPrompt(null)
+      await loadFromPath(hasBamPath)
+      return
+    }
+
+    // BAM flow
     if (!bamFile && !hasBamPath) {
       setBamPrompt(p => ({ ...p, error: 'BAM file or path is required' }))
       return
@@ -452,7 +495,6 @@ export default function FileLoader() {
       return
     }
 
-    // Validate path extensions
     if (hasBamPath && !hasBamPath.toLowerCase().endsWith('.bam')) {
       setBamPrompt(p => ({ ...p, error: 'BAM path must end with .bam' }))
       return
@@ -464,13 +506,11 @@ export default function FileLoader() {
 
     setBamPrompt(null)
 
-    // If both are paths, load via path endpoint (server reads directly)
     if (!bamFile && hasBamPath) {
       await loadFromPath(hasBamPath)
       return
     }
 
-    // Upload files
     await loadTrackEntries([{ file: bamFile, indexFile: indexFile }])
   }
 
@@ -625,9 +665,10 @@ export default function FileLoader() {
         </div>
       )}
 
-      {/* BAM + BAI pairing dialog */}
+      {/* BAM + BAI pairing / large file dialog */}
       {bamPrompt && (() => {
-        const ready = bamPromptReady(bamPrompt)
+        const isLargeNonBam = bamPrompt._largeFile && !bamPrompt._largeFile.name.toLowerCase().endsWith('.bam')
+        const ready = isLargeNonBam ? !!bamPrompt.bamPath.trim() : bamPromptReady(bamPrompt)
         const bamSizeMb = bamPrompt.bamFile ? bamPrompt.bamFile.size / (1024 * 1024) : 0
         const isLargeUpload = bamPrompt.bamFile && bamSizeMb > 50
         const bamOk = bamPromptHasBam(bamPrompt)
@@ -637,58 +678,70 @@ export default function FileLoader() {
           background: theme.inputBg, color: theme.textPrimary,
           fontFamily: 'monospace',
         }
+        const dialogTitle = isLargeNonBam
+          ? `Load ${bamPrompt._largeFile.name.split('.').pop().toUpperCase()} Track`
+          : 'Load BAM Track'
+        const dialogDesc = isLargeNonBam
+          ? 'Paste the local file path for the server to read directly from disk.'
+          : 'BAM files require a matching .bai index. Browse for files or paste local paths.'
         return (
         <div style={S.promptOverlay} onClick={bamPromptCancel}>
           <div style={{ ...S.promptBox, maxWidth: 500 }} onClick={e => e.stopPropagation()}>
-            <div style={S.promptTitle}>Load BAM Track</div>
+            <div style={S.promptTitle}>{dialogTitle}</div>
             <div style={{ ...S.promptText, marginBottom: 12 }}>
-              BAM files require a matching <strong>.bai</strong> index. Browse for files or paste local paths.
+              {dialogDesc}
             </div>
 
-            {/* BAM slot */}
+            {/* File path slot */}
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 4, fontWeight: 600 }}>
-                .bam file {bamOk && <span style={{ color: '#66bb6a' }}>{'\u2713'}</span>}
+                {isLargeNonBam ? 'File path' : '.bam file'} {bamOk && <span style={{ color: '#66bb6a' }}>{'\u2713'}</span>}
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
                   type="text"
                   value={bamPrompt.bamFile ? bamPrompt.bamFile.name : bamPrompt.bamPath}
                   onChange={e => setBamPrompt(p => ({ ...p, bamPath: e.target.value, bamFile: null, error: null }))}
-                  placeholder="/path/to/reads.bam"
+                  placeholder={isLargeNonBam ? '/path/to/file' : '/path/to/reads.bam'}
                   style={{ ...pathInputStyle, border: `1px solid ${bamOk ? '#66bb6a' : theme.borderAccent}` }}
                 />
-                <button style={{ ...S.promptBtn, padding: '4px 12px', whiteSpace: 'nowrap' }} onClick={bamPromptPickBam}>Browse</button>
+                {!isLargeNonBam && (
+                  <button style={{ ...S.promptBtn, padding: '4px 12px', whiteSpace: 'nowrap' }} onClick={bamPromptPickBam}>Browse</button>
+                )}
               </div>
             </div>
 
-            {/* BAI slot */}
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 4, fontWeight: 600 }}>
-                .bai index {baiOk && <span style={{ color: '#66bb6a' }}>{'\u2713'}</span>}
+            {/* BAI slot — only for BAM files */}
+            {!isLargeNonBam && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 4, fontWeight: 600 }}>
+                  .bai index {baiOk && <span style={{ color: '#66bb6a' }}>{'\u2713'}</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    value={bamPrompt.indexFile ? bamPrompt.indexFile.name : bamPrompt.indexPath}
+                    onChange={e => setBamPrompt(p => ({ ...p, indexPath: e.target.value, indexFile: null, error: null }))}
+                    placeholder="/path/to/reads.bam.bai"
+                    style={{ ...pathInputStyle, border: `1px solid ${baiOk ? '#66bb6a' : theme.borderAccent}` }}
+                  />
+                  <button style={{ ...S.promptBtn, padding: '4px 12px', whiteSpace: 'nowrap' }} onClick={bamPromptPickBai}>Browse</button>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <input
-                  type="text"
-                  value={bamPrompt.indexFile ? bamPrompt.indexFile.name : bamPrompt.indexPath}
-                  onChange={e => setBamPrompt(p => ({ ...p, indexPath: e.target.value, indexFile: null, error: null }))}
-                  placeholder="/path/to/reads.bam.bai"
-                  style={{ ...pathInputStyle, border: `1px solid ${baiOk ? '#66bb6a' : theme.borderAccent}` }}
-                />
-                <button style={{ ...S.promptBtn, padding: '4px 12px', whiteSpace: 'nowrap' }} onClick={bamPromptPickBai}>Browse</button>
-              </div>
-            </div>
+            )}
 
             {/* Hidden file inputs */}
             <input ref={bamPickerRef} type="file" accept=".bam" style={{ display: 'none' }} onChange={bamPromptOnBamFile} />
             <input ref={baiPickerRef} type="file" accept=".bai,.bam.bai" style={{ display: 'none' }} onChange={bamPromptOnBaiFile} />
 
-            {/* Large file warning — only when a file (not path) is selected */}
-            {isLargeUpload && (
+            {/* Large file warning */}
+            {(isLargeUpload || bamPrompt._largeWarning) && (
               <div style={{ fontSize: 11, color: '#ffb74d', marginBottom: 8, padding: '6px 10px',
                 background: 'rgba(255,183,77,0.1)', borderRadius: 4, border: '1px solid rgba(255,183,77,0.3)' }}>
-                <strong>Large file ({bamSizeMb.toFixed(0)} MB)</strong> — uploading may be slow.
-                Paste the file path instead for instant loading (the server reads directly from disk).
+                {bamPrompt._largeWarning || (
+                  <><strong>Large file ({bamSizeMb.toFixed(0)} MB)</strong> — uploading may be slow.
+                  Paste the file path instead for instant loading.</>
+                )}
               </div>
             )}
 
