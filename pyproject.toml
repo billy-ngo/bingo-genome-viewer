@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "BiNgoViewer"
-version = "2.0.6"
+version = "2.0.7"
 description = "BiNgo Genome Viewer — a lightweight browser-based genomics viewer"
 readme = "README.md"
 license = {text = "Proprietary"}

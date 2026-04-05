@@ -73,9 +73,9 @@ async def add_chromosomes(file: UploadFile = File(...)):
 async def load_genome_from_path(path: str = Form(...)):
     """Load genome from a local file path."""
     from pathlib import Path as P
-    resolved = P(path).resolve()
+    resolved = P(path.strip()).expanduser().resolve()
     if not resolved.exists():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        raise HTTPException(status_code=404, detail=f"File not found: {path}. Please provide the full absolute path.")
     if not resolved.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {path}")
     # Verify file is readable (catches cloud-synced "online only" files)

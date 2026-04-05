@@ -95,13 +95,14 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     from pathlib import Path as P
 
     # If a .bai path is given, look for the matching .bam
+    path = path.strip()
     if path.lower().endswith('.bai'):
         bam_path = None
         if path.lower().endswith('.bam.bai'):
             bam_path = path[:-4]
         else:
-            bam_path = str(P(path).with_suffix('.bam'))
-        if bam_path and P(bam_path).resolve().exists():
+            bam_path = str(P(path).expanduser().with_suffix('.bam'))
+        if bam_path and P(bam_path).expanduser().resolve().exists():
             path = bam_path
         else:
             raise HTTPException(
@@ -109,9 +110,9 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
                 detail=f"Index file detected. Matching BAM not found at '{bam_path}'. Load the .bam file instead."
             )
 
-    p = P(path).resolve()
+    p = P(path.strip()).expanduser().resolve()
     if not p.exists():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        raise HTTPException(status_code=404, detail=f"File not found: {path}. Please provide the full absolute path (e.g., /Users/name/data/file.bam or C:\\Users\\name\\data\\file.bam).")
     if not p.is_file():
         raise HTTPException(status_code=400, detail=f"Not a file: {path}")
     path = str(p)
