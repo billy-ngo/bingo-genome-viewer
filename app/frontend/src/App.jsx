@@ -20,7 +20,7 @@ import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 
-const APP_VERSION = '1.6.3'
+const APP_VERSION = '1.7.0'
 
 function BingoLogo({ size = 32 }) {
   return (
@@ -182,9 +182,21 @@ function BrowserApp() {
       else if (INDEX_EXTS.has(ext) || lower.endsWith('.bam.bai')) indexFiles.push(f)
       else unknownFiles.push(f)
     }
-    // .bai files without a matching .bam are silently accepted (not shown as unsupported)
+    // Large BAM/BAI files: suggest path loading instead of upload
+    const largeBam = trackFiles.filter(f => f.name.toLowerCase().endsWith('.bam') && f.size > 50 * 1024 * 1024)
+    const largeIdx = indexFiles.filter(f => f.size > 10 * 1024 * 1024)
+    if (largeBam.length || largeIdx.length) {
+      const names = [...largeBam, ...largeIdx].map(f => f.name).join(', ')
+      const sizeMb = [...largeBam, ...largeIdx].reduce((s, f) => s + f.size, 0) / (1024 * 1024)
+      setDropStatus({
+        error: `${names} (${sizeMb.toFixed(0)} MB) — large files load faster via the Path button. ` +
+          `Click \u{1F4C2} Path in the toolbar and paste the file path instead of uploading.`
+      })
+      setTimeout(() => setDropStatus(null), 10000)
+      return
+    }
 
-    if (unknownFiles.length && !genomeFiles.length && !trackFiles.length) {
+    if (unknownFiles.length && !genomeFiles.length && !trackFiles.length && !indexFiles.length) {
       setDropStatus({ error: `Unsupported file${unknownFiles.length > 1 ? 's' : ''}: ${unknownFiles.map(f => f.name).join(', ')}` })
       setTimeout(() => setDropStatus(null), 4000)
       return

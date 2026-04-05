@@ -96,15 +96,50 @@ def _ensure_index_hint(bam_dest: Path):
 
 @router.post("/load-path")
 async def load_track_from_path(path: str = Form(...), name: str = Form("")):
-    """Re-load track from an existing file path (for session restore)."""
+    """Load track from a local file path (no upload needed)."""
     from pathlib import Path as P
-    if not P(path).exists():
+    p = P(path)
+
+    # If a .bai path is given, look for the matching .bam
+    if path.lower().endswith('.bai'):
+        bam_path = None
+        # reads.bam.bai → reads.bam
+        if path.lower().endswith('.bam.bai'):
+            bam_path = path[:-4]  # strip .bai
+        else:
+            # reads.bai → reads.bam
+            bam_path = str(P(path).with_suffix('.bam'))
+        if bam_path and P(bam_path).exists():
+            path = bam_path
+            p = P(path)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Index file detected. Matching BAM not found at '{bam_path}'. Load the .bam file instead."
+            )
+
+    if not p.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
     try:
-        display_name = _clean_name(name) if name else P(path).name
+        display_name = _clean_name(name) if name else p.name
         track = app_state.load_track(path, display_name)
+        compatibility = app_state.check_track_compatibility(track["id"])
         target_chromosomes = app_state.get_target_chromosomes(track["id"])
-        return {**track, "target_chromosomes": target_chromosomes}
+
+        hint = None
+        ext = p.suffix.lower()
+        if ext in (".wig", ".bedgraph", ".bdg"):
+            size_mb = p.stat().st_size / (1024 * 1024)
+            if size_mb > 10:
+                hint = (
+                    f"Tip: This {size_mb:.0f} MB {ext} file may load slowly. "
+                    f"Convert to BigWig with UCSC wigToBigWig for instant loading."
+                )
+
+        result = {**track, "compatibility": compatibility, "target_chromosomes": target_chromosomes}
+        if hint:
+            result["hint"] = hint
+        return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

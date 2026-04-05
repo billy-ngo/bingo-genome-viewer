@@ -10,7 +10,7 @@
  * index is automatically paired and uploaded alongside the BAM.
  */
 import React, { useState, useRef } from 'react'
-import { genomeApi } from '../../api/client'
+import { genomeApi, tracksApi } from '../../api/client'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks, cleanName } from '../../store/TrackContext'
 
@@ -112,6 +112,8 @@ export default function FileLoader() {
   const [prompt, setPrompt] = useState(null) // { files: File[] }
   const [trackMismatch, setTrackMismatch] = useState(null) // { tracks: [...] }
   const [baiPrompt, setBaiPrompt] = useState(null) // { indexFiles: File[] }
+  const [pathText, setPathText] = useState('')
+  const [showPathInput, setShowPathInput] = useState(false)
   const inputRef = useRef(null)
   const bamPickerRef = useRef(null)
 
@@ -302,6 +304,68 @@ export default function FileLoader() {
     if (inputRef.current) inputRef.current.value = ''
   }
 
+  async function loadFromPath(rawPath) {
+    const path = rawPath.trim()
+    if (!path) return
+    setErr(null)
+    const lower = path.toLowerCase()
+
+    // Detect file type from extension
+    const isGenome = GENOME_EXTS.has(getFileExt(path))
+    const isTrack = TRACK_EXTS.has(getFileExt(path)) || lower.endsWith('.vcf.gz') || lower.endsWith('.bai')
+
+    if (isGenome && !genome) {
+      // Load as genome
+      setLoading(true); setStatus(`Loading genome from path...`)
+      try {
+        const res = await genomeApi.loadPath(path)
+        const info = res.data
+        if (info.name) info.name = cleanName(info.name)
+        setGenome(info)
+        if (info.chromosomes?.length > 0) {
+          const chr = info.chromosomes[0]
+          navigateTo(chr.name, 0, Math.min(chr.length, 50000))
+        }
+        if (info.is_annotated) {
+          addGenomeAnnotationTrack({
+            id: 'genome_annotations', name: `${info.name} (annotations)`,
+            track_type: 'genome_annotations', file_format: 'genbank',
+            targetChromosomes: info.annotated_chromosomes || null,
+          })
+        }
+        setStatus(`Genome loaded: ${info.name}`)
+        setTimeout(() => setStatus(null), 3000)
+      } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null) }
+      finally { setLoading(false) }
+    } else if (isTrack || isGenome) {
+      // Load as track
+      if (!genome) { setErr('Load a genome file first'); return }
+      setLoading(true); setStatus(`Loading track from path...`)
+      try {
+        const name = path.split(/[/\\]/).pop() || path
+        const res = await tracksApi.loadPath(path, name)
+        const info = res.data
+        if (info.name) info.name = cleanName(info.name)
+        commitTrack(info)
+        setStatus(`Track loaded: ${info.name}`)
+        if (info.hint) {
+          setTimeout(() => { setStatus(info.hint); setTimeout(() => setStatus(null), 8000) }, 2000)
+        } else {
+          setTimeout(() => setStatus(null), 3000)
+        }
+      } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null) }
+      finally { setLoading(false) }
+    } else {
+      setErr(`Unsupported file type: ${path.split(/[/\\]/).pop()}`)
+    }
+    setPathText('')
+  }
+
+  function onPathSubmit(e) {
+    e.preventDefault()
+    loadFromPath(pathText)
+  }
+
   function onFilesSelected(e) {
     const files = e.target.files
     if (!files?.length) return
@@ -386,6 +450,38 @@ export default function FileLoader() {
           onChange={onFilesSelected}
         />
       </div>
+
+      <button
+        style={{ ...S.group, background: 'none', border: `1px solid ${theme.borderAccent}`, borderRadius: 4,
+          padding: '3px 8px', cursor: 'pointer', color: theme.textSecondary, fontSize: 11 }}
+        onClick={() => setShowPathInput(p => !p)}
+        title="Load file by local path (recommended for large BAM files)"
+      >
+        {showPathInput ? '\u2715' : '\u{1F4C2}'} Path
+      </button>
+
+      {showPathInput && (
+        <form onSubmit={onPathSubmit} style={{ display: 'flex', gap: 4 }}>
+          <input
+            type="text"
+            value={pathText}
+            onChange={e => setPathText(e.target.value)}
+            placeholder="/path/to/file.bam"
+            disabled={loading}
+            style={{
+              background: theme.inputBg, border: `1px solid ${theme.borderAccent}`, borderRadius: 4,
+              color: theme.textPrimary, padding: '4px 8px', fontSize: 11, width: 260,
+              fontFamily: 'monospace',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={loading || !pathText.trim()}
+            style={{ background: theme.btnBg, border: 'none', borderRadius: 4,
+              color: theme.btnText, padding: '4px 10px', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}
+          >Load</button>
+        </form>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>

@@ -289,7 +289,10 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
       }
 
       if (errors.length) {
-        setError(`Restored with ${errors.length} warning(s):\n${errors.join('\n')}`)
+        setError(
+          `Restored with ${errors.length} warning(s):\n${errors.join('\n')}\n\n` +
+          `Tip: If files were moved, re-add them using the \u{1F4C2} Path button.`
+        )
       } else {
         setStatus('Session restored')
         setTimeout(() => { setStatus(null); onClose() }, 1200)
