@@ -53,18 +53,19 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       const barAuto = track.barAutoWidth !== false
       const barFixedPx = track.barWidth || 2
       const pxPerNt = width / regionLen
-      ctx.fillStyle = color
-      for (const bin of data.bins) {
-        const binW = ((bin.end - bin.start) / regionLen) * width
-        const w = barAuto
-          ? (pxPerNt >= 1 ? Math.max(1, Math.min(pxPerNt, binW)) : Math.max(1, binW))
-          : Math.min(barFixedPx, binW)
-        const x = ((bin.start - regionStart) / regionLen) * width
-        const ratio = Math.min(1, bin.value / maxVal)
-        const barH = ratio * (height - 14)
-        ctx.fillRect(x, height - barH - 2, w, barH)
+      if (track.showBars !== false) {
+        ctx.fillStyle = color
+        for (const bin of data.bins) {
+          const binW = ((bin.end - bin.start) / regionLen) * width
+          const w = barAuto
+            ? (pxPerNt >= 1 ? Math.max(1, Math.min(pxPerNt, binW)) : Math.max(1, binW))
+            : Math.min(barFixedPx, binW)
+          const x = ((bin.start - regionStart) / regionLen) * width
+          const ratio = Math.min(1, bin.value / maxVal)
+          const barH = ratio * (height - 14)
+          ctx.fillRect(x, height - barH - 2, w, barH)
+        }
       }
-      // Peak outline trace
       if (track.showOutline && data.bins.length > 0) {
         ctx.beginPath()
         const baseline = height - 2
@@ -77,7 +78,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
           ctx.lineTo(x, y); ctx.lineTo(xEnd, y)
         }
         ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, baseline)
-        ctx.strokeStyle = theme.textPrimary || '#fff'
+        ctx.strokeStyle = track.outlineColor || theme.textPrimary || '#fff'
         ctx.lineWidth = 1.5
         ctx.stroke()
       }
@@ -207,7 +208,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
         ? `${hiddenReads} read${hiddenReads > 1 ? 's' : ''} hidden \u2014 increase track height to show all`
         : null)
     }
-  }, [data, loading, width, height, region, track.color, track.scaleMax, track.scaleMin, track.barAutoWidth, track.barWidth, track.showOutline, theme])
+  }, [data, loading, width, height, region, track.color, track.scaleMax, track.scaleMin, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.showBars, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }

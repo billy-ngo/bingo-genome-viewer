@@ -35,6 +35,8 @@ export default function TrackSettings({ onClose }) {
   const commonBarAutoWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barAutoWidth === selectedTracks[0].barAutoWidth) ? selectedTracks[0].barAutoWidth : null
   const commonBarWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barWidth === selectedTracks[0].barWidth) ? selectedTracks[0].barWidth : undefined
   const commonShowOutline = selectedTracks.length > 0 && selectedTracks.every(t => t.showOutline === selectedTracks[0].showOutline) ? selectedTracks[0].showOutline : null
+  const commonOutlineColor = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineColor === selectedTracks[0].outlineColor) ? selectedTracks[0].outlineColor : undefined
+  const commonShowBars = selectedTracks.length > 0 && selectedTracks.every(t => t.showBars === selectedTracks[0].showBars) ? selectedTracks[0].showBars : null
 
   function applyToSelected(updates) { updateMultipleTracks([...selected], updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
@@ -139,16 +141,34 @@ export default function TrackSettings({ onClose }) {
             )}
 
             {hasBars && (
-              <div style={S.controlRow}>
-                <span style={S.controlLabel}>Peak outline</span>
-                <label style={S.cbLabel}>
-                  <input type="checkbox" checked={commonShowOutline === true}
-                    ref={el => { if (el) el.indeterminate = commonShowOutline === null }}
-                    onChange={e => applyToSelected({ showOutline: e.target.checked })}
-                    style={{ cursor: 'pointer' }} />
-                  Trace peaks
-                </label>
-              </div>
+              <>
+                <div style={S.controlRow}>
+                  <span style={S.controlLabel}>Show bars</span>
+                  <label style={S.cbLabel}>
+                    <input type="checkbox" checked={commonShowBars !== false}
+                      ref={el => { if (el) el.indeterminate = commonShowBars === null }}
+                      onChange={e => applyToSelected({ showBars: e.target.checked })}
+                      style={{ cursor: 'pointer' }} />
+                    Fill bars
+                  </label>
+                </div>
+                <div style={S.controlRow}>
+                  <span style={S.controlLabel}>Peak outline</span>
+                  <label style={S.cbLabel}>
+                    <input type="checkbox" checked={commonShowOutline === true}
+                      ref={el => { if (el) el.indeterminate = commonShowOutline === null }}
+                      onChange={e => applyToSelected({ showOutline: e.target.checked })}
+                      style={{ cursor: 'pointer' }} />
+                    Trace peaks
+                  </label>
+                  {commonShowOutline === true && (
+                    <input type="color" value={commonOutlineColor || '#ffffff'}
+                      onChange={e => applyToSelected({ outlineColor: e.target.value })}
+                      title="Outline color"
+                      style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0, marginLeft: 4 }} />
+                  )}
+                </div>
+              </>
             )}
 
             {hasAnnotation && (

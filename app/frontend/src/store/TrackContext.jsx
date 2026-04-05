@@ -67,6 +67,8 @@ export function TrackProvider({ children }) {
         barAutoWidth: true,
         barWidth: 2,
         showOutline: false,
+        outlineColor: null,
+        showBars: true,
         targetChromosomes: info.target_chromosomes || null,
         ...(isAnnotation ? { annotationColors: null } : {}),
       }]

@@ -64,6 +64,8 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const barAuto = track.barAutoWidth !== false
     const barFixedPx = track.barWidth || 2
     const showOutline = track.showOutline === true
+    const outlineColor = track.outlineColor || null
+    const showBars = track.showBars !== false
     const fwdColor = color
     const revColor = adjustColor(color, -40)
 
@@ -90,25 +92,27 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       ctx.strokeStyle = theme.centerLine; ctx.lineWidth = 1
       ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(width, midY); ctx.stroke()
 
-      for (const bin of data.bins) {
-        const binW = ((bin.end - bin.start) / regionLen) * width
-        const w = autoBarWidth(binW)
-        const x = ((bin.start - regionStart) / regionLen) * width
-        const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
-        const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
-        if (fwd > 0) {
-          const ratio = useLog ? logScale(fwd, posMax) : fwd / posMax
-          ctx.fillStyle = fwdColor; ctx.fillRect(x, midY - ratio * topH, w, ratio * topH)
-        }
-        if (rev < 0) {
-          const ratio = useLog ? logScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax
-          ctx.fillStyle = revColor; ctx.fillRect(x, midY, w, ratio * botH)
+      if (showBars) {
+        for (const bin of data.bins) {
+          const binW = ((bin.end - bin.start) / regionLen) * width
+          const w = autoBarWidth(binW)
+          const x = ((bin.start - regionStart) / regionLen) * width
+          const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
+          const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
+          if (fwd > 0) {
+            const ratio = useLog ? logScale(fwd, posMax) : fwd / posMax
+            ctx.fillStyle = fwdColor; ctx.fillRect(x, midY - ratio * topH, w, ratio * topH)
+          }
+          if (rev < 0) {
+            const ratio = useLog ? logScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax
+            ctx.fillStyle = revColor; ctx.fillRect(x, midY, w, ratio * botH)
+          }
         }
       }
 
-      // Peak outline trace
       if (showOutline && data.bins.length > 0) {
-        // Forward outline
+        const fwdStroke = outlineColor || fwdColor
+        const revStroke = outlineColor || revColor
         ctx.beginPath()
         ctx.moveTo(((data.bins[0].start - regionStart) / regionLen) * width, midY)
         for (const bin of data.bins) {
@@ -116,12 +120,10 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
           const xEnd = ((bin.end - regionStart) / regionLen) * width
           const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
           const ratio = fwd > 0 ? (useLog ? logScale(fwd, posMax) : fwd / posMax) : 0
-          const y = midY - ratio * topH
-          ctx.lineTo(x, y); ctx.lineTo(xEnd, y)
+          ctx.lineTo(x, midY - ratio * topH); ctx.lineTo(xEnd, midY - ratio * topH)
         }
         ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, midY)
-        ctx.strokeStyle = fwdColor; ctx.lineWidth = 1.5; ctx.stroke()
-        // Reverse outline
+        ctx.strokeStyle = fwdStroke; ctx.lineWidth = 1.5; ctx.stroke()
         ctx.beginPath()
         ctx.moveTo(((data.bins[0].start - regionStart) / regionLen) * width, midY)
         for (const bin of data.bins) {
@@ -129,11 +131,10 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
           const xEnd = ((bin.end - regionStart) / regionLen) * width
           const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
           const ratio = rev < 0 ? (useLog ? logScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax) : 0
-          const y = midY + ratio * botH
-          ctx.lineTo(x, y); ctx.lineTo(xEnd, y)
+          ctx.lineTo(x, midY + ratio * botH); ctx.lineTo(xEnd, midY + ratio * botH)
         }
         ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, midY)
-        ctx.strokeStyle = revColor; ctx.lineWidth = 1.5; ctx.stroke()
+        ctx.strokeStyle = revStroke; ctx.lineWidth = 1.5; ctx.stroke()
       }
 
       const scaleLabel = useLog ? ' log\u2082' : ''
@@ -142,16 +143,17 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       drawScaleLabel(ctx, '0', 2, midY - 6, theme, true)
     } else {
       const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
-      ctx.fillStyle = fwdColor
-      for (const bin of data.bins) {
-        const binW = ((bin.end - bin.start) / regionLen) * width
-        const w = autoBarWidth(binW)
-        const x = ((bin.start - regionStart) / regionLen) * width
-        const ratio = useLog ? logScale(bin.value, effectiveMax) : bin.value / effectiveMax
-        const barH = ratio * (height - 14)
-        ctx.fillRect(x, height - barH - 2, w, barH)
+      if (showBars) {
+        ctx.fillStyle = fwdColor
+        for (const bin of data.bins) {
+          const binW = ((bin.end - bin.start) / regionLen) * width
+          const w = autoBarWidth(binW)
+          const x = ((bin.start - regionStart) / regionLen) * width
+          const ratio = useLog ? logScale(bin.value, effectiveMax) : bin.value / effectiveMax
+          const barH = ratio * (height - 14)
+          ctx.fillRect(x, height - barH - 2, w, barH)
+        }
       }
-      // Peak outline trace
       if (showOutline && data.bins.length > 0) {
         ctx.beginPath()
         const baseline = height - 2
@@ -164,7 +166,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
           ctx.lineTo(x, y); ctx.lineTo(xEnd, y)
         }
         ctx.lineTo(((data.bins[data.bins.length - 1].end - regionStart) / regionLen) * width, baseline)
-        ctx.strokeStyle = theme.textPrimary || '#fff'
+        ctx.strokeStyle = outlineColor || theme.textPrimary || '#fff'
         ctx.lineWidth = 1.5
         ctx.stroke()
       }
@@ -185,7 +187,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       }
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.showBars, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }

@@ -215,6 +215,16 @@ function svgCoverage(data, region, track, w, h, theme) {
   const barFixedPx = track.barWidth || 2
   const pxPerNt = w / regionLen
 
+  const showBars = track.showBars !== false
+  const showOutline = track.showOutline === true
+  const outColor = track.outlineColor || null
+
+  function autoW(binW) {
+    if (!barAuto) return Math.min(barFixedPx, binW)
+    if (pxPerNt >= 1) return Math.max(0.5, Math.min(pxPerNt, binW))
+    return Math.max(0.5, binW)
+  }
+
   if (hasNeg) {
     const midY = Math.round(h / 2)
     const topH = midY - 6
@@ -222,29 +232,46 @@ function svgCoverage(data, region, track, w, h, theme) {
     const posMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
     const negMax = userScaleMin != null ? userScaleMin : (Math.abs(minVal) || 1)
     s += `<line x1="0" y1="${midY}" x2="${w}" y2="${midY}" stroke="${theme.centerLine}" stroke-width="1"/>\n`
-    for (const bin of visibleBins) {
-      const x = ((bin.start - rStart) / regionLen) * w
-      const binW = ((bin.end - bin.start) / regionLen) * w
-      const autoW = Math.max(0.5, Math.min(pxPerNt, binW))
-      const bw = barAuto ? autoW : Math.min(barFixedPx, binW)
-      const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
-      const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
-      if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; s += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${color}"/>\n` }
-      if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; s += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${adjustColorSvg(color, -40)}"/>\n` }
+    if (showBars) {
+      for (const bin of visibleBins) {
+        const x = ((bin.start - rStart) / regionLen) * w
+        const bw = autoW(((bin.end - bin.start) / regionLen) * w)
+        const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
+        const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
+        if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; s += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${color}"/>\n` }
+        if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; s += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${adjustColorSvg(color, -40)}"/>\n` }
+      }
+    }
+    if (showOutline && visibleBins.length > 0) {
+      // Forward outline
+      let pts = visibleBins.map(b => { const x = ((b.start - rStart) / regionLen) * w; const xEnd = ((b.end - rStart) / regionLen) * w; const fwd = b.forward != null ? b.forward : Math.max(0, b.value); const r = fwd > 0 ? (useLog ? svgLogScale(fwd, posMax) : fwd / posMax) : 0; const y = midY - r * topH; return `${x},${y} ${xEnd},${y}` }).join(' ')
+      const x0 = ((visibleBins[0].start - rStart) / regionLen) * w
+      const xN = ((visibleBins[visibleBins.length - 1].end - rStart) / regionLen) * w
+      s += `<polyline points="${x0},${midY} ${pts} ${xN},${midY}" fill="none" stroke="${outColor || color}" stroke-width="1.5"/>\n`
+      // Reverse outline
+      pts = visibleBins.map(b => { const x = ((b.start - rStart) / regionLen) * w; const xEnd = ((b.end - rStart) / regionLen) * w; const rev = b.reverse != null ? b.reverse : Math.min(0, b.value); const r = rev < 0 ? (useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax) : 0; const y = midY + r * botH; return `${x},${y} ${xEnd},${y}` }).join(' ')
+      s += `<polyline points="${x0},${midY} ${pts} ${xN},${midY}" fill="none" stroke="${outColor || adjustColorSvg(color, -40)}" stroke-width="1.5"/>\n`
     }
     const lbl = useLog ? ' log\u2082' : ''
     s += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${posMax.toFixed(1)}${lbl}</text>\n`
     s += `<text x="2" y="${h - 2}" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">\u2212${negMax.toFixed(1)}${lbl}</text>\n`
   } else {
     const effMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
-    for (const bin of visibleBins) {
-      const x = ((bin.start - rStart) / regionLen) * w
-      const binW = ((bin.end - bin.start) / regionLen) * w
-      const autoW = Math.max(0.5, Math.min(pxPerNt, binW))
-      const bw = barAuto ? autoW : Math.min(barFixedPx, binW)
-      const r = useLog ? svgLogScale(bin.value, effMax) : bin.value / effMax
-      const bh = r * (h - 14)
-      s += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${color}"/>\n`
+    if (showBars) {
+      for (const bin of visibleBins) {
+        const x = ((bin.start - rStart) / regionLen) * w
+        const bw = autoW(((bin.end - bin.start) / regionLen) * w)
+        const r = useLog ? svgLogScale(bin.value, effMax) : bin.value / effMax
+        const bh = r * (h - 14)
+        s += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${color}"/>\n`
+      }
+    }
+    if (showOutline && visibleBins.length > 0) {
+      const baseline = h - 2
+      const pts = visibleBins.map(b => { const x = ((b.start - rStart) / regionLen) * w; const xEnd = ((b.end - rStart) / regionLen) * w; const r = useLog ? svgLogScale(b.value, effMax) : b.value / effMax; const y = h - r * (h - 14) - 2; return `${x},${y} ${xEnd},${y}` }).join(' ')
+      const x0 = ((visibleBins[0].start - rStart) / regionLen) * w
+      const xN = ((visibleBins[visibleBins.length - 1].end - rStart) / regionLen) * w
+      s += `<polyline points="${x0},${baseline} ${pts} ${xN},${baseline}" fill="none" stroke="${outColor || theme.textPrimary || '#fff'}" stroke-width="1.5"/>\n`
     }
     const lbl = useLog ? ' log\u2082' : ''
     s += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${effMax.toFixed(1)}${lbl}</text>\n`
