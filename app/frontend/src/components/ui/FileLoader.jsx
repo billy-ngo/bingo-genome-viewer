@@ -217,6 +217,7 @@ export default function FileLoader() {
     const compatible = []
     const incompatible = []
     const errors = []
+    const hints = []
     for (let idx = 0; idx < entries.length; idx++) {
       const { file, indexFile } = entries[idx]
       setStatus(`Loading track ${idx + 1}/${entries.length}: ${file.name}...`)
@@ -231,13 +232,21 @@ export default function FileLoader() {
           commitTrack(info)
           compatible.push(info)
         }
+        // Collect hints (e.g. "convert to BigWig")
+        if (info.hint) hints.push(info.hint)
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
     setLoading(false); setProgress(null)
     if (errors.length) { setErr(errors.join('; ')); setStatus(null) }
     else if (compatible.length > 0 && incompatible.length === 0) {
-      setStatus(`Added ${compatible.length} track${compatible.length > 1 ? 's' : ''}.`)
-      setTimeout(() => setStatus(null), 3000)
+      const msg = `Added ${compatible.length} track${compatible.length > 1 ? 's' : ''}.`
+      if (hints.length) {
+        setStatus(msg)
+        setTimeout(() => { setStatus(hints.join(' ')); setTimeout(() => setStatus(null), 8000) }, 2000)
+      } else {
+        setStatus(msg)
+        setTimeout(() => setStatus(null), 3000)
+      }
     } else if (incompatible.length === 0) { setStatus(null) }
     if (incompatible.length > 0) setTrackMismatch({ tracks: incompatible })
   }

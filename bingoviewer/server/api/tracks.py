@@ -65,7 +65,22 @@ async def load_track(
         track = app_state.load_track(str(dest), display_name)
         compatibility = app_state.check_track_compatibility(track["id"])
         target_chromosomes = app_state.get_target_chromosomes(track["id"])
-        return {**track, "compatibility": compatibility, "target_chromosomes": target_chromosomes}
+
+        # Suggest BigWig conversion for large text-based coverage files
+        hint = None
+        ext = dest.suffix.lower()
+        if ext in (".wig", ".bedgraph", ".bdg"):
+            size_mb = dest.stat().st_size / (1024 * 1024)
+            if size_mb > 10:
+                hint = (
+                    f"Tip: This {size_mb:.0f} MB {ext} file may load slowly. "
+                    f"Convert to BigWig with UCSC wigToBigWig for instant loading."
+                )
+
+        result = {**track, "compatibility": compatibility, "target_chromosomes": target_chromosomes}
+        if hint:
+            result["hint"] = hint
+        return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
