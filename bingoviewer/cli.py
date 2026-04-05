@@ -132,25 +132,20 @@ def _record_update_check():
 
 def _do_upgrade():
     """Run pip install --upgrade bingoviewer. Returns True on success."""
-    # Try normal install first
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "bingoviewer", "-q"],
-            capture_output=True, text=True, timeout=120,
-        )
-        if result.returncode == 0:
-            return True
-    except Exception:
-        pass
-    # Fallback: try with --user flag (permission issues on some systems)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--user", "bingoviewer", "-q"],
-            capture_output=True, text=True, timeout=120,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    cmds = [
+        [sys.executable, "-m", "pip", "install", "--upgrade", "bingoviewer"],
+        [sys.executable, "-m", "pip", "install", "--upgrade", "--user", "bingoviewer"],
+    ]
+    for cmd in cmds:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0:
+                return True
+            # Log the error for debugging
+            _log(f"  pip failed: {result.stderr.strip()[:200]}")
+        except Exception as e:
+            _log(f"  pip exception: {e}")
+    return False
 
 
 def _log(msg):
@@ -426,7 +421,9 @@ def main():
             print(f"  BiNgo Genome Viewer updated to {ver}.")
             print(f"  Run 'bingo' to launch the new version.")
         elif status == 'failed':
-            print(f"  Update to {ver} failed. Try running as administrator or:")
+            print(f"  Update to {ver} failed.")
+            print(f"  Check ~/.bingoviewer/update.log for details.")
+            print(f"  Or update manually:")
             print(f"    pip install --upgrade bingoviewer")
         elif status == 'skip':
             print(f"  Could not reach PyPI. Check your internet connection.")
