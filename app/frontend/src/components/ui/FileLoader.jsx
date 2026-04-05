@@ -111,7 +111,9 @@ export default function FileLoader() {
   const [progress, setProgress] = useState(null) // { percent, loaded, total, label }
   const [prompt, setPrompt] = useState(null) // { files: File[] }
   const [trackMismatch, setTrackMismatch] = useState(null) // { tracks: [...] }
+  const [baiPrompt, setBaiPrompt] = useState(null) // { indexFiles: File[] }
   const inputRef = useRef(null)
+  const bamPickerRef = useRef(null)
 
   const ALL_ACCEPT = [
     ...Array.from(GENOME_EXTS),
@@ -263,14 +265,12 @@ export default function FileLoader() {
     if (unknownFiles.length) {
       const orphanBai = unknownFiles.filter(f => f._indexOrphan)
       const otherUnknown = unknownFiles.filter(f => !f._indexOrphan)
-      const msgs = []
       if (orphanBai.length) {
-        msgs.push(`${orphanBai.map(f => f.name).join(', ')}: Index files must be uploaded together with their .bam file`)
+        setBaiPrompt({ indexFiles: orphanBai })
       }
       if (otherUnknown.length) {
-        msgs.push(`Unsupported: ${otherUnknown.map(f => f.name).join(', ')}`)
+        setErr(`Unsupported: ${otherUnknown.map(f => f.name).join(', ')}`)
       }
-      if (msgs.length) setErr(msgs.join('. '))
     }
 
     // Case 1: No genome loaded — auto-load first genome file
@@ -326,6 +326,33 @@ export default function FileLoader() {
 
   function handlePromptSkip() {
     setPrompt(null)
+  }
+
+  function handleBaiPromptPick() {
+    bamPickerRef.current?.click()
+  }
+
+  async function handleBaiPromptFile(e) {
+    const bamFiles = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!bamFiles.length || !baiPrompt) return
+    const idxFiles = baiPrompt.indexFiles
+    setBaiPrompt(null)
+    // Pair each BAM with the best matching index
+    const entries = []
+    for (const bam of bamFiles) {
+      const baseName = bam.name.replace(/\.bam$/i, '')
+      const paired = idxFiles.find(idx => {
+        const n = idx.name.toLowerCase()
+        return n === bam.name.toLowerCase() + '.bai' || n === baseName.toLowerCase() + '.bai'
+      }) || idxFiles[0] || null
+      entries.push({ file: bam, indexFile: paired })
+    }
+    await loadTrackEntries(entries)
+  }
+
+  function handleBaiPromptSkip() {
+    setBaiPrompt(null)
   }
 
   async function handleMismatchSkip() {
@@ -440,6 +467,32 @@ export default function FileLoader() {
             <div style={S.promptBtns}>
               <button style={S.promptBtn} onClick={handleMismatchSkip}>Skip</button>
               <button style={S.promptBtnPrimary} onClick={handleMismatchLoad}>Load Anyway</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Prompt to select matching BAM for orphaned .bai files */}
+      {baiPrompt && (
+        <div style={S.promptOverlay} onClick={handleBaiPromptSkip}>
+          <div style={S.promptBox} onClick={e => e.stopPropagation()}>
+            <div style={S.promptTitle}>BAM index file detected</div>
+            <div style={S.promptText}>
+              <span style={S.promptFile}>{baiPrompt.indexFiles.map(f => f.name).join(', ')}</span>
+              {' '}is an index file. Please select the matching <strong>.bam</strong> file to load the track.
+            </div>
+            <input
+              ref={bamPickerRef}
+              type="file"
+              accept=".bam"
+              style={{ display: 'none' }}
+              onChange={handleBaiPromptFile}
+            />
+            <div style={S.promptBtns}>
+              <button style={S.promptBtn} onClick={handleBaiPromptSkip}>Skip</button>
+              <button style={S.promptBtnPrimary} onClick={handleBaiPromptPick}>
+                Select .bam file
+              </button>
             </div>
           </div>
         </div>
