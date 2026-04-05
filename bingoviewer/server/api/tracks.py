@@ -50,16 +50,18 @@ async def load_track(
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        # Save index file (.bai) alongside BAM if provided
-        if index is not None:
+        # Save index file (.bai) alongside BAM with correct naming
+        ext = dest.suffix.lower()
+        if index is not None and ext in (".bam", ".cram"):
+            # Always save as <bamname>.bam.bai so _find_index() can find it
+            index_dest = dest.parent / (dest.name + ".bai")
+            with index_dest.open("wb") as f:
+                shutil.copyfileobj(index.file, f)
+        elif index is not None:
+            # Non-BAM index file — save with original name
             index_dest = _upload_dir / _clean_name(index.filename)
             with index_dest.open("wb") as f:
                 shutil.copyfileobj(index.file, f)
-        else:
-            # Auto-generate expected index name so the error message is helpful
-            ext = dest.suffix.lower()
-            if ext in (".bam", ".cram"):
-                _ensure_index_hint(dest)
 
         display_name = _clean_name(name) if name else clean_filename
         track = app_state.load_track(str(dest), display_name)

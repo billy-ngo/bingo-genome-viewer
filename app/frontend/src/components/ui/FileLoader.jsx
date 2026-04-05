@@ -92,7 +92,10 @@ function classifyFiles(files) {
     trackEntries.push({ file: f, indexFile: null })
   }
 
-  // Remaining unpaired .bai files are unknown
+  // Remaining unpaired .bai files — give a specific message
+  for (const f of indexFiles) {
+    f._indexOrphan = true
+  }
   unknownFiles.push(...indexFiles)
 
   return { genomeFiles, trackEntries, unknownFiles }
@@ -258,7 +261,16 @@ export default function FileLoader() {
     const { genomeFiles, trackEntries, unknownFiles } = classifyFiles(files)
 
     if (unknownFiles.length) {
-      setErr(`Unsupported: ${unknownFiles.map(f => f.name).join(', ')}`)
+      const orphanBai = unknownFiles.filter(f => f._indexOrphan)
+      const otherUnknown = unknownFiles.filter(f => !f._indexOrphan)
+      const msgs = []
+      if (orphanBai.length) {
+        msgs.push(`${orphanBai.map(f => f.name).join(', ')}: Index files must be uploaded together with their .bam file`)
+      }
+      if (otherUnknown.length) {
+        msgs.push(`Unsupported: ${otherUnknown.map(f => f.name).join(', ')}`)
+      }
+      if (msgs.length) setErr(msgs.join('. '))
     }
 
     // Case 1: No genome loaded — auto-load first genome file

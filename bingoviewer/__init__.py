@@ -1,3 +1,3 @@
 """BiNgo Genome Viewer — a lightweight browser-based genomics viewer."""
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
