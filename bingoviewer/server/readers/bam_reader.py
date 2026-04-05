@@ -94,40 +94,54 @@ class BamReader:
         return chrom
 
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
-        """Return binned coverage by piling up fetched reads."""
+        """Return binned coverage by piling up fetched reads.
+
+        For performance with large BAM files, bins reads directly into
+        coverage bins instead of computing per-base depth first.
+        """
         chrom = self._resolve_chrom(chrom)
         region_len = end - start
         if region_len <= 0:
             return []
 
-        depth = [0] * region_len
+        n_bins = min(bins, region_len)
+        bin_size = region_len / n_bins
+        # Accumulate coverage directly into bins
+        counts = [0.0] * n_bins  # sum of base-coverage per bin
         try:
             for read in self._aln.fetch(chrom, start, end):
                 if read.is_unmapped:
                     continue
                 rs = read.reference_start
                 re = read.reference_end if read.reference_end else rs + 1
-                lo = max(rs, start) - start
-                hi = min(re, end) - start
-                for i in range(lo, hi):
-                    depth[i] += 1
+                # Clamp to region
+                rs = max(rs, start)
+                re = min(re, end)
+                if rs >= re:
+                    continue
+                # Map read span to bin range
+                bi_start = int((rs - start) / bin_size)
+                bi_end = int((re - 1 - start) / bin_size) + 1
+                bi_start = max(0, min(bi_start, n_bins - 1))
+                bi_end = max(1, min(bi_end, n_bins))
+                for bi in range(bi_start, bi_end):
+                    # Calculate overlap between read and this bin
+                    b_lo = start + bi * bin_size
+                    b_hi = start + (bi + 1) * bin_size
+                    overlap = min(re, b_hi) - max(rs, b_lo)
+                    if overlap > 0:
+                        counts[bi] += overlap / (b_hi - b_lo)
         except KeyError:
-            return []  # chromosome not in index
+            return []
 
-        # Use floating-point bin boundaries to avoid gaps from integer rounding
-        n_bins = min(bins, region_len)
-        bin_size = region_len / n_bins
         result = []
         for i in range(n_bins):
             b_start = int(start + i * bin_size)
             b_end = int(start + (i + 1) * bin_size)
-            lo = b_start - start
-            hi = b_end - start
-            chunk = depth[lo:hi]
             result.append({
                 "start": b_start,
                 "end":   b_end,
-                "value": sum(chunk) / len(chunk) if chunk else 0.0,
+                "value": counts[i],
             })
         return result
 

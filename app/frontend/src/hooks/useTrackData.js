@@ -17,9 +17,9 @@ import { useState, useEffect, useRef } from 'react'
 import { tracksApi } from '../api/client'
 
 const READ_DETAIL_THRESHOLD = 50_000
-const OVERSCAN = 1.0
-const PAN_DEBOUNCE = 120
-const ZOOM_REFETCH_DELAY = 1000
+const OVERSCAN = 0.5            // fetch 0.5x extra on each side (2x total)
+const PAN_DEBOUNCE = 100
+const ZOOM_REFETCH_DELAY = 800
 
 function makeCache(maxSize = 200) {
   const map = new Map()
@@ -127,7 +127,8 @@ export function useTrackData(track, region, canvasWidth) {
     const fetchStart = Math.max(0, Math.floor(start - viewLen * os))
     const fetchEnd = Math.ceil(end + viewLen * os)
     const ratio = (fetchEnd - fetchStart) / viewLen
-    const bins = Math.min(Math.floor(canvasWidth * ratio), 5000)
+    // Cap bins to 2x canvas width — sufficient resolution without wasteful over-sampling
+    const bins = Math.min(Math.floor(canvasWidth * ratio), Math.max(canvasWidth * 2, 1000))
 
     const cacheKey = `${track.id}|${type}|${chrom}|${fetchStart}|${fetchEnd}|${bins}`
 
