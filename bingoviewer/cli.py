@@ -48,6 +48,14 @@ def _show_welcome_if_new():
     except Exception:
         pass
 
+    # Skip printing under pythonw (no stdout)
+    try:
+        if sys.stdout is None:
+            return
+        sys.stdout.write('')
+    except Exception:
+        return
+
     is_upgrade = prev is not None
     print()
     print(f"  {'=' * 44}")
