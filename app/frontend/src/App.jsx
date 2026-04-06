@@ -19,8 +19,9 @@ import NavigationBar from './components/NavigationBar'
 import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
+import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.6.0'
+const APP_VERSION = '2.6.1'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -781,6 +782,7 @@ function BrowserApp() {
 
       {/* Exit warning guard */}
       {genome && <ExitGuard labelWidth={labelWidth} />}
+      <RegionColorEditor />
     </div>
   )
 }
