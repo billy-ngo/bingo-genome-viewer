@@ -136,15 +136,18 @@ def _do_upgrade():
         [sys.executable, "-m", "pip", "install", "--upgrade", "bingoviewer"],
         [sys.executable, "-m", "pip", "install", "--upgrade", "--user", "bingoviewer"],
     ]
+    last_err = None
     for cmd in cmds:
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0:
                 return True
-            # Log the error for debugging
-            _log(f"  pip failed: {result.stderr.strip()[:200]}")
+            last_err = result.stderr.strip()[:200]
         except Exception as e:
-            _log(f"  pip exception: {e}")
+            last_err = str(e)
+    # Only log if ALL attempts failed
+    if last_err:
+        _log(f"  pip failed: {last_err}")
     return False
 
 
@@ -196,13 +199,11 @@ def check_and_update(force=False):
 
 
 def _check_update_with_prompt():
-    """Check for updates before launch. If an update is available, prompt the user.
+    """Check for updates before launch. Always checks PyPI (no throttle).
 
     Works in both terminal mode (interactive prompt) and pythonw mode
-    (shows a tkinter dialog if available, otherwise updates silently).
+    (shows a tkinter dialog if available, otherwise skips).
     """
-    if not _should_check_update():
-        return
 
     _record_update_check()
 

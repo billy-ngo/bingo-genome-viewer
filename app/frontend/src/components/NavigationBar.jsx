@@ -11,7 +11,7 @@ import { useTheme } from '../store/ThemeContext'
 
 export default function NavigationBar() {
   const { theme } = useTheme()
-  const { genome, region, navigateTo, zoom, pan } = useBrowser()
+  const { genome, region, selection, navigateTo, zoom, pan } = useBrowser()
   const [coordText, setCoordText] = useState('')
   const scrubberRef = useRef(null)
   const draggingRef = useRef(false)
@@ -136,6 +136,26 @@ export default function NavigationBar() {
       <button style={S.btn} onClick={() => zoom(0.5)} title="Zoom in">{'\uFF0B'}</button>
       <button style={S.btn} onClick={() => pan(-regionLen * 0.5)} title="Pan left">{'\u25C0'}</button>
       <button style={S.btn} onClick={() => pan(regionLen * 0.5)} title="Pan right">{'\u25B6'}</button>
+      <button
+        style={{ ...S.btn, opacity: selection ? 1 : 0.3, cursor: selection ? 'pointer' : 'default' }}
+        onClick={() => {
+          if (selection && region) {
+            const selLen = selection.end - selection.start
+            const context = selLen * 0.15
+            navigateTo(selection.chrom, selection.start - context, selection.end + context)
+          }
+        }}
+        disabled={!selection}
+        title={selection ? `Snap to selection (${selection.start.toLocaleString()}-${selection.end.toLocaleString()})` : 'No region selected (right-click drag to select)'}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" style={{ display: 'block' }}>
+          <circle cx="6" cy="6" r="4" />
+          <line x1="6" y1="0" x2="6" y2="3" />
+          <line x1="6" y1="9" x2="6" y2="12" />
+          <line x1="0" y1="6" x2="3" y2="6" />
+          <line x1="9" y1="6" x2="12" y2="6" />
+        </svg>
+      </button>
 
       {/* Chromosome scrubber */}
       {region && chromLen > 0 && (

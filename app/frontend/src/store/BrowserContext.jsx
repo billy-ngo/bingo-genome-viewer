@@ -14,6 +14,7 @@ export function BrowserProvider({ children }) {
   const [selection, setSelectionState] = useState(null) // { chrom, start, end } or null
   const genomeRef = useRef(null)
   const regionRef = useRef(null)
+  const selectionRef = useRef(null)
 
   const setGenome = useCallback((g) => {
     genomeRef.current = g
@@ -46,8 +47,16 @@ export function BrowserProvider({ children }) {
   const zoom = useCallback((factor, anchorFraction = 0.5) => {
     const r = regionRef.current
     if (!r) return
+    const sel = selectionRef.current
     const len = r.end - r.start
-    const anchor = r.start + len * anchorFraction
+    // If a selection exists on the same chromosome, zoom centered on it
+    let anchor
+    if (sel && sel.chrom === r.chrom) {
+      anchor = (sel.start + sel.end) / 2
+      anchorFraction = (anchor - r.start) / len
+    } else {
+      anchor = r.start + len * anchorFraction
+    }
     const newLen = Math.max(100, len * factor)
     navigateTo(r.chrom, anchor - newLen * anchorFraction, anchor + newLen * (1 - anchorFraction))
   }, [navigateTo])
@@ -59,10 +68,12 @@ export function BrowserProvider({ children }) {
   }, [navigateTo])
 
   const setSelection = useCallback((sel) => {
+    selectionRef.current = sel
     setSelectionState(sel)
   }, [])
 
   const clearSelection = useCallback(() => {
+    selectionRef.current = null
     setSelectionState(null)
   }, [])
 

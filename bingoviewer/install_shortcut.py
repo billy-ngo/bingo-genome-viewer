@@ -123,11 +123,14 @@ def _install_macos(target_dir):
     for d in (macos, resources):
         d.mkdir(parents=True, exist_ok=True)
 
-    # launcher script
+    # launcher script — use python -m bingoviewer for robustness
+    # (the bingo exe may not be on PATH when launched from Finder)
+    python_exe = sys.executable
     launcher = macos / "launcher"
     launcher.write_text(textwrap.dedent(f"""\
         #!/usr/bin/env bash
-        exec "{bingo}" "$@"
+        export PATH="/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$PATH"
+        exec "{python_exe}" -m bingoviewer "$@"
     """))
     launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 

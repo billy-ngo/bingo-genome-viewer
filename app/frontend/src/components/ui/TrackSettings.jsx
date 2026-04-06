@@ -142,9 +142,7 @@ export default function TrackSettings({ onClose }) {
                   Show
                 </label>
                 {commonShowBars !== false && (
-                  <input type="color" value={commonColor} style={S.colorInput}
-                    onChange={e => applyToSelected({ color: e.target.value })}
-                    title="Bar fill color" />
+                  <ColorHexInput value={commonColor} onChange={v => applyToSelected({ color: v })} theme={t} />
                 )}
               </div>
             )}
@@ -153,7 +151,7 @@ export default function TrackSettings({ onClose }) {
             {(hasVariants || (!hasBars && !hasAnnotation)) && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Color</span>
-                <input type="color" value={commonColor} style={S.colorInput} onChange={e => applyToSelected({ color: e.target.value })} />
+                <ColorHexInput value={commonColor} onChange={v => applyToSelected({ color: v })} theme={t} />
               </div>
             )}
 
@@ -197,10 +195,7 @@ export default function TrackSettings({ onClose }) {
                     Trace peaks
                   </label>
                   {commonShowOutline === true && (
-                    <input type="color" value={commonOutlineColor || commonColor || '#ffffff'}
-                      onChange={e => applyToSelected({ outlineColor: e.target.value })}
-                      title="Outline color"
-                      style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0, marginLeft: 4 }} />
+                    <ColorHexInput value={commonOutlineColor || commonColor || '#ffffff'} onChange={v => applyToSelected({ outlineColor: v })} theme={t} />
                   )}
                 </div>
                 {commonShowOutline === true && (
@@ -293,15 +288,9 @@ export default function TrackSettings({ onClose }) {
                 <div style={S.controlRow}>
                   <span style={S.controlLabel}>Strand colors</span>
                   <span style={{ fontSize: 10, color: t.textTertiary, marginRight: 2 }}>{'\u25B6'}</span>
-                  <input type="color" value={commonFwdColor || '#90a4ae'}
-                    onChange={e => applyToSelected({ fwdColor: e.target.value })}
-                    title="Forward strand color"
-                    style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
-                  <span style={{ fontSize: 10, color: t.textTertiary, marginLeft: 6, marginRight: 2 }}>{'\u25C0'}</span>
-                  <input type="color" value={commonRevColor || '#f06292'}
-                    onChange={e => applyToSelected({ revColor: e.target.value })}
-                    title="Reverse strand color"
-                    style={{ width: 22, height: 18, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+                  <ColorHexInput value={commonFwdColor || '#90a4ae'} onChange={v => applyToSelected({ fwdColor: v })} theme={t} />
+                  <span style={{ fontSize: 10, color: t.textTertiary, marginLeft: 4, marginRight: 2 }}>{'\u25C0'}</span>
+                  <ColorHexInput value={commonRevColor || '#f06292'} onChange={v => applyToSelected({ revColor: v })} theme={t} />
                   <button style={{ ...S.smallBtn, marginLeft: 'auto' }}
                     onClick={() => applyToSelected({ fwdColor: null, revColor: null })}
                     title="Reset to defaults"
@@ -485,6 +474,48 @@ function AnnotationColorSection({ tracks, applyToSelected, theme }) {
         style={{ position: 'absolute', left: -9999, top: -9999, opacity: 0, width: 0, height: 0 }}
         onChange={(e) => { if (nativeTarget) setColor(nativeTarget, e.target.value) }}
       />
+    </div>
+  )
+}
+
+/** Compact color input: swatch (double-click for OS picker) + hex text input. */
+function ColorHexInput({ value, onChange, theme }) {
+  const nativeRef = useRef(null)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <span
+        style={{ width: 20, height: 16, borderRadius: 3, background: value, border: '1px solid rgba(255,255,255,0.2)', cursor: 'pointer', flexShrink: 0 }}
+        onDoubleClick={() => nativeRef.current?.click()}
+        onClick={() => nativeRef.current?.click()}
+        title="Click for color picker"
+      />
+      <input
+        type="text"
+        defaultValue={value}
+        key={value}
+        placeholder="#hex"
+        style={{
+          background: theme.inputBg, border: `1px solid ${theme.borderAccent}`,
+          borderRadius: 3, color: theme.textPrimary, padding: '1px 4px',
+          fontSize: 10, fontFamily: 'monospace', width: 62,
+        }}
+        onKeyDown={e => {
+          if (e.key === 'Enter') {
+            let v = e.target.value.trim()
+            if (v && !v.startsWith('#')) v = '#' + v
+            if (/^#[0-9a-fA-F]{3,8}$/.test(v)) onChange(v)
+          }
+        }}
+        onBlur={e => {
+          let v = e.target.value.trim()
+          if (v && !v.startsWith('#')) v = '#' + v
+          if (/^#[0-9a-fA-F]{3,8}$/.test(v)) onChange(v)
+        }}
+        onClick={e => e.stopPropagation()}
+      />
+      <input ref={nativeRef} type="color" value={value || '#ffffff'}
+        onChange={e => onChange(e.target.value)}
+        style={{ position: 'absolute', left: -9999, opacity: 0, width: 0, height: 0 }} />
     </div>
   )
 }
