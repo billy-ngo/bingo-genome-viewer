@@ -223,45 +223,42 @@ def _check_update_with_prompt():
         except Exception:
             pass
 
-    should_update = False
+        should_update = False
 
-    if has_terminal:
-        try:
-            print(f"\n  Update available: {installed} → {latest}")
-            answer = input("  Install update now? [Y/n]: ").strip()
-            should_update = answer.lower() != 'n'
-        except (EOFError, OSError):
-            # No stdin (e.g. pythonw) — try tkinter
-            should_update = _tk_update_prompt(installed, latest)
-    else:
-        should_update = _tk_update_prompt(installed, latest)
-
-    if should_update:
-        _log(f"  Updating BiNgo Genome Viewer: {installed} → {latest} ...")
-        if _do_upgrade():
-            _log(f"  Updated to {latest}.")
-            if has_terminal:
-                print(f"\n  Please run 'bingo' again to launch the new version.\n")
-                sys.exit(0)
-            else:
-                # Running from shortcut (pythonw) — show dialog and relaunch
-                try:
-                    import tkinter as tk
-                    from tkinter import messagebox
-                    root = tk.Tk()
-                    root.withdraw()
-                    messagebox.showinfo(
-                        "BiNgo Genome Viewer",
-                        f"Updated to v{latest}.\n\nThe viewer will now relaunch."
-                    )
-                    root.destroy()
-                except Exception:
-                    pass
-                # Relaunch via subprocess (new process gets new code)
-                subprocess.Popen([sys.executable, "-m", "bingoviewer", "--no-update"])
-                sys.exit(0)
+        if has_terminal:
+            try:
+                print(f"\n  Update available: {installed} \u2192 {latest}")
+                answer = input("  Install update now? [Y/n]: ").strip()
+                should_update = answer.lower() != 'n'
+            except (EOFError, OSError):
+                should_update = _tk_update_prompt(installed, latest)
         else:
-            _log(f"  Update failed. You can retry with: bingo --update")
+            should_update = _tk_update_prompt(installed, latest)
+
+        if should_update:
+            _log(f"  Updating BiNgo Genome Viewer: {installed} \u2192 {latest} ...")
+            if _do_upgrade():
+                _log(f"  Updated to {latest}.")
+                if has_terminal:
+                    print(f"\n  Please run 'bingo' again to launch the new version.\n")
+                    sys.exit(0)
+                else:
+                    try:
+                        import tkinter as tk
+                        from tkinter import messagebox
+                        root = tk.Tk()
+                        root.withdraw()
+                        messagebox.showinfo(
+                            "BiNgo Genome Viewer",
+                            f"Updated to v{latest}.\n\nThe viewer will now relaunch."
+                        )
+                        root.destroy()
+                    except Exception:
+                        pass
+                    subprocess.Popen([sys.executable, "-m", "bingoviewer", "--no-update"])
+                    sys.exit(0)
+            else:
+                _log(f"  Update failed. You can retry with: bingo --update")
     except Exception:
         pass  # Never let update check prevent app from launching
 
