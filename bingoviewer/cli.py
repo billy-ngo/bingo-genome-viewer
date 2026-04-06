@@ -95,7 +95,7 @@ def _get_pypi_version():
     try:
         import urllib.request
         url = "https://pypi.org/pypi/bingoviewer/json"
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        with urllib.request.urlopen(url, timeout=3) as resp:
             data = json.loads(resp.read())
             return data["info"]["version"]
     except Exception:
@@ -202,26 +202,26 @@ def _check_update_with_prompt():
     """Check for updates before launch. Always checks PyPI (no throttle).
 
     Works in both terminal mode (interactive prompt) and pythonw mode
-    (shows a tkinter dialog if available, otherwise skips).
+    (shows a tkinter dialog if available, otherwise skips silently).
+    Wrapped in try/except to never prevent the app from launching.
     """
-
-    _record_update_check()
-
-    installed = _get_installed_version()
-    latest = _get_pypi_version()
-
-    if latest is None or _version_tuple(latest) <= _version_tuple(installed):
-        return
-
-    # Determine if we have a terminal for interactive prompt
-    has_terminal = sys.stdout is not None and hasattr(sys.stdout, 'write')
     try:
-        if has_terminal:
-            sys.stdout.write('')
-        else:
-            has_terminal = False
-    except Exception:
+        _record_update_check()
+
+        installed = _get_installed_version()
+        latest = _get_pypi_version()
+
+        if latest is None or _version_tuple(latest) <= _version_tuple(installed):
+            return
+
+        # Determine if we have a terminal for interactive prompt
         has_terminal = False
+        try:
+            if sys.stdout is not None and hasattr(sys.stdout, 'write'):
+                sys.stdout.write('')
+                has_terminal = True
+        except Exception:
+            pass
 
     should_update = False
 
@@ -262,6 +262,8 @@ def _check_update_with_prompt():
                 sys.exit(0)
         else:
             _log(f"  Update failed. You can retry with: bingo --update")
+    except Exception:
+        pass  # Never let update check prevent app from launching
 
 
 def _tk_update_prompt(installed, latest):
@@ -477,7 +479,17 @@ def main():
     _show_welcome_if_new()
 
     # ── Pre-launch update check (prompt user) ──────────────────────
-    if not args.no_update:
+    # In terminal mode: check synchronously (user sees prompt)
+    # In pythonw mode: skip here, check after server starts via bg thread
+    has_terminal = False
+    try:
+        if sys.stdout is not None and hasattr(sys.stdout, 'write'):
+            sys.stdout.write('')
+            has_terminal = True
+    except Exception:
+        pass
+
+    if not args.no_update and has_terminal:
         _check_update_with_prompt()
 
     # ── Single-instance check (fast: PID probe → quick HTTP) ──────
@@ -508,6 +520,30 @@ def main():
     # Write lock file and register cleanup
     _write_lock(args.host, args.port)
     atexit.register(_remove_lock)
+
+    # Background update check for pythonw (shortcut) launches
+    if not args.no_update and not has_terminal:
+        def _bg_update_check():
+            time.sleep(3)
+            try:
+                installed = _get_installed_version()
+                latest = _get_pypi_version()
+                if latest and _version_tuple(latest) > _version_tuple(installed):
+                    _log(f"  Update available: {installed} → {latest}. Run 'bingo --update' to install.")
+                    if _tk_update_prompt(installed, latest):
+                        if _do_upgrade():
+                            _log(f"  Updated to {latest}.")
+                            try:
+                                import tkinter as tk
+                                from tkinter import messagebox
+                                root = tk.Tk(); root.withdraw()
+                                messagebox.showinfo("BiNgo Genome Viewer", f"Updated to v{latest}.\n\nRestart the viewer to use the new version.")
+                                root.destroy()
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        threading.Thread(target=_bg_update_check, daemon=True).start()
 
     # ── Start server ──────────────────────────────────────────────
     # On Windows, Python's default ProactorEventLoop has a known bug where
