@@ -73,7 +73,10 @@ async def add_chromosomes(file: UploadFile = File(...)):
 async def load_genome_from_path(path: str = Form(...)):
     """Load genome from a local file path."""
     from pathlib import Path as P
-    path = path.strip().strip('"').strip("'").replace('\\ ', ' ')
+    path = path.strip()
+    for q in ('"', "'", '`'):
+        path = path.strip(q)
+    path = path.strip().replace('\\ ', ' ')
     p = P(path).expanduser()
     if not p.exists() and not p.resolve().exists():
         parent = p.parent

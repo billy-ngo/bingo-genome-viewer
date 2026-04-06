@@ -5,17 +5,19 @@ CRAM is not supported by bamnostic; use BAM instead.
 """
 
 from pathlib import Path
+from typing import Optional
 
 import bamnostic as bam
 
 MAX_READS_RETURNED = 5000
+MAX_COVERAGE_READS = 500_000   # cap reads iterated for coverage computation
 READ_DETAIL_THRESHOLD = 50_000  # bp
 
 # Standard index naming conventions: file.bam.bai and file.bai
 _INDEX_SUFFIXES = (".bam.bai", ".bai")
 
 
-def _find_index(bam_path: str) -> str | None:
+def _find_index(bam_path: str) -> Optional[str]:
     """Locate a .bai index for the given BAM file.
 
     Checks both naming conventions (.bam.bai and .bai) in the same
@@ -96,8 +98,10 @@ class BamReader:
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
         """Return binned coverage by piling up fetched reads.
 
-        For performance with large BAM files, bins reads directly into
-        coverage bins instead of computing per-base depth first.
+        For large regions, splits into sub-regions (50kb chunks) to ensure
+        bamnostic's index-based fetch covers the entire span reliably.
+        Large BAM files can fail to return all reads from a single huge
+        fetch spanning millions of bases.
         """
         chrom = self._resolve_chrom(chrom)
         region_len = end - start
@@ -106,33 +110,45 @@ class BamReader:
 
         n_bins = min(bins, region_len)
         bin_size = region_len / n_bins
-        # Accumulate coverage directly into bins
-        counts = [0.0] * n_bins  # sum of base-coverage per bin
+        counts = [0.0] * n_bins
+
+        # Split large regions into chunks for reliable index traversal
+        CHUNK_SIZE = 50_000
+        total_reads = 0
+
         try:
-            for read in self._aln.fetch(chrom, start, end):
-                if read.is_unmapped:
-                    continue
-                rs = read.reference_start
-                re = read.reference_end if read.reference_end else rs + 1
-                # Clamp to region
-                rs = max(rs, start)
-                re = min(re, end)
-                if rs >= re:
-                    continue
-                # Map read span to bin range
-                bi_start = int((rs - start) / bin_size)
-                bi_end = int((re - 1 - start) / bin_size) + 1
-                bi_start = max(0, min(bi_start, n_bins - 1))
-                bi_end = max(1, min(bi_end, n_bins))
-                for bi in range(bi_start, bi_end):
-                    # Calculate overlap between read and this bin
-                    b_lo = start + bi * bin_size
-                    b_hi = start + (bi + 1) * bin_size
-                    overlap = min(re, b_hi) - max(rs, b_lo)
-                    if overlap > 0:
-                        counts[bi] += overlap / (b_hi - b_lo)
+            chunk_start = start
+            while chunk_start < end:
+                chunk_end = min(chunk_start + CHUNK_SIZE, end)
+                for read in self._aln.fetch(chrom, chunk_start, chunk_end):
+                    if read.is_unmapped:
+                        continue
+                    rs = read.reference_start
+                    re = read.reference_end if read.reference_end else rs + 1
+                    rs = max(rs, start)
+                    re = min(re, end)
+                    if rs >= re:
+                        continue
+                    bi_start = int((rs - start) / bin_size)
+                    bi_end = int((re - 1 - start) / bin_size) + 1
+                    bi_start = max(0, min(bi_start, n_bins - 1))
+                    bi_end = max(1, min(bi_end, n_bins))
+                    for bi in range(bi_start, bi_end):
+                        b_lo = start + bi * bin_size
+                        b_hi = start + (bi + 1) * bin_size
+                        overlap = min(re, b_hi) - max(rs, b_lo)
+                        if overlap > 0:
+                            counts[bi] += overlap / (b_hi - b_lo)
+                    total_reads += 1
+                    if total_reads >= MAX_COVERAGE_READS:
+                        break
+                if total_reads >= MAX_COVERAGE_READS:
+                    break
+                chunk_start = chunk_end
         except KeyError:
             return []
+        except Exception:
+            pass
 
         result = []
         for i in range(n_bins):

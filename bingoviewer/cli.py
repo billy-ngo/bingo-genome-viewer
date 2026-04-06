@@ -376,8 +376,16 @@ def _offer_shortcut_install():
     try:
         answer = input("  Create a desktop shortcut? [Y/n]: ").strip()
         if answer.lower() != 'n':
-            from bingoviewer.install_shortcut import main as install_main
-            install_main()
+            try:
+                from bingoviewer.install_shortcut import main as install_main
+                install_main()
+            except ImportError:
+                print("  Shortcut creation requires tkinter.")
+                print("  Install it with: conda install tk  (or)  sudo apt install python3-tk")
+                print("  You can create a shortcut later with: bingo --install")
+            except Exception as e:
+                print(f"  Shortcut creation failed: {e}")
+                print("  You can try again later with: bingo --install")
         return
     except (EOFError, OSError):
         pass
@@ -437,8 +445,14 @@ def main():
         return 0
 
     if args.install:
-        from bingoviewer.install_shortcut import main as install_main
-        install_main()
+        try:
+            from bingoviewer.install_shortcut import main as install_main
+            install_main()
+        except ImportError:
+            print("  Shortcut creation requires tkinter.")
+            print("  Install it with: conda install tk  (or)  sudo apt install python3-tk")
+        except Exception as e:
+            print(f"  Shortcut creation failed: {e}")
         return 0
 
     # ── Manual update command ────────────────────────────────────

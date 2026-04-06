@@ -94,8 +94,12 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     """Load track from a local file path (no upload needed)."""
     from pathlib import Path as P
 
-    # Clean up the path: strip whitespace, quotes, and shell escape backslashes
-    path = path.strip().strip('"').strip("'")
+    # Clean up the path: strip whitespace, all quote types, shell escapes
+    path = path.strip()
+    # Strip matching or trailing quotes (handles '/path', "/path", `/path`, path')
+    for q in ('"', "'", '`'):
+        path = path.strip(q)
+    path = path.strip()
     # Remove shell-escaped spaces (e.g., /path/to/Sequencing\ Results/ → /path/to/Sequencing Results/)
     path = path.replace('\\ ', ' ')
     if path.lower().endswith('.bai'):
