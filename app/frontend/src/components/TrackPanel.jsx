@@ -244,6 +244,7 @@ export default function TrackPanel({
           height={track.height}
           trackData={getLiveTrackData(track.id)}
           trackType={track.track_type}
+          trackId={track.id}
         />
       </div>
       <div

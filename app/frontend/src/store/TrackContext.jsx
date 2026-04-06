@@ -75,6 +75,7 @@ export function TrackProvider({ children }) {
         revColor: null,     // reverse strand color (null = default #f06292)
         arrowStyle: 'pointed', // 'pointed', 'flat', 'chevron', 'fade'
         arrowSize: 4,       // arrow tip size in pixels (2-12)
+        regionOverlays: [], // [{ chrom, start, end, color, opacity }]
         targetChromosomes: info.target_chromosomes || null,
         ...(isAnnotation ? { annotationColors: null } : {}),
       }]

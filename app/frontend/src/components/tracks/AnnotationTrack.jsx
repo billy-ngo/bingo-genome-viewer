@@ -21,7 +21,7 @@ const BASE_COLORS = { A: '#4caf50', T: '#f44336', C: '#2196f3', G: '#ff9800', N:
 
 export default function AnnotationTrack({ track, width, height, onWarning }) {
   const canvasRef = useRef(null)
-  const { region, navigateTo } = useBrowser()
+  const { region, navigateTo, setSelection } = useBrowser()
   const { tracks } = useTracks()
   const { theme } = useTheme()
   const { data, loading, error } = useTrackData(track, region, width)
@@ -248,6 +248,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         const viewStart = feat.start - context
         const viewEnd = feat.end + context
         navigateTo(region.chrom, viewStart, viewEnd)
+        setSelection({ chrom: region.chrom, start: feat.start, end: feat.end })
         setTooltip(null)
         return
       }
