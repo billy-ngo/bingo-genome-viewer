@@ -4,16 +4,16 @@
  * Does NOT use an overlay — the rest of the app remains interactive.
  * Only one instance of each panel type should be rendered at a time.
  *
- * Content scales with panel width (down to a minimum font size),
- * then switches to scrolling when the panel is too small to scale further.
+ * Resizable from bottom-right, bottom-left, and top-left corners.
+ * Content scales proportionally with panel width.
  */
 import React, { useRef, useState, useCallback, useMemo } from 'react'
 
 const MIN_W = 260
 const MIN_H = 180
-const SCALE_BASE_W = 440     // width at which scale = 1.0
-const MIN_SCALE = 0.78       // don't scale below this (keeps text ≥ ~11px)
-const MAX_SCALE = 1.4        // don't scale above this
+const SCALE_BASE_W = 440
+const MIN_SCALE = 0.78
+const MAX_SCALE = 1.4
 
 export default function DraggablePanel({ title, onClose, theme, children, defaultWidth = 440, defaultHeight = 500 }) {
   const [pos, setPos] = useState(() => ({
@@ -29,7 +29,6 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
     return Math.max(MIN_SCALE, Math.min(MAX_SCALE, raw))
   }, [size.w])
 
-  // Content width in logical pixels (before scaling)
   const contentWidth = size.w / scale
 
   const onDragStart = useCallback((e) => {
@@ -52,16 +51,39 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
     window.addEventListener('mouseup', onUp)
   }, [pos])
 
-  const onResizeStart = useCallback((e) => {
+  // Generic corner resize handler
+  // corner: 'br' (bottom-right), 'bl' (bottom-left), 'tl' (top-left)
+  const onCornerResize = useCallback((e, corner) => {
     e.preventDefault()
     e.stopPropagation()
-    resizeRef.current = { startX: e.clientX, startY: e.clientY, startSize: { ...size } }
+    resizeRef.current = {
+      startX: e.clientX, startY: e.clientY,
+      startSize: { ...size }, startPos: { ...pos }, corner,
+    }
+    const cursors = { br: 'nwse-resize', bl: 'nesw-resize', tl: 'nwse-resize' }
+    document.body.style.cursor = cursors[corner] || 'nwse-resize'
+
     function onMove(ev) {
-      if (!resizeRef.current) return
-      setSize({
-        w: Math.max(MIN_W, resizeRef.current.startSize.w + ev.clientX - resizeRef.current.startX),
-        h: Math.max(MIN_H, resizeRef.current.startSize.h + ev.clientY - resizeRef.current.startY),
-      })
+      const r = resizeRef.current
+      if (!r) return
+      const dx = ev.clientX - r.startX
+      const dy = ev.clientY - r.startY
+
+      if (r.corner === 'br') {
+        setSize({ w: Math.max(MIN_W, r.startSize.w + dx), h: Math.max(MIN_H, r.startSize.h + dy) })
+      } else if (r.corner === 'bl') {
+        const newW = Math.max(MIN_W, r.startSize.w - dx)
+        const actualDx = r.startSize.w - newW
+        setSize({ w: newW, h: Math.max(MIN_H, r.startSize.h + dy) })
+        setPos(p => ({ ...p, x: r.startPos.x + actualDx }))
+      } else if (r.corner === 'tl') {
+        const newW = Math.max(MIN_W, r.startSize.w - dx)
+        const newH = Math.max(MIN_H, r.startSize.h - dy)
+        const actualDx = r.startSize.w - newW
+        const actualDy = r.startSize.h - newH
+        setSize({ w: newW, h: newH })
+        setPos(p => ({ x: r.startPos.x + actualDx, y: r.startPos.y + actualDy }))
+      }
     }
     function onUp() {
       resizeRef.current = null
@@ -69,66 +91,71 @@ export default function DraggablePanel({ title, onClose, theme, children, defaul
       window.removeEventListener('mouseup', onUp)
       document.body.style.cursor = ''
     }
-    document.body.style.cursor = 'nwse-resize'
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [size])
+  }, [size, pos])
 
-  const S = {
-    panel: {
-      position: 'fixed',
-      left: pos.x, top: pos.y,
-      width: size.w, height: size.h,
-      zIndex: 1000,
-      background: theme.panelBg,
-      border: `1px solid ${theme.borderAccent}`,
-      borderRadius: 8,
-      display: 'flex', flexDirection: 'column',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-      overflow: 'hidden',
-    },
-    header: {
-      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      padding: `${6 * scale + 2}px ${12 * scale + 2}px`,
-      borderBottom: `1px solid ${theme.border}`,
-      cursor: 'grab', userSelect: 'none', flexShrink: 0,
-    },
-    title: { fontSize: Math.max(11, 13 * scale), fontWeight: 700, color: theme.textPrimary },
-    closeBtn: {
-      background: 'none', border: 'none', color: theme.textSecondary,
-      cursor: 'pointer', fontSize: Math.max(14, 16 * scale), lineHeight: 1, padding: '0 4px',
-    },
-    body: {
-      flex: 1, overflowY: 'auto', overflowX: 'hidden',
-    },
-    scaledContent: {
-      transform: scale !== 1 ? `scale(${scale})` : undefined,
-      transformOrigin: 'top left',
-      width: scale !== 1 ? contentWidth : '100%',
-    },
-    resizeHandle: {
-      position: 'absolute', right: 0, bottom: 0, width: 14, height: 14,
-      cursor: 'nwse-resize', zIndex: 1,
-    },
+  const handleStyle = {
+    position: 'absolute', width: 14, height: 14, zIndex: 1,
   }
 
   return (
-    <div style={S.panel}>
-      <div style={S.header} onMouseDown={onDragStart}>
-        <span style={S.title}>{title}</span>
-        <button style={S.closeBtn} onClick={onClose}>{'\u2715'}</button>
+    <div style={{
+      position: 'fixed', left: pos.x, top: pos.y, width: size.w, height: size.h,
+      zIndex: 1000, background: theme.panelBg, border: `1px solid ${theme.borderAccent}`,
+      borderRadius: 8, display: 'flex', flexDirection: 'column',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.5)', overflow: 'hidden',
+    }}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: `${6 * scale + 2}px ${12 * scale + 2}px`,
+        borderBottom: `1px solid ${theme.border}`, cursor: 'grab', userSelect: 'none', flexShrink: 0,
+      }} onMouseDown={onDragStart}>
+        <span style={{ fontSize: Math.max(11, 13 * scale), fontWeight: 700, color: theme.textPrimary }}>{title}</span>
+        <button style={{
+          background: 'none', border: 'none', color: theme.textSecondary,
+          cursor: 'pointer', fontSize: Math.max(14, 16 * scale), lineHeight: 1, padding: '0 4px',
+        }} onClick={onClose}>{'\u2715'}</button>
       </div>
-      <div style={S.body}>
-        <div style={S.scaledContent}>
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+        <div style={{
+          transform: scale !== 1 ? `scale(${scale})` : undefined,
+          transformOrigin: 'top left',
+          width: scale !== 1 ? contentWidth : '100%',
+        }}>
           {children}
         </div>
       </div>
+
+      {/* Bottom-right resize handle */}
       <div
-        style={S.resizeHandle}
-        onMouseDown={onResizeStart}
+        style={{ ...handleStyle, right: 0, bottom: 0, cursor: 'nwse-resize' }}
+        onMouseDown={e => onCornerResize(e, 'br')}
         title="Drag to resize"
       >
         <svg width="14" height="14" viewBox="0 0 14 14" style={{ display: 'block' }}>
+          <path d="M12 2L2 12M12 6L6 12M12 10L10 12" stroke={theme.textTertiary} strokeWidth="1.5" fill="none" />
+        </svg>
+      </div>
+
+      {/* Bottom-left resize handle */}
+      <div
+        style={{ ...handleStyle, left: 0, bottom: 0, cursor: 'nesw-resize' }}
+        onMouseDown={e => onCornerResize(e, 'bl')}
+        title="Drag to resize"
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" style={{ display: 'block', transform: 'scaleX(-1)' }}>
+          <path d="M12 2L2 12M12 6L6 12M12 10L10 12" stroke={theme.textTertiary} strokeWidth="1.5" fill="none" />
+        </svg>
+      </div>
+
+      {/* Top-left resize handle */}
+      <div
+        style={{ ...handleStyle, left: 0, top: 0, cursor: 'nwse-resize' }}
+        onMouseDown={e => onCornerResize(e, 'tl')}
+        title="Drag to resize"
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" style={{ display: 'block', transform: 'rotate(180deg)' }}>
           <path d="M12 2L2 12M12 6L6 12M12 10L10 12" stroke={theme.textTertiary} strokeWidth="1.5" fill="none" />
         </svg>
       </div>

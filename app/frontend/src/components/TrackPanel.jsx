@@ -294,12 +294,21 @@ const ANNO_KEY_TO_THEME = {
 
 function AnnotationColorEditor({ track, theme, anchorRef, onClose, onChange, onReset }) {
   const [expandedType, setExpandedType] = useState(null)
+  const nativeRef = useRef(null)
+  const [nativeTarget, setNativeTarget] = useState(null)
   const overrides = track.annotationColors || {}
   const rect = anchorRef.current?.getBoundingClientRect()
 
-  // Resolve the effective color: per-track override → theme → hardcoded fallback
   function resolveColor(key) {
     return overrides[key] || theme[ANNO_KEY_TO_THEME[key]] || DEFAULT_ANNOTATION_COLORS[key]
+  }
+
+  function openNativePicker(key) {
+    setNativeTarget(key)
+    if (nativeRef.current) {
+      nativeRef.current.value = resolveColor(key)
+      nativeRef.current.click()
+    }
   }
 
   return (
@@ -342,8 +351,11 @@ function AnnotationColorEditor({ track, theme, anchorRef, onClose, onChange, onR
               <span style={{
                 display: 'inline-block', width: 14, height: 14, borderRadius: 3,
                 background: current,
-                border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0,
-              }} />
+                border: '1px solid rgba(255,255,255,0.15)', flexShrink: 0, cursor: 'pointer',
+              }}
+              onDoubleClick={(e) => { e.stopPropagation(); openNativePicker(key) }}
+              title="Click to expand, double-click for full picker"
+              />
               <span style={{ flex: 1 }}>{label}</span>
               <span style={{ fontSize: 9, color: theme.textTertiary }}>
                 {expandedType === key ? '\u25B2' : '\u25BC'}
@@ -384,6 +396,12 @@ function AnnotationColorEditor({ track, theme, anchorRef, onClose, onChange, onR
           Reset to defaults
         </div>
       </div>
+      <input
+        ref={nativeRef}
+        type="color"
+        style={{ position: 'absolute', left: -9999, top: -9999, opacity: 0, width: 0, height: 0 }}
+        onChange={(e) => { if (nativeTarget) onChange(nativeTarget, e.target.value) }}
+      />
     </div>
   )
 }
