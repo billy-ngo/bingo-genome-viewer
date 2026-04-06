@@ -221,28 +221,34 @@ export default function TrackSettings({ onClose }) {
                     style={{ cursor: 'pointer' }} />
                   Auto
                 </label>
-                {isAutoScale && selectedTracks.filter(t => t.track_type === 'coverage' || t.track_type === 'reads').length > 1 && (
-                  <button
-                    style={{ ...S.smallBtn, marginLeft: 4 }}
-                    onClick={() => {
-                      // Find the max value across all selected coverage tracks' live data
-                      let globalMax = 0
-                      let globalMin = 0
-                      for (const tr of selectedTracks) {
-                        if (tr.track_type !== 'coverage' && tr.track_type !== 'reads') continue
-                        const d = getLiveTrackData(tr.id)
-                        if (d?.max_value) globalMax = Math.max(globalMax, d.max_value)
-                        if (d?.min_value) globalMin = Math.min(globalMin, d.min_value)
-                      }
-                      if (globalMax > 0) {
-                        const updates = { scaleMax: Math.ceil(globalMax) }
-                        if (globalMin < 0) updates.scaleMin = Math.ceil(Math.abs(globalMin))
-                        applyToSelected(updates)
+              </div>
+            )}
+            {hasCoverage && isAutoScale && selectedTracks.filter(t => t.track_type === 'coverage' || t.track_type === 'reads').length > 1 && (
+              <div style={S.subRow}>
+                <label style={S.cbLabel}>
+                  <input type="checkbox"
+                    onChange={e => {
+                      if (e.target.checked) {
+                        let globalMax = 0
+                        let globalMin = 0
+                        for (const tr of selectedTracks) {
+                          if (tr.track_type !== 'coverage' && tr.track_type !== 'reads') continue
+                          const d = getLiveTrackData(tr.id)
+                          if (d?.max_value) globalMax = Math.max(globalMax, d.max_value)
+                          if (d?.min_value) globalMin = Math.min(globalMin, d.min_value)
+                        }
+                        if (globalMax > 0) {
+                          const updates = { scaleMax: Math.ceil(globalMax) }
+                          if (globalMin < 0) updates.scaleMin = Math.ceil(Math.abs(globalMin))
+                          applyToSelected(updates)
+                        }
+                      } else {
+                        applyToSelected({ scaleMax: null, scaleMin: null })
                       }
                     }}
-                    title="Set all selected tracks to the same Y-axis scale based on current max values"
-                  >Link scales</button>
-                )}
+                    style={{ cursor: 'pointer' }} />
+                  Link scales across selected tracks
+                </label>
               </div>
             )}
             {hasCoverage && !isAutoScale && (
