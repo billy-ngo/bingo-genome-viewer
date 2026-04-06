@@ -362,22 +362,56 @@ function AnnotationColorEditor({ track, theme, anchorRef, onClose, onChange, onR
               </span>
             </div>
             {expandedType === key && (
-              <div style={{
-                padding: '4px 10px 6px 32px',
-                display: 'grid', gridTemplateColumns: 'repeat(5, 18px)', gap: 3,
-              }}>
-                {ANNO_QUICK_COLORS.map(c => (
-                  <span
-                    key={c}
+              <div style={{ padding: '4px 10px 6px 32px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginBottom: 6 }}>
+                  {ANNO_QUICK_COLORS.map(c => (
+                    <span
+                      key={c}
+                      style={{
+                        width: 18, height: 18, borderRadius: 3, background: c, cursor: 'pointer',
+                        border: c === current
+                          ? `2px solid ${theme.textPrimary}` : '1px solid rgba(255,255,255,0.15)',
+                        boxSizing: 'border-box',
+                      }}
+                      onClick={() => { onChange(key, c); setExpandedType(null) }}
+                      onDoubleClick={(e) => { e.stopPropagation(); openNativePicker(key) }}
+                    />
+                  ))}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 10, color: theme.textTertiary }}>Hex:</span>
+                  <input
+                    type="text"
+                    defaultValue={current}
+                    placeholder="#ff0000"
                     style={{
-                      width: 18, height: 18, borderRadius: 3, background: c, cursor: 'pointer',
-                      border: c === current
-                        ? `2px solid ${theme.textPrimary}` : '1px solid rgba(255,255,255,0.15)',
-                      boxSizing: 'border-box',
+                      background: theme.inputBg, border: `1px solid ${theme.borderAccent}`,
+                      borderRadius: 3, color: theme.textPrimary, padding: '2px 5px',
+                      fontSize: 10, fontFamily: 'monospace', width: 70,
                     }}
-                    onClick={() => { onChange(key, c); setExpandedType(null) }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        let v = e.target.value.trim()
+                        if (v && !v.startsWith('#')) v = '#' + v
+                        if (/^#[0-9a-fA-F]{3,8}$/.test(v)) {
+                          onChange(key, v)
+                          setExpandedType(null)
+                        }
+                      }
+                    }}
+                    onBlur={e => {
+                      let v = e.target.value.trim()
+                      if (v && !v.startsWith('#')) v = '#' + v
+                      if (/^#[0-9a-fA-F]{3,8}$/.test(v)) onChange(key, v)
+                    }}
+                    onClick={e => e.stopPropagation()}
                   />
-                ))}
+                  <span
+                    style={{ width: 14, height: 14, borderRadius: 3, background: current, border: '1px solid rgba(255,255,255,0.2)', cursor: 'pointer', flexShrink: 0 }}
+                    onDoubleClick={(e) => { e.stopPropagation(); openNativePicker(key) }}
+                    title="Double-click for color picker"
+                  />
+                </div>
               </div>
             )}
           </div>
