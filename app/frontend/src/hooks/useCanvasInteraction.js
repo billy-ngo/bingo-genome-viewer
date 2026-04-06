@@ -89,8 +89,11 @@ export function useCanvasInteraction(containerRef) {
     }
 
     function onContextMenu(e) {
-      // Suppress the browser context menu on the track area
       e.preventDefault()
+      // Dispatch event for RegionColorEditor to show reset option
+      window.dispatchEvent(new CustomEvent('bingo-track-context', {
+        detail: { x: e.clientX, y: e.clientY }
+      }))
     }
 
     function onWheel(e) {

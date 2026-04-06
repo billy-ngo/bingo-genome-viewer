@@ -136,7 +136,16 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
       const y = row * (fh + ROW_GAP) + 2
       if (y + fh > height) { hiddenCount++; continue }
 
-      const color = featureColor(feat.feature_type, track, theme)
+      // Check region overrides for bar/feature recoloring
+      const overlays = track.regionOverlays || []
+      let regionBarColor = null
+      const featMid = (feat.start + feat.end) / 2
+      for (const o of overlays) {
+        if (o.barColor && o.chrom === region.chrom && featMid >= o.start && featMid < o.end) {
+          regionBarColor = o.barColor; break
+        }
+      }
+      const color = regionBarColor || featureColor(feat.feature_type, track, theme)
 
       if (feat.sub_features && feat.sub_features.length > 0) {
         ctx.fillStyle = color + '66'
@@ -205,7 +214,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         ? `${hiddenCount} feature${hiddenCount > 1 ? 's' : ''} hidden \u2014 increase track height to show all`
         : null)
     }
-  }, [data, loading, error, width, height, region, refSeq, track.color, track.annotationColors, useArrows, track.showNucleotides, theme])
+  }, [data, loading, error, width, height, region, refSeq, track.color, track.annotationColors, useArrows, track.showNucleotides, track.regionOverlays, theme])
 
   const onMouseMove = useCallback((e) => {
     const canvas = canvasRef.current

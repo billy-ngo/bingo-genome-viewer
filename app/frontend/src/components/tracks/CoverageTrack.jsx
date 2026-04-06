@@ -31,6 +31,15 @@ function logScale(val, max) {
   return Math.log2(val + 1) / Math.log2(max + 1)
 }
 
+/** Return the barColor override for a position, or null if none applies. */
+function getRegionBarColor(overlays, chrom, pos) {
+  if (!overlays || overlays.length === 0) return null
+  for (const o of overlays) {
+    if (o.barColor && o.chrom === chrom && pos >= o.start && pos < o.end) return o.barColor
+  }
+  return null
+}
+
 export default function CoverageTrack({ track, width, height, onWarning }) {
   const canvasRef = useRef(null)
   const { region } = useBrowser()
@@ -81,6 +90,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const outlineColor = track.outlineColor || null
     const outlineSmooth = track.outlineSmooth || 0
     const showBars = track.showBars !== false
+    const regionOverlays = track.regionOverlays || []
     const fwdColor = color
     const revColor = adjustColor(color, -40)
 
@@ -109,6 +119,8 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
 
       if (showBars) {
         for (const bin of data.bins) {
+          const binMid = (bin.start + bin.end) / 2
+          const override = getRegionBarColor(regionOverlays, region.chrom, binMid)
           const binW = ((bin.end - bin.start) / regionLen) * width
           const w = autoBarWidth(binW)
           const x = ((bin.start - regionStart) / regionLen) * width
@@ -116,11 +128,11 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
           const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
           if (fwd > 0) {
             const ratio = useLog ? logScale(fwd, posMax) : fwd / posMax
-            ctx.fillStyle = fwdColor; ctx.fillRect(x, midY - ratio * topH, w, ratio * topH)
+            ctx.fillStyle = override || fwdColor; ctx.fillRect(x, midY - ratio * topH, w, ratio * topH)
           }
           if (rev < 0) {
             const ratio = useLog ? logScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax
-            ctx.fillStyle = revColor; ctx.fillRect(x, midY, w, ratio * botH)
+            ctx.fillStyle = override || revColor; ctx.fillRect(x, midY, w, ratio * botH)
           }
         }
       }
@@ -145,8 +157,10 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     } else {
       const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
       if (showBars) {
-        ctx.fillStyle = fwdColor
         for (const bin of data.bins) {
+          const binMid = (bin.start + bin.end) / 2
+          const override = getRegionBarColor(regionOverlays, region.chrom, binMid)
+          ctx.fillStyle = override || fwdColor
           const binW = ((bin.end - bin.start) / regionLen) * width
           const w = autoBarWidth(binW)
           const x = ((bin.start - regionStart) / regionLen) * width
@@ -179,7 +193,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       }
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.regionOverlays, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }
