@@ -73,6 +73,7 @@ Then open [http://localhost:8000](http://localhost:8000).
 | Problem | Solution |
 |---------|----------|
 | `python` not found | Install Python 3.10+ and check **Add to PATH** during setup |
+| "No matching distribution" | Your Python is too old — BiNgo requires **Python 3.10+**. Check with `python --version` |
 | pip install fails | Try `pip install --user BiNgoViewer` or use a virtual environment |
 | Port 8000 in use | Run `bingo --port 9000` (or any free port) |
 | Browser doesn't open | Visit `http://localhost:8000` manually |
