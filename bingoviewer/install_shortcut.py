@@ -66,35 +66,33 @@ def _install_windows(target_dir):
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use pythonw.exe (no console window) to launch the viewer
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    if not pythonw.exists():
-        # Fall back to bingo.exe (console visible)
-        bingo = _find_bingo_exe()
-        if not bingo:
-            raise RuntimeError("Cannot locate the 'bingo' executable or pythonw.exe.")
-        exe_path = bingo
-        exe_args = ""
-    else:
-        exe_path = str(pythonw)
-        exe_args = "-m bingoviewer"
+    config_dir = Path.home() / ".bingoviewer"
+    config_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write icon to hidden config dir (not the desktop)
-    icon_dir = Path.home() / ".bingoviewer"
-    icon_dir.mkdir(parents=True, exist_ok=True)
-    ico_path = icon_dir / "bingo_icon.ico"
+    # Write icon
+    ico_path = config_dir / "bingo_icon.ico"
     ico_path.write_bytes(generate_ico())
+
+    # Create a VBScript launcher that runs python hidden (no console flash)
+    # This avoids pythonw.exe issues (no stdout crashes) while hiding the window
+    python_exe = sys.executable
+    vbs_path = config_dir / "launch_bingo.vbs"
+    vbs_path.write_text(
+        f'Set ws = CreateObject("WScript.Shell")\n'
+        f'ws.Run """{python_exe}"" -m bingoviewer --no-update", 0, False\n'
+    )
 
     lnk_path = target_dir / f"{_APP_NAME}.lnk"
 
-    # PowerShell one-liner to create a .lnk
+    # PowerShell one-liner to create a .lnk pointing to the VBS launcher
     ps_script = (
         "$ws = New-Object -ComObject WScript.Shell; "
         f"$s = $ws.CreateShortcut('{lnk_path}'); "
-        f"$s.TargetPath = '{exe_path}'; "
-        + (f"$s.Arguments = '{exe_args}'; " if exe_args else "")
-        + f"$s.IconLocation = '{ico_path},0'; "
+        f"$s.TargetPath = 'wscript.exe'; "
+        f"$s.Arguments = '\"{vbs_path}\"'; "
+        f"$s.IconLocation = '{ico_path},0'; "
         f"$s.Description = '{_APP_NAME}'; "
+        f"$s.WorkingDirectory = '{Path.home()}'; "
         "$s.Save()"
     )
 
