@@ -122,7 +122,7 @@ export default function RegionColorEditor() {
             {selection && (
               <div style={{ padding: '5px 14px 7px', fontSize: 11, color: t.textTertiary,
                 borderBottom: `1px solid ${t.border}` }}>
-                {selection.chrom}:{selection.start.toLocaleString()}\u2013{selection.end.toLocaleString()}
+                {selection.chrom}:{selection.start.toLocaleString()}{'\u2013'}{selection.end.toLocaleString()}
               </div>
             )}
             {contextMenu.hasSelection && selection && (
@@ -132,7 +132,7 @@ export default function RegionColorEditor() {
                 onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 onClick={openEditor}
               >
-                Edit region colors\u2026
+                Edit region colors{'\u2026'}
               </div>
             )}
             {hasOverlays && (
@@ -157,7 +157,7 @@ export default function RegionColorEditor() {
           <div style={{ padding: '14px 18px' }}>
             {/* Region info */}
             <div style={{ fontSize: 12, color: t.textSecondary, marginBottom: 14 }}>
-              {editor.chrom}:{editor.start.toLocaleString()}\u2013{editor.end.toLocaleString()}
+              {editor.chrom}:{editor.start.toLocaleString()}{'\u2013'}{editor.end.toLocaleString()}
               <span style={{ color: t.textTertiary }}> ({(editor.end - editor.start).toLocaleString()} bp)</span>
             </div>
 

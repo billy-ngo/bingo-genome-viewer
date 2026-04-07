@@ -73,26 +73,25 @@ def _install_windows(target_dir):
     ico_path = config_dir / "bingo_icon.ico"
     ico_path.write_bytes(generate_ico())
 
-    # Create a VBScript launcher that runs python hidden (no console flash)
-    # This avoids pythonw.exe issues (no stdout crashes) while hiding the window
+    # Create a batch launcher that runs python with minimized window
     python_exe = sys.executable
-    vbs_path = config_dir / "launch_bingo.vbs"
-    vbs_path.write_text(
-        f'Set ws = CreateObject("WScript.Shell")\n'
-        f'ws.Run """{python_exe}"" -m bingoviewer --no-update", 0, False\n'
+    bat_path = config_dir / "launch_bingo.bat"
+    bat_path.write_text(
+        '@echo off\n'
+        f'start /min "" "{python_exe}" -m bingoviewer --no-update\n'
     )
 
     lnk_path = target_dir / f"{_APP_NAME}.lnk"
 
-    # PowerShell one-liner to create a .lnk pointing to the VBS launcher
+    # PowerShell one-liner to create a .lnk pointing to the batch launcher
     ps_script = (
         "$ws = New-Object -ComObject WScript.Shell; "
         f"$s = $ws.CreateShortcut('{lnk_path}'); "
-        f"$s.TargetPath = 'wscript.exe'; "
-        f"$s.Arguments = '\"{vbs_path}\"'; "
+        f"$s.TargetPath = '{bat_path}'; "
         f"$s.IconLocation = '{ico_path},0'; "
         f"$s.Description = '{_APP_NAME}'; "
         f"$s.WorkingDirectory = '{Path.home()}'; "
+        "$s.WindowStyle = 7; "  # 7 = minimized
         "$s.Save()"
     )
 
