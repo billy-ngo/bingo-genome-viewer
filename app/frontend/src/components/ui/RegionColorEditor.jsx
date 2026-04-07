@@ -8,7 +8,7 @@
  * 1. Highlight color — transparent overlay on top of the track
  * 2. Bar/feature color — recolors the actual bars or gene features
  */
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
@@ -22,10 +22,15 @@ export default function RegionColorEditor() {
   const [contextMenu, setContextMenu] = useState(null)
   const [editor, setEditor] = useState(null)
 
-  const applicableTracks = tracks.filter(t =>
-    t.visible !== false && t.track_type !== 'reads'
+  // Only compute when editor or context menu is active
+  const applicableTracks = useMemo(() =>
+    editor ? tracks.filter(t => t.visible !== false && t.track_type !== 'reads') : [],
+    [editor, tracks]
   )
-  const hasOverlays = tracks.some(t => t.regionOverlays?.length > 0)
+  const hasOverlays = useMemo(() =>
+    tracks.some(t => t.regionOverlays?.length > 0),
+    [tracks]
+  )
 
   // Listen for right-click events from SelectionOverlay and track area
   useEffect(() => {
@@ -49,7 +54,8 @@ export default function RegionColorEditor() {
   const openEditor = useCallback(() => {
     if (!selection) return
     setContextMenu(null)
-    const selected = new Set(applicableTracks.map(t => t.id))
+    const applicable = tracks.filter(t => t.visible !== false && t.track_type !== 'reads')
+    const selected = new Set(applicable.map(t => t.id))
     setEditor({
       chrom: selection.chrom,
       start: selection.start,
@@ -61,7 +67,7 @@ export default function RegionColorEditor() {
       useBarColor: false,
       selectedTracks: selected,
     })
-  }, [selection, applicableTracks])
+  }, [selection, tracks])
 
   const resetAll = useCallback(() => {
     setContextMenu(null)

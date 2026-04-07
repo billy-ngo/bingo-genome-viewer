@@ -245,6 +245,7 @@ export default function TrackPanel({
           trackData={getLiveTrackData(track.id)}
           trackType={track.track_type}
           trackId={track.id}
+          regionOverlays={track.regionOverlays}
         />
       </div>
       <div

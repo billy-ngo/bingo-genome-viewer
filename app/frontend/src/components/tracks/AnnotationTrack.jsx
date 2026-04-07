@@ -126,6 +126,9 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
       }
     }
 
+    // Pre-filter region overrides for current chromosome
+    const barOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
+
     for (const feat of data.features) {
       let row = rowEnds.findIndex(e => feat.start >= e)
       if (row === -1) row = rowEnds.length
@@ -136,13 +139,12 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
       const y = row * (fh + ROW_GAP) + 2
       if (y + fh > height) { hiddenCount++; continue }
 
-      // Check region overrides for bar/feature recoloring
-      const overlays = track.regionOverlays || []
+      // Check region overrides for feature recoloring
       let regionBarColor = null
-      const featMid = (feat.start + feat.end) / 2
-      for (const o of overlays) {
-        if (o.barColor && o.chrom === region.chrom && featMid >= o.start && featMid < o.end) {
-          regionBarColor = o.barColor; break
+      if (barOverlays.length > 0) {
+        const featMid = (feat.start + feat.end) / 2
+        for (const o of barOverlays) {
+          if (featMid >= o.start && featMid < o.end) { regionBarColor = o.barColor; break }
         }
       }
       const color = regionBarColor || featureColor(feat.feature_type, track, theme)

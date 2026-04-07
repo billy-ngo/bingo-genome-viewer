@@ -31,11 +31,12 @@ function logScale(val, max) {
   return Math.log2(val + 1) / Math.log2(max + 1)
 }
 
-/** Return the barColor override for a position, or null if none applies. */
-function getRegionBarColor(overlays, chrom, pos) {
-  if (!overlays || overlays.length === 0) return null
-  for (const o of overlays) {
-    if (o.barColor && o.chrom === chrom && pos >= o.start && pos < o.end) return o.barColor
+/** Return the barColor override for a position, or null if none applies.
+ * Pre-filters overlays to only those on the current chromosome for speed. */
+function getRegionBarColor(filteredOverlays, pos) {
+  for (let i = 0; i < filteredOverlays.length; i++) {
+    const o = filteredOverlays[i]
+    if (pos >= o.start && pos < o.end) return o.barColor
   }
   return null
 }
@@ -90,7 +91,8 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const outlineColor = track.outlineColor || null
     const outlineSmooth = track.outlineSmooth || 0
     const showBars = track.showBars !== false
-    const regionOverlays = track.regionOverlays || []
+    // Pre-filter overlays for current chromosome (avoids per-bin filtering)
+    const regionOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
     const fwdColor = color
     const revColor = adjustColor(color, -40)
 
@@ -120,7 +122,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       if (showBars) {
         for (const bin of data.bins) {
           const binMid = (bin.start + bin.end) / 2
-          const override = getRegionBarColor(regionOverlays, region.chrom, binMid)
+          const override = getRegionBarColor(regionOverlays, binMid)
           const binW = ((bin.end - bin.start) / regionLen) * width
           const w = autoBarWidth(binW)
           const x = ((bin.start - regionStart) / regionLen) * width
@@ -159,7 +161,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       if (showBars) {
         for (const bin of data.bins) {
           const binMid = (bin.start + bin.end) / 2
-          const override = getRegionBarColor(regionOverlays, region.chrom, binMid)
+          const override = getRegionBarColor(regionOverlays, binMid)
           ctx.fillStyle = override || fwdColor
           const binW = ((bin.end - bin.start) / regionLen) * width
           const w = autoBarWidth(binW)
