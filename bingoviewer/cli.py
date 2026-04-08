@@ -10,6 +10,13 @@ Usage:
     bingo --no-update        # skip the automatic update check
 """
 
+# Set Windows event loop policy BEFORE any other imports to prevent
+# ProactorEventLoop from being created by asyncio/uvicorn/fastapi imports
+import sys
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import argparse
 import atexit
 import json
