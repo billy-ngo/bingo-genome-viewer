@@ -2,6 +2,13 @@
 
 All notable changes to BiNgo Genome Viewer are documented here.
 
+## [2.8.0] - 2026-04-27
+
+### Added
+- GenBank annotation tracks: per-type visibility toggles (CDS, gene, tRNA, rRNA, repeat_region, misc_feature, etc.)
+- Backend exposes `feature_types` from GenBank files via `/api/genome/load`, `/load-path`, and `/add-chromosomes`
+- Track Settings panel: new collapsible "Feature types" section with Show all / Hide all and indeterminate state for multi-track selections
+
 ## [1.9.4] - 2026-04-05
 
 ### Changed

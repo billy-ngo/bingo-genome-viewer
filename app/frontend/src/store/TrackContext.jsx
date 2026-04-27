@@ -77,7 +77,11 @@ export function TrackProvider({ children }) {
         arrowSize: 4,       // arrow tip size in pixels (2-12)
         regionOverlays: [], // [{ chrom, start, end, color, opacity }]
         targetChromosomes: info.target_chromosomes || null,
-        ...(isAnnotation ? { annotationColors: null } : {}),
+        ...(isAnnotation ? {
+          annotationColors: null,
+          featureTypes: info.feature_types || [],
+          hiddenFeatureTypes: [],
+        } : {}),
       }]
     })
   }, [])
@@ -142,14 +146,20 @@ export function TrackProvider({ children }) {
     setTracks(prev => {
       const idx = prev.findIndex(t => t.id === info.id)
       if (idx !== -1) {
-        // Already exists (maybe hidden) — update name, target chromosomes, and re-show
+        // Already exists (maybe hidden) — update name, target chromosomes, feature types, and re-show
         const updated = [...prev]
-        updated[idx] = {
+        const merged = {
           ...updated[idx],
           name: cleanName(info.name) || info.name,
           visible: true,
           ...(info.targetChromosomes ? { targetChromosomes: info.targetChromosomes } : {}),
         }
+        // Merge new feature types with existing (when adding chromosomes from another file)
+        if (info.featureTypes && info.featureTypes.length) {
+          const existing = updated[idx].featureTypes || []
+          merged.featureTypes = Array.from(new Set([...existing, ...info.featureTypes])).sort()
+        }
+        updated[idx] = merged
         return updated
       }
       return [...prev, {
@@ -158,6 +168,8 @@ export function TrackProvider({ children }) {
         color: '#a5d6a7', height: 80, visible: true, useArrows: true,
         annotationColors: null,
         targetChromosomes: info.targetChromosomes || null,
+        featureTypes: info.featureTypes || [],
+        hiddenFeatureTypes: [],
       }]
     })
   }, [])

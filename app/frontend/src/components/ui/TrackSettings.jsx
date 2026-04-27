@@ -283,6 +283,11 @@ export default function TrackSettings({ onClose }) {
               <AnnotationColorSection tracks={selectedTracks} applyToSelected={applyToSelected} theme={t} />
             )}
 
+            {/* Feature type visibility (GenBank / annotation tracks) */}
+            {hasAnnotation && (
+              <FeatureTypeSection tracks={selectedTracks} applyToSelected={applyToSelected} theme={t} />
+            )}
+
             {/* Gene style */}
             {hasAnnotation && (
               <div style={S.controlRow}>
@@ -503,6 +508,121 @@ function AnnotationColorSection({ tracks, applyToSelected, theme }) {
         style={{ position: 'absolute', left: -9999, top: -9999, opacity: 0, width: 0, height: 0 }}
         onChange={(e) => { if (nativeTarget) setColor(nativeTarget, e.target.value) }}
       />
+    </div>
+  )
+}
+
+/** Toggle which annotation feature types are shown (e.g. CDS, gene, tRNA, repeat_region). */
+function FeatureTypeSection({ tracks, applyToSelected, theme }) {
+  const [expanded, setExpanded] = useState(false)
+
+  // Aggregate available feature types from all selected annotation tracks
+  const allTypes = new Set()
+  for (const tr of tracks) {
+    if (tr.track_type !== 'annotations' && tr.track_type !== 'genome_annotations') continue
+    for (const ft of (tr.featureTypes || [])) allTypes.add(ft)
+  }
+  const featureTypes = Array.from(allTypes).sort()
+
+  if (featureTypes.length === 0) return null
+
+  // A type is shown if NO selected track has it in hiddenFeatureTypes
+  // A type is hidden if ALL selected tracks have it hidden
+  // Otherwise mixed
+  function getState(type) {
+    let hiddenCount = 0
+    let total = 0
+    for (const tr of tracks) {
+      if (tr.track_type !== 'annotations' && tr.track_type !== 'genome_annotations') continue
+      total++
+      if ((tr.hiddenFeatureTypes || []).includes(type)) hiddenCount++
+    }
+    if (hiddenCount === 0) return 'shown'
+    if (hiddenCount === total) return 'hidden'
+    return 'mixed'
+  }
+
+  function toggleType(type) {
+    const state = getState(type)
+    const shouldHide = state === 'shown' // if currently shown (or mixed treated as hide-all), hide; else show
+    // For "mixed" state we go to "shown" (uncheck) — feels more useful
+    const targetHide = state === 'shown'
+    for (const tr of tracks) {
+      if (tr.track_type !== 'annotations' && tr.track_type !== 'genome_annotations') continue
+      const current = new Set(tr.hiddenFeatureTypes || [])
+      if (targetHide) current.add(type); else current.delete(type)
+      applyToSelected({ hiddenFeatureTypes: Array.from(current) })
+    }
+  }
+
+  function showAll() {
+    applyToSelected({ hiddenFeatureTypes: [] })
+  }
+
+  function hideAll() {
+    applyToSelected({ hiddenFeatureTypes: [...featureTypes] })
+  }
+
+  const hiddenCount = featureTypes.filter(t => getState(t) === 'hidden').length
+  const summary = hiddenCount === 0
+    ? `All ${featureTypes.length} shown`
+    : `${featureTypes.length - hiddenCount}/${featureTypes.length} shown`
+
+  return (
+    <div style={{ padding: '4px 0' }}>
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6,
+          cursor: 'pointer', userSelect: 'none',
+        }}
+        onClick={() => setExpanded(e => !e)}
+      >
+        <span style={{ fontSize: 12, color: theme.textSecondary, width: 90 }}>Feature types</span>
+        <span style={{ fontSize: 11, color: theme.textTertiary, flex: 1 }}>{summary}</span>
+        <span style={{ fontSize: 9, color: theme.textTertiary }}>{expanded ? '\u25B2' : '\u25BC'}</span>
+      </div>
+      {expanded && (
+        <div style={{ paddingLeft: 16, marginLeft: 4, borderLeft: `2px solid ${theme.border}` }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+            <button
+              style={{ background: 'none', border: `1px solid ${theme.borderAccent}`, borderRadius: 3,
+                color: theme.textSecondary, cursor: 'pointer', fontSize: 10, padding: '2px 8px' }}
+              onClick={showAll}
+            >Show all</button>
+            <button
+              style={{ background: 'none', border: `1px solid ${theme.borderAccent}`, borderRadius: 3,
+                color: theme.textSecondary, cursor: 'pointer', fontSize: 10, padding: '2px 8px' }}
+              onClick={hideAll}
+            >Hide all</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 180, overflowY: 'auto' }}>
+            {featureTypes.map(type => {
+              const state = getState(type)
+              const checked = state === 'shown'
+              return (
+                <label
+                  key={type}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
+                    color: theme.textPrimary, cursor: 'pointer', padding: '2px 4px', borderRadius: 3,
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = theme.selectedRow || 'rgba(255,255,255,0.05)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    ref={el => { if (el) el.indeterminate = state === 'mixed' }}
+                    onChange={() => toggleType(type)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <span style={{ fontFamily: 'monospace' }}>{type}</span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

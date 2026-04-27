@@ -42,6 +42,7 @@ async def load_genome(file: UploadFile = File(...)):
             "chromosomes": genome.chromosomes,
             "is_annotated": genome.is_annotated(),
             "annotated_chromosomes": genome.annotated_chromosomes,
+            "feature_types": genome.feature_types,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -64,6 +65,7 @@ async def add_chromosomes(file: UploadFile = File(...)):
             "chromosomes": genome.chromosomes,
             "is_annotated": genome.is_annotated(),
             "annotated_chromosomes": genome.annotated_chromosomes,
+            "feature_types": genome.feature_types,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -108,6 +110,7 @@ async def load_genome_from_path(path: str = Form(...)):
             "chromosomes": genome.chromosomes,
             "is_annotated": genome.is_annotated(),
             "annotated_chromosomes": genome.annotated_chromosomes,
+            "feature_types": genome.feature_types,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

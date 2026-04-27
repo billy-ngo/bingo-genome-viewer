@@ -35,6 +35,16 @@ class GenBankReader:
             for chrom, record in self._records.items()
         ]
 
+    @property
+    def feature_types(self) -> list[str]:
+        """Return sorted list of all feature types found across all records."""
+        types: set[str] = set()
+        for record in self._records.values():
+            for feat in record.features:
+                if feat.type and feat.type != "source":
+                    types.add(feat.type)
+        return sorted(types)
+
     def get_sequence(self, chrom: str, start: int, end: int) -> str:
         """Return subsequence [start, end) (0-based half-open)."""
         record = self._get_record(chrom)

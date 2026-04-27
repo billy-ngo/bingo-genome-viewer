@@ -92,3 +92,12 @@ class GenomeReader:
             if fmt == "genbank":
                 result.extend(c["name"] for c in reader.chromosomes)
         return result
+
+    @property
+    def feature_types(self) -> list[str]:
+        """Return sorted list of all feature types across all annotated sub-readers."""
+        types: set[str] = set()
+        for fmt, reader in self._sub_readers:
+            if fmt == "genbank":
+                types.update(reader.feature_types)
+        return sorted(types)

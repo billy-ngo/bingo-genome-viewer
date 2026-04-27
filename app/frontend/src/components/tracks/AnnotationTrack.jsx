@@ -91,6 +91,19 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
       return
     }
 
+    // Filter out user-hidden feature types
+    const hiddenSet = new Set(track.hiddenFeatureTypes || [])
+    const visibleFeatures = hiddenSet.size === 0
+      ? data.features
+      : data.features.filter(f => !hiddenSet.has(f.feature_type))
+    if (visibleFeatures.length === 0) {
+      ctx.fillStyle = theme.textTertiary
+      ctx.font = '11px Arial, Helvetica, sans-serif'
+      ctx.fillText('All feature types hidden \u2014 enable types in Track Settings', 8, height / 2 + 4)
+      if (onWarning) onWarning(null)
+      return
+    }
+
     const regionLen = region.end - region.start
     const pxPerBp = width / regionLen
     const showBases = showNucleotides && pxPerBp >= NUCL_PX_THRESHOLD && refSeq != null
@@ -129,7 +142,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
     // Pre-filter region overrides for current chromosome
     const barOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
 
-    for (const feat of data.features) {
+    for (const feat of visibleFeatures) {
       let row = rowEnds.findIndex(e => feat.start >= e)
       if (row === -1) row = rowEnds.length
       rowEnds[row] = feat.end
@@ -216,7 +229,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         ? `${hiddenCount} feature${hiddenCount > 1 ? 's' : ''} hidden \u2014 increase track height to show all`
         : null)
     }
-  }, [data, loading, error, width, height, region, refSeq, track.color, track.annotationColors, useArrows, track.showNucleotides, track.regionOverlays, theme])
+  }, [data, loading, error, width, height, region, refSeq, track.color, track.annotationColors, useArrows, track.showNucleotides, track.regionOverlays, track.hiddenFeatureTypes, theme])
 
   const onMouseMove = useCallback((e) => {
     const canvas = canvasRef.current

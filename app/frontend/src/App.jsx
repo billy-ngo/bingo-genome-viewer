@@ -21,7 +21,7 @@ import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.7.5'
+const APP_VERSION = '2.8.0'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -215,6 +215,7 @@ function BrowserApp() {
             id: 'genome_annotations', name: `${info.name} (annotations)`,
             track_type: 'genome_annotations', file_format: 'genbank',
             targetChromosomes: info.annotated_chromosomes || null,
+            featureTypes: info.feature_types || [],
           })
         }
       } else if (genomeFiles.length > 0 && genome) {
@@ -285,6 +286,7 @@ function BrowserApp() {
               id: 'genome_annotations', name: `${info.name} (annotations)`,
               track_type: 'genome_annotations', file_format: 'genbank',
               targetChromosomes: info.annotated_chromosomes || null,
+              featureTypes: info.feature_types || [],
             })
           }
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }

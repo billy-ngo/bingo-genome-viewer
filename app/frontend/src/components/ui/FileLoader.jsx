@@ -195,6 +195,7 @@ export default function FileLoader() {
           id: 'genome_annotations', name: `${info.name} (annotations)`,
           track_type: 'genome_annotations', file_format: 'genbank',
           targetChromosomes: info.annotated_chromosomes || null,
+          featureTypes: info.feature_types || [],
         })
       }
       setStatus(`Genome loaded: ${info.name}`)
@@ -221,6 +222,7 @@ export default function FileLoader() {
             id: 'genome_annotations', name: `${info.name} (annotations)`,
             track_type: 'genome_annotations', file_format: 'genbank',
             targetChromosomes: info.annotated_chromosomes || null,
+            featureTypes: info.feature_types || [],
           })
         }
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
@@ -370,6 +372,7 @@ export default function FileLoader() {
             id: 'genome_annotations', name: `${info.name} (annotations)`,
             track_type: 'genome_annotations', file_format: 'genbank',
             targetChromosomes: info.annotated_chromosomes || null,
+            featureTypes: info.feature_types || [],
           })
         }
         setStatus(`Genome loaded: ${info.name}`)
