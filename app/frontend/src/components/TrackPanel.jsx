@@ -252,7 +252,13 @@ export default function TrackPanel({
         ref={resizeRef}
         onMouseDown={onResizeMouseDown}
         title="Drag to resize track height"
-        style={{ position: 'absolute', left: 0, right: 0, bottom: -2, height: 5, cursor: 'ns-resize', zIndex: 10, background: 'transparent' }}
+        style={{
+          position: 'absolute', left: 0,
+          // Leave room for the read-track vertical scrollbar at the right edge
+          // so the resize-handle doesn't steal clicks from the scrollbar thumb.
+          right: track.track_type === 'reads' ? 18 : 0,
+          bottom: -2, height: 5, cursor: 'ns-resize', zIndex: 10, background: 'transparent',
+        }}
         onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.15)'}
         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
       />

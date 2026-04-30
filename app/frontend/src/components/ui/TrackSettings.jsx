@@ -4,7 +4,8 @@
  * Allows adjusting visibility, height, color, scale (linear/log),
  * Y-axis range, and bar width for selected tracks.
  */
-import React, { useState, useRef, useCallback } from 'react'
+import React, { useState, useRef, useCallback, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useTracks, DEFAULT_ANNOTATION_COLORS } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { getLiveTrackData } from '../../hooks/useTrackData'
@@ -63,6 +64,8 @@ export default function TrackSettings({ onClose }) {
   const commonRevColor = selectedTracks.length > 0 && selectedTracks.every(t => (t.revColor || '#f06292') === (selectedTracks[0].revColor || '#f06292')) ? (selectedTracks[0].revColor || '#f06292') : undefined
   const commonArrowStyle = selectedTracks.length > 0 && selectedTracks.every(t => (t.arrowStyle || 'pointed') === (selectedTracks[0].arrowStyle || 'pointed')) ? (selectedTracks[0].arrowStyle || 'pointed') : undefined
   const commonArrowSize = selectedTracks.length > 0 && selectedTracks.every(t => (t.arrowSize || 4) === (selectedTracks[0].arrowSize || 4)) ? (selectedTracks[0].arrowSize || 4) : undefined
+  const commonShowFwd = selectedTracks.length > 0 && selectedTracks.every(t => (t.showFwdStrand !== false) === (selectedTracks[0].showFwdStrand !== false)) ? (selectedTracks[0].showFwdStrand !== false) : null
+  const commonShowRev = selectedTracks.length > 0 && selectedTracks.every(t => (t.showRevStrand !== false) === (selectedTracks[0].showRevStrand !== false)) ? (selectedTracks[0].showRevStrand !== false) : null
 
   function applyToSelected(updates) { updateMultipleTracks([...selected], updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
@@ -319,12 +322,31 @@ export default function TrackSettings({ onClose }) {
             {hasReads && (
               <>
                 <div style={{ ...S.sectionTitle, marginTop: 12 }}>Read Appearance</div>
+                {/* Strand visibility */}
+                <div style={S.controlRow}>
+                  <span style={S.controlLabel}>Show strand</span>
+                  <label style={S.cbLabel}>
+                    <input type="checkbox" checked={commonShowFwd === true}
+                      ref={el => { if (el) el.indeterminate = commonShowFwd === null }}
+                      onChange={e => applyToSelected({ showFwdStrand: e.target.checked })}
+                      style={{ cursor: 'pointer' }} />
+                    {'\u25B6'} Forward
+                  </label>
+                  <label style={S.cbLabel}>
+                    <input type="checkbox" checked={commonShowRev === true}
+                      ref={el => { if (el) el.indeterminate = commonShowRev === null }}
+                      onChange={e => applyToSelected({ showRevStrand: e.target.checked })}
+                      style={{ cursor: 'pointer' }} />
+                    {'\u25C0'} Reverse
+                  </label>
+                </div>
+                {/* Strand colors */}
                 <div style={S.controlRow}>
                   <span style={S.controlLabel}>Strand colors</span>
                   <span style={{ fontSize: 10, color: t.textTertiary, marginRight: 2 }}>{'\u25B6'}</span>
-                  <ColorHexInput value={commonFwdColor || '#90a4ae'} onChange={v => applyToSelected({ fwdColor: v })} theme={t} />
+                  <SwatchColorPicker value={commonFwdColor || '#90a4ae'} onChange={v => applyToSelected({ fwdColor: v })} theme={t} />
                   <span style={{ fontSize: 10, color: t.textTertiary, marginLeft: 4, marginRight: 2 }}>{'\u25C0'}</span>
-                  <ColorHexInput value={commonRevColor || '#f06292'} onChange={v => applyToSelected({ revColor: v })} theme={t} />
+                  <SwatchColorPicker value={commonRevColor || '#f06292'} onChange={v => applyToSelected({ revColor: v })} theme={t} />
                   <button style={{ ...S.smallBtn, marginLeft: 'auto' }}
                     onClick={() => applyToSelected({ fwdColor: null, revColor: null })}
                     title="Reset to defaults"
@@ -622,6 +644,105 @@ function FeatureTypeSection({ tracks, applyToSelected, theme }) {
             })}
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+/** Compact color picker with swatch grid popover, hex input, and OS picker (on double-click).
+ *  Used for read-track strand colors so users can quickly pick from common palette
+ *  swatches in addition to entering a hex code or opening the full OS color picker. */
+function SwatchColorPicker({ value, onChange, theme }) {
+  const [open, setOpen] = useState(false)
+  const swatchRef = useRef(null)
+  const nativeRef = useRef(null)
+  const popRef = useRef(null)
+
+  // Close popover when clicking outside
+  useEffect(() => {
+    if (!open) return
+    function onDocClick(e) {
+      if (popRef.current && !popRef.current.contains(e.target) &&
+          swatchRef.current && !swatchRef.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open])
+
+  const rect = open && swatchRef.current ? swatchRef.current.getBoundingClientRect() : null
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, position: 'relative' }}>
+      <span
+        ref={swatchRef}
+        style={{
+          width: 20, height: 16, borderRadius: 3, background: value,
+          border: '1px solid rgba(255,255,255,0.2)', cursor: 'pointer', flexShrink: 0,
+        }}
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
+        onDoubleClick={(e) => { e.stopPropagation(); setOpen(false); nativeRef.current?.click() }}
+        title="Click for swatches, double-click for full picker"
+      />
+      <input
+        type="text"
+        defaultValue={value}
+        key={value}
+        placeholder="#hex"
+        style={{
+          background: theme.inputBg, border: `1px solid ${theme.borderAccent}`,
+          borderRadius: 3, color: theme.textPrimary, padding: '1px 4px',
+          fontSize: 10, fontFamily: 'monospace', width: 62,
+        }}
+        onKeyDown={e => {
+          if (e.key === 'Enter') {
+            let v = e.target.value.trim()
+            if (v && !v.startsWith('#')) v = '#' + v
+            if (/^#[0-9a-fA-F]{3,8}$/.test(v)) onChange(v)
+          }
+        }}
+        onBlur={e => {
+          let v = e.target.value.trim()
+          if (v && !v.startsWith('#')) v = '#' + v
+          if (/^#[0-9a-fA-F]{3,8}$/.test(v)) onChange(v)
+        }}
+        onClick={e => e.stopPropagation()}
+      />
+      <input ref={nativeRef} type="color" value={value || '#ffffff'}
+        onChange={e => onChange(e.target.value)}
+        style={{ position: 'absolute', left: -9999, opacity: 0, width: 0, height: 0 }} />
+      {open && rect && createPortal(
+        <div
+          ref={popRef}
+          style={{
+            position: 'fixed',
+            left: Math.min(rect.left, window.innerWidth - 180),
+            top: rect.bottom + 4,
+            zIndex: 10001,
+            background: theme.panelBg,
+            border: `1px solid ${theme.borderAccent}`,
+            borderRadius: 4,
+            padding: 6,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            display: 'grid', gridTemplateColumns: 'repeat(8, 18px)', gap: 3,
+          }}
+        >
+          {ORDERED_COLORS.map(c => (
+            <span
+              key={c}
+              style={{
+                width: 18, height: 18, borderRadius: 3, background: c, cursor: 'pointer',
+                border: c === value ? `2px solid ${theme.textPrimary}` : '1px solid rgba(255,255,255,0.15)',
+                boxSizing: 'border-box',
+              }}
+              onClick={() => { onChange(c); setOpen(false) }}
+              onDoubleClick={(e) => { e.stopPropagation(); setOpen(false); nativeRef.current?.click() }}
+              title={c}
+            />
+          ))}
+        </div>,
+        document.body
       )}
     </div>
   )

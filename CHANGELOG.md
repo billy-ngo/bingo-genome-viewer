@@ -2,6 +2,16 @@
 
 All notable changes to BiNgo Genome Viewer are documented here.
 
+## [2.9.0] - 2026-04-30
+
+### Added
+- Read tracks: per-track forward/reverse strand visibility toggle (BAM); rows repack so hidden strand leaves no gaps; works across multi-track selection in Track Settings
+- Read strand color pickers now have a swatch grid popover (single-click), with double-click for full OS color picker and hex input — same UX as elsewhere in the app
+
+### Fixed
+- Shift+scroll no longer triggers horizontal zoom — reserved for vertical scrolling inside read tracks as intended
+- Read-track vertical scrollbar widened (10 → 14 px) and the track-height resize handle now leaves a gap on the right edge so scrollbar drags are no longer blocked by the resize zone
+
 ## [2.8.0] - 2026-04-27
 
 ### Added

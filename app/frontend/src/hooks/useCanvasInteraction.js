@@ -97,6 +97,10 @@ export function useCanvasInteraction(containerRef) {
     }
 
     function onWheel(e) {
+      // Shift+wheel is reserved for vertical scrolling inside tracks
+      // (e.g. ReadTrack pileup). Don't zoom; let the track-level handler
+      // and React's synthetic onWheel run.
+      if (e.shiftKey) return
       e.preventDefault()
       const rect = canvas.getBoundingClientRect()
       const anchorFraction = (e.clientX - rect.left) / rect.width

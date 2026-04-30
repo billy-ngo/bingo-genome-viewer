@@ -5,7 +5,7 @@
  * zoomed in (<50 kbp). Supports nucleotide-level rendering with mismatch
  * highlighting, vertical scrolling for deep pileups, and log2 scale.
  */
-import React, { useRef, useEffect, useState, useCallback } from 'react'
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTrackData } from '../../hooks/useTrackData'
@@ -17,7 +17,22 @@ const READ_HEIGHT = 8
 const NUCL_READ_HEIGHT = 14
 const ROW_GAP = 2
 const INSERTION_COLOR = '#9c27b0'
-const SCROLLBAR_WIDTH = 10
+const SCROLLBAR_WIDTH = 14   // wider hit-area so the thumb is easy to grab
+
+/** Greedy row packing — reads sorted by start, placed in lowest non-overlapping row. */
+function repackRows(reads) {
+  const out = reads.map(r => ({ ...r }))
+  out.sort((a, b) => a.start - b.start)
+  const rowEnds = []
+  for (const r of out) {
+    let placed = false
+    for (let i = 0; i < rowEnds.length; i++) {
+      if (r.start >= rowEnds[i]) { r.row = i; rowEnds[i] = r.end; placed = true; break }
+    }
+    if (!placed) { r.row = rowEnds.length; rowEnds.push(r.end) }
+  }
+  return out
+}
 
 const BASE_COLORS = { A: '#4caf50', T: '#f44336', C: '#2196f3', G: '#ff9800', N: '#9e9e9e' }
 const MISMATCH_BG = '#ffeb3b'
@@ -44,6 +59,19 @@ export default function ReadTrack({ track, width, height, onWarning }) {
   const revStrandColor = track.revColor || '#f06292'
   const arrowStyle = track.arrowStyle || 'pointed'
   const arrowSizePx = track.arrowSize || 4
+  const showFwd = track.showFwdStrand !== false
+  const showRev = track.showRevStrand !== false
+
+  // Filter by strand and repack rows so hidden strand doesn't leave gaps
+  const visibleReads = useMemo(() => {
+    if (!data?.reads?.length) return null
+    if (showFwd && showRev) return data.reads
+    const filtered = data.reads.filter(r =>
+      (r.strand === '+' && showFwd) || (r.strand === '-' && showRev) ||
+      (r.strand !== '+' && r.strand !== '-')  // unknown strand always shown
+    )
+    return repackRows(filtered)
+  }, [data?.reads, showFwd, showRev])
 
   // Reset scroll when region changes significantly
   const prevRegionRef = useRef(null)
@@ -75,20 +103,22 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       .catch(() => {})
   }, [region?.chrom, region?.start, region?.end, width, showNucleotides])
 
-  // Scroll handler for the track area (wheel in read detail mode)
+  // Scroll handler for the track area (wheel in read detail mode).
+  // Only takes over when Shift is held (or trackpad vertical-only gesture);
+  // otherwise the global useCanvasInteraction handler does horizontal zoom.
   const onWheel = useCallback((e) => {
-    if (!data?.reads?.length) return
-    // Only scroll vertically when shift is held or it's a trackpad vertical gesture
+    if (!visibleReads?.length) return
     if (!e.shiftKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
+    if (!e.shiftKey) return  // Plain wheel → zoom (handled by useCanvasInteraction)
     const rh = (showNucleotides && refSeq) ? NUCL_READ_HEIGHT : READ_HEIGHT
-    const maxRow = Math.max(0, ...data.reads.map(r => r.row))
+    const maxRow = Math.max(0, ...visibleReads.map(r => r.row))
     const visibleRows = Math.floor(height / (rh + ROW_GAP))
     const maxScroll = Math.max(0, maxRow - visibleRows + 2)
     if (maxScroll <= 0) return
     e.preventDefault()
     e.stopPropagation()
     setScrollRow(prev => Math.max(0, Math.min(maxScroll, prev + Math.sign(e.deltaY) * 3)))
-  }, [data, height, showNucleotides, refSeq])
+  }, [visibleReads, height, showNucleotides, refSeq])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -168,6 +198,12 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       if (onWarning) onWarning(null)
       return
     }
+    if (!visibleReads?.length) {
+      ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
+      ctx.fillText('All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
+      if (onWarning) onWarning(null)
+      return
+    }
 
     const toX = (pos) => ((pos - regionStart) / regionLen) * width
     const pxPerBp = width / regionLen
@@ -176,7 +212,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
     const rg = ROW_GAP
 
     // Calculate total rows and visible rows for scrolling
-    const maxRow = Math.max(0, ...data.reads.map(r => r.row))
+    const maxRow = Math.max(0, ...visibleReads.map(r => r.row))
     const totalRows = maxRow + 1
     const visibleRows = Math.floor(height / (rh + rg))
     const needsScroll = totalRows > visibleRows
@@ -185,7 +221,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
 
     let hiddenReads = 0
     let drawnReads = 0
-    for (const read of data.reads) {
+    for (const read of visibleReads) {
       const rowY = (read.row - safeScrollRow) * (rh + rg) + 2
       if (rowY + rh < 0 || rowY > height) { hiddenReads++; continue }
 
@@ -283,14 +319,15 @@ export default function ReadTrack({ track, width, height, onWarning }) {
         onWarning(null)
       }
     }
-  }, [data, loading, width, height, region, refSeq, scrollRow, track.color, track.scaleMax, track.scaleMin,
+  }, [data, visibleReads, loading, width, height, region, refSeq, scrollRow, track.color, track.scaleMax, track.scaleMin,
       track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars,
       track.showNucleotides, track.useArrows, track.logScale,
-      track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize, theme])
+      track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize,
+      track.showFwdStrand, track.showRevStrand, theme])
 
   // Scrollbar drag handler
   const onMouseDown = useCallback((e) => {
-    if (!data?.reads?.length) return
+    if (!visibleReads?.length) return
     const canvas = canvasRef.current
     if (!canvas) return
     const rect = canvas.getBoundingClientRect()
@@ -298,13 +335,16 @@ export default function ReadTrack({ track, width, height, onWarning }) {
     if (mx < width - SCROLLBAR_WIDTH) return // not on scrollbar
 
     const rh = (showNucleotides && refSeq) ? NUCL_READ_HEIGHT : READ_HEIGHT
-    const maxRow = Math.max(0, ...data.reads.map(r => r.row))
+    const maxRow = Math.max(0, ...visibleReads.map(r => r.row))
     const totalRows = maxRow + 1
     const visibleRows = Math.floor(height / (rh + ROW_GAP))
     const maxScroll = Math.max(0, totalRows - visibleRows + 1)
     if (maxScroll <= 0) return
 
+    // Stop propagation so the global useCanvasInteraction pan handler
+    // doesn't also start a pan when the user grabs the scrollbar.
     e.preventDefault()
+    e.stopPropagation()
     scrollDragRef.current = { maxScroll, startY: e.clientY, startRow: scrollRow }
 
     function onMove(ev) {
@@ -320,7 +360,7 @@ export default function ReadTrack({ track, width, height, onWarning }) {
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [data, width, height, scrollRow, showNucleotides, refSeq])
+  }, [visibleReads, width, height, scrollRow, showNucleotides, refSeq])
 
   return (
     <canvas
