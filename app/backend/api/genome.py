@@ -130,7 +130,13 @@ def get_sequence(chrom: str, start: int, end: int):
     if end - start > 1_000_000:
         raise HTTPException(status_code=400, detail="Requested region too large (max 1 Mbp)")
     try:
-        seq = app_state.genome.get_sequence(chrom, start, end)
+        # pyfaidx is not thread-safe; serialize concurrent reads from
+        # multiple tracks (e.g. AnnotationTrack + ReadTrack reference fetch)
+        with app_state.genome_lock:
+            seq = app_state.genome.get_sequence(chrom, start, end)
         return {"chrom": chrom, "start": start, "end": end, "sequence": seq}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        # Transient → 503 so the frontend retries
+        raise HTTPException(status_code=503, detail=str(e))

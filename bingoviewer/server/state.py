@@ -1,8 +1,17 @@
 """
 Global application state — holds the loaded genome and track readers.
 Single-process in-memory store; safe for a local desktop app.
+
+FastAPI runs sync route handlers in a thread pool, so multiple concurrent
+requests can hit the same reader simultaneously. Several backing libraries
+we use (bamnostic, pyfaidx, pyBigWig) are NOT thread-safe — concurrent
+calls on the same instance can corrupt internal file-handle state and
+raise spurious errors under load (e.g. rapid zoom/pan). We guard each
+reader with its own ``threading.Lock`` and expose them via
+``track_lock(track_id)`` / ``genome_lock``.
 """
 
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -13,6 +22,26 @@ class AppState:
         self.genome = None                  # GenomeReader instance
         self.tracks: dict[str, dict] = {}   # track_id -> TrackInfo dict
         self.readers: dict[str, Any] = {}   # track_id -> reader instance
+        self._track_locks: dict[str, threading.Lock] = {}  # track_id -> Lock
+        self._genome_lock = threading.Lock()
+        # Guards mutations to the dicts above (load_track / remove_track)
+        self._state_lock = threading.Lock()
+
+    # ── Thread-safety helpers ────────────────────────────────────
+    def track_lock(self, track_id: str) -> threading.Lock:
+        """Return the per-track read lock, creating one on first use."""
+        lock = self._track_locks.get(track_id)
+        if lock is None:
+            with self._state_lock:
+                lock = self._track_locks.get(track_id)
+                if lock is None:
+                    lock = threading.Lock()
+                    self._track_locks[track_id] = lock
+        return lock
+
+    @property
+    def genome_lock(self) -> threading.Lock:
+        return self._genome_lock
 
     def load_genome(self, file_path: str):
         from readers.genome_reader import GenomeReader
@@ -222,9 +251,24 @@ class AppState:
         return all_names
 
     def remove_track(self, track_id: str):
-        reader = self.readers.pop(track_id, None)
-        if reader and hasattr(reader, "close"):
-            reader.close()
+        # Hold the per-track lock during close so we don't close while
+        # an in-flight request is mid-read.
+        lock = self._track_locks.pop(track_id, None)
+        if lock is not None:
+            with lock:
+                reader = self.readers.pop(track_id, None)
+                if reader and hasattr(reader, "close"):
+                    try:
+                        reader.close()
+                    except Exception:
+                        pass
+        else:
+            reader = self.readers.pop(track_id, None)
+            if reader and hasattr(reader, "close"):
+                try:
+                    reader.close()
+                except Exception:
+                    pass
         self.tracks.pop(track_id, None)
 
 

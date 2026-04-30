@@ -65,7 +65,10 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       if (onWarning) onWarning(null)
       return
     }
-    if (error) {
+    // If we have stale data, prefer drawing it over a blank "Network error"
+    // splash \u2014 the user keeps their context and the failure surfaces as a
+    // non-blocking warning badge instead.
+    if (error && !data?.bins?.length) {
       ctx.fillStyle = '#ef9a9a'; ctx.font = '11px Arial, Helvetica, sans-serif'
       ctx.fillText(typeof error === 'string' ? error : JSON.stringify(error), 8, height / 2 + 4)
       if (onWarning) onWarning(null)
@@ -184,9 +187,14 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       drawScaleLabel(ctx, '0', 2, height - 12, theme, true)
     }
 
-    // Detect clipping warnings
+    // Detect clipping warnings (and surface a refresh-failure as a warning
+    // when stale data is being shown, so the user knows it isn't fresh).
     if (onWarning) {
       const warnings = []
+      if (error) {
+        const msg = typeof error === 'string' ? error : JSON.stringify(error)
+        warnings.push(`Update failed: ${msg} — showing last loaded data`)
+      }
       if (userScaleMax != null && maxVal > userScaleMax) {
         warnings.push(`Bars clipped: max value ${maxVal.toFixed(1)} exceeds scale ${userScaleMax.toFixed(1)}`)
       }

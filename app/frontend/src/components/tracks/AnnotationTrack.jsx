@@ -74,7 +74,10 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
       if (onWarning) onWarning(null)
       return
     }
-    if (error) {
+    // Only blank the canvas with an error message when there is no stale
+    // data to fall back to \u2014 otherwise keep showing the last good features
+    // and surface the failure as a non-blocking warning badge below.
+    if (error && !data?.features?.length) {
       ctx.fillStyle = '#ef9a9a'
       ctx.font = '11px Arial, Helvetica, sans-serif'
       ctx.fillText(typeof error === 'string' ? error : JSON.stringify(error), 8, height / 2 + 4)
@@ -225,9 +228,15 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
     hitBoxesRef.current = boxes
 
     if (onWarning) {
-      onWarning(hiddenCount > 0
-        ? `${hiddenCount} feature${hiddenCount > 1 ? 's' : ''} hidden \u2014 increase track height to show all`
-        : null)
+      const warnings = []
+      if (error) {
+        const msg = typeof error === 'string' ? error : JSON.stringify(error)
+        warnings.push(`Update failed: ${msg} \u2014 showing last loaded data`)
+      }
+      if (hiddenCount > 0) {
+        warnings.push(`${hiddenCount} feature${hiddenCount > 1 ? 's' : ''} hidden \u2014 increase track height to show all`)
+      }
+      onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
   }, [data, loading, error, width, height, region, refSeq, track.color, track.annotationColors, useArrows, track.showNucleotides, track.regionOverlays, track.hiddenFeatureTypes, theme])
 

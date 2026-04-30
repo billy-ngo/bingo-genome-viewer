@@ -2,6 +2,17 @@
 
 All notable changes to BiNgo Genome Viewer are documented here.
 
+## [2.9.1] - 2026-04-30
+
+### Fixed
+- Rapid zoom/pan no longer leaves tracks stuck on a "Network error" splash:
+  - axios requests are now actually cancelled when superseded (the abort signal is wired through), preventing the request flood that was overwhelming the backend
+  - transient failures (network drop, 5xx, 408, 429) silently retry up to 2 times with exponential backoff
+  - on a final failure the last loaded data stays on screen — the canvas no longer blanks out — and the error is surfaced through the existing track warning badge instead of an in-canvas overlay
+  - sticky errors automatically clear when the user changes chromosome
+- Backend reader access is now serialized per-track via `threading.Lock`, fixing races in non-thread-safe libraries (bamnostic, pyfaidx, pyBigWig) that produced spurious 500s under concurrent zoom requests; tracks still fetch in parallel across each other
+- Reader-level exceptions now return HTTP 503 (transient) instead of 500 so the frontend retry path engages
+
 ## [2.9.0] - 2026-04-30
 
 ### Added

@@ -33,10 +33,15 @@ def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Qu
     if track_type not in ("coverage", "reads"):
         raise HTTPException(status_code=400, detail="Track does not support coverage")
 
+    # Per-track lock: bamnostic/pyBigWig file handles are not thread-safe.
+    # Concurrent reads on the same reader can corrupt seek state and raise
+    # spurious errors under rapid zoom/pan. Serialize within a single track;
+    # other tracks remain free to fetch in parallel.
     try:
-        bins_data = reader.get_coverage(chrom, start, end, bins=bins)
+        with app_state.track_lock(track_id):
+            bins_data = reader.get_coverage(chrom, start, end, bins=bins)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
 
     # Compute max of forward/positive values and min of reverse/negative values
     all_fwd = [b.get("forward", b["value"]) for b in bins_data]
@@ -67,9 +72,12 @@ def get_reads(track_id: str, chrom: str, start: int, end: int):
         )
 
     try:
-        reads = reader.get_reads(chrom, start, end)
+        with app_state.track_lock(track_id):
+            reads = reader.get_reads(chrom, start, end)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # 503 (rather than 500) signals the frontend that this is transient
+        # and worth retrying — common under rapid zoom/pan.
+        raise HTTPException(status_code=503, detail=str(e))
 
     return {"chrom": chrom, "start": start, "end": end, "reads": reads, "total": len(reads)}
 
@@ -82,9 +90,10 @@ def get_variants(track_id: str, chrom: str, start: int, end: int):
         raise HTTPException(status_code=400, detail="Track does not support variants")
 
     try:
-        variants = reader.get_variants(chrom, start, end)
+        with app_state.track_lock(track_id):
+            variants = reader.get_variants(chrom, start, end)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
 
     return {"chrom": chrom, "start": start, "end": end, "variants": variants}
 
@@ -103,14 +112,16 @@ def get_features(track_id: str, chrom: str, start: int, end: int):
         if track_type == "genome_annotations":
             if app_state.genome is None:
                 raise HTTPException(status_code=404, detail="No genome loaded")
-            features = app_state.genome.get_features(chrom, start, end)
+            with app_state.genome_lock:
+                features = app_state.genome.get_features(chrom, start, end)
         else:
             reader = _get_reader(track_id)
-            features = reader.get_features(chrom, start, end)
+            with app_state.track_lock(track_id):
+                features = reader.get_features(chrom, start, end)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
 
     return {"chrom": chrom, "start": start, "end": end, "features": features}
 

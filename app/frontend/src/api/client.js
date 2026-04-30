@@ -85,7 +85,8 @@ export const genomeApi = {
     return uploadFile('/genome/add-chromosomes', fd, onProgress)
   },
   chromosomes: () => api.get('/genome/chromosomes'),
-  sequence: (chrom, start, end) => api.get('/genome/sequence', { params: { chrom, start, end } }),
+  sequence: (chrom, start, end, opts = {}) =>
+    api.get('/genome/sequence', { params: { chrom, start, end }, signal: opts.signal }),
 }
 
 export const tracksApi = {
@@ -107,14 +108,17 @@ export const tracksApi = {
   },
   list: () => api.get('/tracks'),
   remove: (id) => api.delete(`/tracks/${id}`),
-  coverage: (id, chrom, start, end, bins = 1000) =>
-    api.get(`/tracks/${id}/coverage`, { params: { chrom, start, end, bins } }),
-  reads: (id, chrom, start, end) =>
-    api.get(`/tracks/${id}/reads`, { params: { chrom, start, end } }),
-  variants: (id, chrom, start, end) =>
-    api.get(`/tracks/${id}/variants`, { params: { chrom, start, end } }),
-  features: (id, chrom, start, end) =>
-    api.get(`/tracks/${id}/features`, { params: { chrom, start, end } }),
+  // Data-fetching methods accept an optional { signal } for cancellation.
+  // Without this, axios never cancels in-flight HTTP requests on rapid pan/zoom,
+  // which floods the backend and causes the most-recent fetch to fail under load.
+  coverage: (id, chrom, start, end, bins = 1000, opts = {}) =>
+    api.get(`/tracks/${id}/coverage`, { params: { chrom, start, end, bins }, signal: opts.signal }),
+  reads: (id, chrom, start, end, opts = {}) =>
+    api.get(`/tracks/${id}/reads`, { params: { chrom, start, end }, signal: opts.signal }),
+  variants: (id, chrom, start, end, opts = {}) =>
+    api.get(`/tracks/${id}/variants`, { params: { chrom, start, end }, signal: opts.signal }),
+  features: (id, chrom, start, end, opts = {}) =>
+    api.get(`/tracks/${id}/features`, { params: { chrom, start, end }, signal: opts.signal }),
 }
 
 export default api
