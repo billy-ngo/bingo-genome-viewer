@@ -68,7 +68,18 @@ class AppState:
                 self.readers[track_id] = None  # served directly from genome reader
 
     def load_track(self, file_path: str, name: str) -> dict:
-        ext = Path(file_path).suffix.lower()
+        # Detect compound extensions (.vcf.gz / .wig.gz / .bedgraph.gz / .bdg.gz)
+        # — Path.suffix only returns the last segment ('.gz') so a naive
+        # check rejects every gzip-compressed track even though every
+        # downstream reader handles them transparently.
+        name_lower = file_path.lower()
+        ext = None
+        for compound in (".vcf.gz", ".wig.gz", ".bedgraph.gz", ".bdg.gz"):
+            if name_lower.endswith(compound):
+                ext = compound
+                break
+        if ext is None:
+            ext = Path(file_path).suffix.lower()
         track_id = str(uuid.uuid4())[:8]
 
         if ext in (".bam", ".cram", ".sam"):
@@ -77,11 +88,13 @@ class AppState:
             track_type = "reads"
             file_format = ext.lstrip(".")
 
-        elif ext in (".bw", ".bigwig", ".bedgraph", ".bdg", ".wig"):
+        elif ext in (".bw", ".bigwig", ".bedgraph", ".bdg", ".wig",
+                     ".wig.gz", ".bedgraph.gz", ".bdg.gz"):
             from readers.bigwig_reader import make_coverage_reader
             reader = make_coverage_reader(file_path)
             track_type = "coverage"
-            file_format = ext.lstrip(".")
+            # Display the underlying format, not ".gz"
+            file_format = ext.lstrip(".").replace(".gz", "")
 
         elif ext in (".vcf", ".vcf.gz", ".bcf"):
             from readers.vcf_reader import VcfReader

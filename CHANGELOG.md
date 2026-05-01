@@ -2,6 +2,36 @@
 
 All notable changes to BiNgo Genome Viewer are documented here.
 
+## [2.9.4] - 2026-05-01
+
+### Fixed (file-format audit)
+- GFF3 files shipped with the ambiguous `.gff` extension are now parsed
+  correctly. The factory previously routed every `.gff` to the GTF parser,
+  which uses `key "value"` attribute syntax — for the much-more-common GFF3
+  files (`key=value`) it silently extracted nothing, so every feature
+  surfaced as a generic "gene"/"CDS" with empty attributes. We now sniff
+  `##gff-version` and the column-9 attribute style before choosing the
+  reader. Verified against real-world NCBI annotwriter and Geneious GFF3
+  files: gene names (`dnaA`, `dnaN`, …), `locus_tag`, and `product`
+  attributes all populate again
+- Compressed track files (`.vcf.gz`, `.wig.gz`, `.bedgraph.gz`, `.bdg.gz`)
+  no longer get rejected as "Unsupported file format: .gz". `Path.suffix`
+  only returns the last extension segment, so the previous extension
+  allow-list never matched. Backend dispatch and frontend file-type
+  detection both now treat compound extensions as first-class. WIG and
+  BedGraph readers transparently decompress via a shared `_open_text`
+  helper
+
+### Performance
+- BigWig coverage queries no longer instantiate one tuple per base pair.
+  A BedGraph block summarising a long constant run (e.g. 100 kbp at value
+  0) used to allocate 100 000 `(pos, value)` tuples and discard most of
+  them in the binning pass. We now walk the R-tree once and distribute
+  each block's `value × overlap` directly into the bin accumulators —
+  same numerical result, but O(blocks × bins_touched) instead of
+  O(total_bases). Verified on a synthetic 1 Mbp BedGraph block: 100×
+  `get_coverage` queries complete in 21 ms total
+
 ## [2.9.3] - 2026-05-01
 
 ### Fixed (robustness audit follow-up)

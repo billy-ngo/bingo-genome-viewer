@@ -27,14 +27,26 @@ function formatBytes(bytes) {
 }
 
 const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
-const TRACK_EXTS = new Set(['.bam', '.bw', '.bigwig', '.wig', '.bedgraph', '.bdg', '.vcf', '.bed', '.gtf', '.gff', '.gff2', '.gff3'])
+const TRACK_EXTS = new Set([
+  '.bam', '.bw', '.bigwig',
+  '.wig', '.wig.gz',
+  '.bedgraph', '.bedgraph.gz', '.bdg', '.bdg.gz',
+  '.vcf', '.vcf.gz',
+  '.bed', '.gtf', '.gff', '.gff2', '.gff3',
+])
 const INDEX_EXTS = new Set(['.bai'])
 const LARGE_FILE_THRESHOLD = 50 * 1024 * 1024  // 50 MB — prompt path instead of uploading
 
 function getFileExt(name) {
   if (!name) return ''
   const lower = name.toLowerCase()
+  // Compound extensions — must check before the last-dot fallback,
+  // otherwise .wig.gz / .vcf.gz files dispatch as plain ".gz" and
+  // get rejected as unsupported.
   if (lower.endsWith('.vcf.gz')) return '.vcf.gz'
+  if (lower.endsWith('.wig.gz')) return '.wig.gz'
+  if (lower.endsWith('.bedgraph.gz')) return '.bedgraph.gz'
+  if (lower.endsWith('.bdg.gz')) return '.bdg.gz'
   if (lower.endsWith('.bam.bai')) return '.bam.bai'
   const dot = lower.lastIndexOf('.')
   return dot >= 0 ? lower.slice(dot) : ''
@@ -66,7 +78,7 @@ function classifyFiles(files) {
       bamFiles.push(f)
     } else if (isIndexFile(f.name)) {
       indexFiles.push(f)
-    } else if (TRACK_EXTS.has(ext) || ext === '.vcf.gz') {
+    } else if (TRACK_EXTS.has(ext)) {
       // Check if file is too large for upload
       if (f.size > LARGE_FILE_THRESHOLD) {
         largeFiles.push(f)
@@ -135,7 +147,6 @@ export default function FileLoader() {
   const ALL_ACCEPT = [
     ...Array.from(GENOME_EXTS),
     ...Array.from(TRACK_EXTS),
-    '.vcf.gz',
     '.bai',
   ].join(',')
 
@@ -353,7 +364,7 @@ export default function FileLoader() {
 
     // Detect file type from extension
     const isGenome = GENOME_EXTS.has(getFileExt(path))
-    const isTrack = TRACK_EXTS.has(getFileExt(path)) || lower.endsWith('.vcf.gz') || lower.endsWith('.bai')
+    const isTrack = TRACK_EXTS.has(getFileExt(path)) || lower.endsWith('.bai')
 
     if (isGenome && !genome) {
       // Load as genome

@@ -273,13 +273,60 @@ def _parse_gff3_attrs(raw: str) -> dict:
     return attrs
 
 
+def _sniff_gff_dialect(file_path: str) -> str:
+    """Inspect the first non-comment line of a GFF/GTF file and return
+    'gff3' or 'gtf'. Many real-world files declare ##gff-version 3 in the
+    header but ship with the ambiguous .gff extension; without sniffing
+    we'd route them to the GTF parser, lose every attribute, and surface
+    every feature as a generic "gene"/"CDS" instead of its real gene name.
+    """
+    try:
+        with open(file_path, "r", errors="replace") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                lower = stripped.lower()
+                if lower.startswith("##gff-version"):
+                    if "3" in lower:
+                        return "gff3"
+                    if "2" in lower or "1" in lower:
+                        return "gtf"
+                    continue
+                if stripped.startswith("#"):
+                    continue
+                # First data line — inspect column 9 attribute style
+                parts = stripped.split("\t")
+                if len(parts) < 9:
+                    return "gtf"
+                attrs = parts[8]
+                # GTF/GFF2 use key "value"; GFF3 uses key=value
+                has_quotes = '"' in attrs
+                has_eq = "=" in attrs
+                if has_quotes and not has_eq:
+                    return "gtf"
+                if has_eq and not has_quotes:
+                    return "gff3"
+                # Both — prefer the one that matches more attribute pairs
+                gtf_pairs = len(re.findall(r'(\w+)\s+"[^"]+"', attrs))
+                gff3_pairs = len(re.findall(r'(\w+)=', attrs))
+                return "gff3" if gff3_pairs > gtf_pairs else "gtf"
+    except Exception:
+        pass
+    return "gff3"  # safer default for ambiguous files
+
+
 def make_annotation_reader(file_path: str):
     ext = Path(file_path).suffix.lower()
     if ext == ".bed":
         return BedReader(file_path)
-    elif ext in (".gtf", ".gff", ".gff2"):
+    if ext == ".gtf" or ext == ".gff2":
         return GtfReader(file_path)
-    elif ext == ".gff3":
+    if ext == ".gff3":
         return Gff3Reader(file_path)
-    else:
-        raise ValueError(f"Unsupported annotation format: {ext}")
+    if ext == ".gff":
+        # .gff is ambiguous in the wild — many files are GFF3 but shipped
+        # with this extension. Sniff the dialect from the file's contents.
+        dialect = _sniff_gff_dialect(file_path)
+        return Gff3Reader(file_path) if dialect == "gff3" else GtfReader(file_path)
+    raise ValueError(f"Unsupported annotation format: {ext}")

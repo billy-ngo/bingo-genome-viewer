@@ -21,7 +21,7 @@ import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.9.3'
+const APP_VERSION = '2.9.4'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -123,12 +123,24 @@ function BrowserApp() {
 
   // Full-screen drag-and-drop support
   const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
-  const TRACK_EXTS = new Set(['.bam', '.bw', '.bigwig', '.wig', '.bedgraph', '.bdg', '.vcf', '.bed', '.gtf', '.gff', '.gff2', '.gff3'])
+  const TRACK_EXTS = new Set([
+    '.bam', '.bw', '.bigwig',
+    '.wig', '.wig.gz',
+    '.bedgraph', '.bedgraph.gz', '.bdg', '.bdg.gz',
+    '.vcf', '.vcf.gz',
+    '.bed', '.gtf', '.gff', '.gff2', '.gff3',
+  ])
   const INDEX_EXTS = new Set(['.bai'])
 
   function getFileExt(name) {
     if (!name) return ''
-    if (name.toLowerCase().endsWith('.vcf.gz')) return '.vcf.gz'
+    const lower = name.toLowerCase()
+    // Compound extensions must win over the last-dot fallback so that
+    // .wig.gz / .vcf.gz files dispatch correctly instead of as ".gz".
+    if (lower.endsWith('.vcf.gz')) return '.vcf.gz'
+    if (lower.endsWith('.wig.gz')) return '.wig.gz'
+    if (lower.endsWith('.bedgraph.gz')) return '.bedgraph.gz'
+    if (lower.endsWith('.bdg.gz')) return '.bdg.gz'
     const dot = name.lastIndexOf('.')
     return dot >= 0 ? name.slice(dot).toLowerCase() : ''
   }
@@ -175,7 +187,7 @@ function BrowserApp() {
       const ext = getFileExt(f.name)
       const lower = f.name.toLowerCase()
       if (GENOME_EXTS.has(ext)) genomeFiles.push(f)
-      else if (TRACK_EXTS.has(ext) || ext === '.vcf.gz') trackFiles.push(f)
+      else if (TRACK_EXTS.has(ext)) trackFiles.push(f)
       else if (INDEX_EXTS.has(ext) || lower.endsWith('.bam.bai')) indexFiles.push(f)
       else unknownFiles.push(f)
     }

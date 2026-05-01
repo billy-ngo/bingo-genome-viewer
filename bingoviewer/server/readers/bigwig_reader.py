@@ -4,11 +4,25 @@ Coverage readers for BigWig, BedGraph, and Wig formats — pure Python, no C dep
 BigWig is a binary format; we parse it using struct + zlib following the
 UCSC BigWig specification:
   https://genome.ucsc.edu/goldenPath/help/bigWig.html
+
+Text-based formats (.wig, .bedgraph, .bdg) also accept gzip-compressed
+variants (.wig.gz, .bedgraph.gz, .bdg.gz) without re-extracting them.
 """
 
+import gzip
+import io
 import struct
 import zlib
 from pathlib import Path
+
+
+def _open_text(file_path: str):
+    """Open a file as text, transparently decompressing .gz variants.
+    Used by the WIG/BedGraph readers and by _sniff_wig_format."""
+    p = str(file_path).lower()
+    if p.endswith(".gz"):
+        return gzip.open(file_path, "rt", encoding="utf-8", errors="replace")
+    return open(file_path, "r", encoding="utf-8", errors="replace")
 
 
 # ── BigWig constants ──────────────────────────────────────────────────────────
@@ -66,30 +80,66 @@ class BigWigReader:
         if region_len <= 0:
             return []
 
-        # Collect all (pos, value) pairs from overlapping data blocks
-        points = self._fetch_points(chrom_id, start, end)
-
         n_bins = min(bins, region_len)
         bin_size = region_len / n_bins
         totals = [0.0] * n_bins
-        counts = [0]  * n_bins
+        counts = [0] * n_bins
 
-        for pos, val in points:
-            if pos < start or pos >= end:
-                continue
-            bi = int((pos - start) / bin_size)
-            bi = min(bi, n_bins - 1)
-            totals[bi] += val
-            counts[bi] += 1
+        # Distribute each data block's contribution across the bins it
+        # overlaps. The previous implementation expanded every block into
+        # one (pos, value) tuple per base pair — fine for sparse Tn-seq
+        # data, catastrophic for a BedGraph BigWig that summarises long
+        # constant runs (e.g. a single block spanning 100 kbp at value 0
+        # would allocate 100 k tuples). This walks the index once and does
+        # O(blocks * bins_per_block) work instead.
+        self._accumulate_blocks(chrom_id, start, end, n_bins, bin_size, totals, counts)
 
-        result = []
-        for i in range(n_bins):
-            result.append({
+        return [
+            {
                 "start": int(start + i * bin_size),
                 "end":   int(start + (i + 1) * bin_size),
                 "value": totals[i] / counts[i] if counts[i] else 0.0,
-            })
-        return result
+            }
+            for i in range(n_bins)
+        ]
+
+    def _accumulate_blocks(self, chrom_id, region_start, region_end, n_bins, bin_size, totals, counts):
+        # Read R-tree header
+        hdr = self._read(self._full_index_offset, 48)
+        magic = struct.unpack_from("<L", hdr)[0]
+        if magic != RTREE_MAGIC:
+            raise ValueError("Bad R-tree magic")
+        root_offset = self._full_index_offset + 48
+        self._rtree_walk(root_offset, chrom_id, region_start, region_end, n_bins, bin_size, totals, counts)
+
+    def _rtree_walk(self, offset, chrom_id, region_start, region_end, n_bins, bin_size, totals, counts):
+        hdr = self._read(offset, 4)
+        is_leaf, _, count = struct.unpack_from("<BBH", hdr)
+        offset += 4
+        if is_leaf:
+            item_size = 32
+            data = self._read(offset, count * item_size)
+            for i in range(count):
+                base = i * item_size
+                (chr_s, bp_s, chr_e, bp_e, data_offset, data_size) = struct.unpack_from(
+                    "<LLLLqq", data, base
+                )
+                if self._overlaps(chr_s, bp_s, chr_e, bp_e, chrom_id, region_start, region_end):
+                    self._accumulate_data_block(
+                        data_offset, data_size, chrom_id,
+                        region_start, region_end, n_bins, bin_size, totals, counts
+                    )
+        else:
+            item_size = 24
+            data = self._read(offset, count * item_size)
+            for i in range(count):
+                base = i * item_size
+                (chr_s, bp_s, chr_e, bp_e, child_offset) = struct.unpack_from(
+                    "<LLLLq", data, base
+                )
+                if self._overlaps(chr_s, bp_s, chr_e, bp_e, chrom_id, region_start, region_end):
+                    self._rtree_walk(child_offset, chrom_id, region_start, region_end,
+                                     n_bins, bin_size, totals, counts)
 
     # ── private ───────────────────────────────────────────────────────────────
 
@@ -142,41 +192,6 @@ class BigWigReader:
                 child_offset, = struct.unpack_from("<Q", data, base + key_size)
                 self._traverse_bptree(child_offset, key_size, val_size)
 
-    def _fetch_points(self, chrom_id: int, start: int, end: int):
-        """Walk R-tree and yield (position, value) for all overlapping records."""
-        # Read R-tree header
-        hdr = self._read(self._full_index_offset, 48)
-        magic = struct.unpack_from("<L", hdr)[0]
-        if magic != RTREE_MAGIC:
-            raise ValueError("Bad R-tree magic")
-        root_offset = self._full_index_offset + 48
-        points = []
-        self._rtree_search(root_offset, chrom_id, start, end, points)
-        return points
-
-    def _rtree_search(self, offset: int, chrom_id: int, start: int, end: int, out: list):
-        hdr = self._read(offset, 4)
-        is_leaf, _, count = struct.unpack_from("<BBH", hdr)
-        offset += 4
-        if is_leaf:
-            item_size = 32  # chromIxStart(4)+baseStart(4)+chromIxEnd(4)+baseEnd(4)+dataOffset(8)+dataSize(8)
-            data = self._read(offset, count * item_size)
-            for i in range(count):
-                base = i * item_size
-                (chr_start, bp_start, chr_end, bp_end,
-                 data_offset, data_size) = struct.unpack_from("<LLLLqq", data, base)
-                if self._overlaps(chr_start, bp_start, chr_end, bp_end, chrom_id, start, end):
-                    self._read_data_block(data_offset, data_size, chrom_id, start, end, out)
-        else:
-            item_size = 24  # chromIxStart(4)+baseStart(4)+chromIxEnd(4)+baseEnd(4)+dataOffset(8)
-            data = self._read(offset, count * item_size)
-            for i in range(count):
-                base = i * item_size
-                (chr_start, bp_start, chr_end, bp_end,
-                 child_offset) = struct.unpack_from("<LLLLq", data, base)
-                if self._overlaps(chr_start, bp_start, chr_end, bp_end, chrom_id, start, end):
-                    self._rtree_search(child_offset, chrom_id, start, end, out)
-
     @staticmethod
     def _overlaps(chr_s, bp_s, chr_e, bp_e, chrom_id, start, end) -> bool:
         if chr_s > chrom_id or chr_e < chrom_id:
@@ -185,7 +200,13 @@ class BigWigReader:
             return bp_s < end and bp_e > start
         return True
 
-    def _read_data_block(self, offset: int, size: int, chrom_id: int, start: int, end: int, out: list):
+    def _accumulate_data_block(self, offset, size, chrom_id, region_start, region_end,
+                                n_bins, bin_size, totals, counts):
+        """Decompress one data block and add its (range, value) entries to the bin
+        accumulators. Each input range contributes ``overlap`` to the count of
+        each bin it touches and ``overlap * value`` to that bin's total — the
+        final mean comes out the same as the per-position implementation but
+        without instantiating one tuple per base pair."""
         raw = self._read(offset, size)
         if self._uncompress_buf_size > 0:
             try:
@@ -193,7 +214,6 @@ class BigWigReader:
             except zlib.error:
                 return
 
-        # Section header: chromId(4) chromStart(4) chromEnd(4) itemStep(4) itemSpan(4) type(1) reserved(1) itemCount(2)
         if len(raw) < 24:
             return
         chrom_id_sec, chrom_start, chrom_end, item_step, item_span, bw_type, _, item_count = \
@@ -201,32 +221,51 @@ class BigWigReader:
         if chrom_id_sec != chrom_id:
             return
 
-        pos = 24  # offset after section header
+        pos = 24
+
+        # Local references for the inner loop — avoid repeated attribute lookups.
+        max_bin = n_bins - 1
+
+        def add_range(s, e, v):
+            if s >= region_end or e <= region_start:
+                return
+            cs = max(s, region_start)
+            ce = min(e, region_end)
+            if cs >= ce:
+                return
+            bi_first = int((cs - region_start) / bin_size)
+            bi_last = int((ce - 1 - region_start) / bin_size)
+            if bi_first < 0: bi_first = 0
+            if bi_last > max_bin: bi_last = max_bin
+            for bi in range(bi_first, bi_last + 1):
+                bin_start_pos = region_start + bi * bin_size
+                bin_end_pos = region_start + (bi + 1) * bin_size
+                ov_lo = cs if cs > bin_start_pos else bin_start_pos
+                ov_hi = ce if ce < bin_end_pos else bin_end_pos
+                overlap = ov_hi - ov_lo
+                if overlap > 0:
+                    totals[bi] += v * overlap
+                    counts[bi] += overlap
+
         if bw_type == BW_TYPE_BEDGRAPH:
             for _ in range(item_count):
                 if pos + 12 > len(raw): break
                 s, e, v = struct.unpack_from("<LLf", raw, pos)
                 pos += 12
-                if s < end and e > start:
-                    for p in range(max(s, start), min(e, end)):
-                        out.append((p, v))
+                add_range(s, e, v)
         elif bw_type == BW_TYPE_VARSTEP:
             for _ in range(item_count):
                 if pos + 8 > len(raw): break
                 s, v = struct.unpack_from("<Lf", raw, pos)
                 pos += 8
-                for p in range(s, s + item_span):
-                    if start <= p < end:
-                        out.append((p, v))
+                add_range(s, s + item_span, v)
         elif bw_type == BW_TYPE_FIXSTEP:
             cur = chrom_start
             for _ in range(item_count):
                 if pos + 4 > len(raw): break
                 v, = struct.unpack_from("<f", raw, pos)
                 pos += 4
-                for p in range(cur, cur + item_span):
-                    if start <= p < end:
-                        out.append((p, v))
+                add_range(cur, cur + item_span, v)
                 cur += item_step
 
 
@@ -255,7 +294,7 @@ class BedGraphReader:
         return chrom
 
     def _load(self):
-        with open(self.file_path) as f:
+        with _open_text(self.file_path) as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith(("track", "browser", "#")):
@@ -263,7 +302,10 @@ class BedGraphReader:
                 parts = line.split()
                 if len(parts) < 4:
                     continue
-                chrom, start, end, value = parts[0], int(parts[1]), int(parts[2]), float(parts[3])
+                try:
+                    chrom, start, end, value = parts[0], int(parts[1]), int(parts[2]), float(parts[3])
+                except (ValueError, IndexError):
+                    continue
                 self._data.setdefault(chrom, []).append((start, end, value))
                 self._chroms[chrom] = max(self._chroms.get(chrom, 0), end)
         for chrom in self._data:
@@ -354,7 +396,7 @@ class WigReader:
         chroms: dict[str, int] = {}
         header_seen = False
 
-        with open(self.file_path, buffering=1 << 16) as f:
+        with _open_text(self.file_path) as f:
             for line in f:
                 # Fast path: most lines are data. Check first char.
                 c0 = line[0] if line else '\n'
@@ -550,7 +592,7 @@ class WigReader:
 def _sniff_wig_format(file_path: str) -> str:
     """Peek at the first lines to detect if a .wig file is actually BedGraph format."""
     try:
-        with open(file_path) as f:
+        with _open_text(file_path) as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith(("browser",)):
@@ -583,17 +625,28 @@ def _sniff_wig_format(file_path: str) -> str:
     return "wig"
 
 
+def _coverage_compound_ext(file_path: str) -> str:
+    """Return the meaningful extension, treating .wig.gz / .bedgraph.gz /
+    .bdg.gz as their underlying format (Path.suffix only ever returns
+    '.gz' on its own)."""
+    name = str(file_path).lower()
+    for compound in (".wig.gz", ".bedgraph.gz", ".bdg.gz"):
+        if name.endswith(compound):
+            return compound[:-len(".gz")]  # drop the .gz, keep .wig / .bedgraph / .bdg
+    return Path(file_path).suffix.lower()
+
+
 def make_coverage_reader(file_path: str):
-    ext = Path(file_path).suffix.lower()
+    ext = _coverage_compound_ext(file_path)
     if ext in (".bw", ".bigwig"):
         return BigWigReader(file_path)
-    elif ext in (".bedgraph", ".bdg"):
+    if ext in (".bedgraph", ".bdg"):
         return BedGraphReader(file_path)
-    elif ext == ".wig":
-        # Some .wig files are actually BedGraph format — auto-detect
+    if ext == ".wig":
+        # Some .wig files are actually BedGraph format — auto-detect.
+        # _sniff_wig_format transparently handles gzip-compressed variants.
         fmt = _sniff_wig_format(file_path)
         if fmt == "bedgraph":
             return BedGraphReader(file_path)
         return WigReader(file_path)
-    else:
-        raise ValueError(f"Unsupported coverage format: {ext}")
+    raise ValueError(f"Unsupported coverage format: {ext}")
