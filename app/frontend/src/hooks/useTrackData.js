@@ -161,7 +161,29 @@ export function useTrackData(track, region, canvasWidth) {
     }
   }, [track?.id, region?.chrom, region?.start, region?.end, canvasWidth])
 
-  function doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth, attempt = 0) {
+  function doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth) {
+    // Cancel any previous in-flight request — passes signal to axios so the
+    // underlying HTTP request is genuinely aborted, not merely suppressed.
+    if (abortRef.current) abortRef.current.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    // Only show loading spinner on first load — never blank existing data.
+    if (!hasDataRef.current) setLoading(true)
+    setError(null)
+
+    // Snapshot the request identity. The retry path checks against this so
+    // a backoff-scheduled retry that fires after the user has navigated to
+    // a different chrom/track will bail instead of overwriting fresh data
+    // with stale results.
+    const requestKey = { trackId: track.id, chrom, start, end, viewLen }
+    attemptFetchOnce(controller, requestKey, track, chrom, start, end, viewLen, type, canvasWidth, 0)
+  }
+
+  function attemptFetchOnce(controller, requestKey, track, chrom, start, end, viewLen, type, canvasWidth, attempt) {
+    // Bail if a newer fetch has superseded this one or the hook has unmounted.
+    if (controller.signal.aborted) return
+
     const useOverscan = type !== 'reads' || viewLen > READ_DETAIL_THRESHOLD
     const os = useOverscan ? OVERSCAN : 0
     const fetchStart = Math.max(0, Math.floor(start - viewLen * os))
@@ -173,7 +195,7 @@ export function useTrackData(track, region, canvasWidth) {
     const cacheKey = `${track.id}|${type}|${chrom}|${fetchStart}|${fetchEnd}|${bins}`
 
     // First-attempt only: serve from cache if present.
-    // Retries skip the cache (we know we want a fresh request).
+    // Retries skip the cache — we already know we want a fresh fetch.
     if (attempt === 0) {
       const cached = cache.get(cacheKey)
       if (cached) {
@@ -185,16 +207,6 @@ export function useTrackData(track, region, canvasWidth) {
         return
       }
     }
-
-    // Cancel any previous in-flight request — pass signal to axios so the
-    // underlying HTTP request is genuinely aborted (not just suppressed).
-    if (attempt === 0 && abortRef.current) abortRef.current.abort()
-    const controller = attempt === 0 ? new AbortController() : abortRef.current
-    if (attempt === 0) abortRef.current = controller
-
-    // Only show loading spinner on first load — never blank existing data
-    if (!hasDataRef.current) setLoading(true)
-    if (attempt === 0) setError(null)
 
     const opts = { signal: controller.signal }
     let promise
@@ -231,20 +243,23 @@ export function useTrackData(track, region, canvasWidth) {
         setLoading(false)
       })
       .catch(err => {
-        // Aborted requests: silently drop.
+        // Aborted requests: silently drop. Use the captured controller so a
+        // retry-loop that started with one controller cannot be misattributed
+        // to a later, freshly-created one.
         if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED' ||
             controller.signal.aborted) {
           return
         }
 
-        // Transient errors: retry with backoff. Never blank existing data.
+        // Transient errors: retry with backoff. The captured controller is
+        // shared across all attempts of a single doFetchForRegion call —
+        // when a newer fetch supersedes it via abortRef.current.abort(),
+        // every pending retry's signal goes aborted and the loop exits.
         if (isTransientError(err) && attempt < MAX_RETRIES) {
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
           const delay = RETRY_BACKOFF_MS[attempt] || 1000
           retryTimerRef.current = setTimeout(() => {
-            // Re-issue if still relevant (region/track unchanged)
-            if (controller.signal.aborted) return
-            doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth, attempt + 1)
+            attemptFetchOnce(controller, requestKey, track, chrom, start, end, viewLen, type, canvasWidth, attempt + 1)
           }, delay)
           return
         }

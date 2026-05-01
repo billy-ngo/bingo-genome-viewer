@@ -60,6 +60,12 @@ export function collectSession(genome, region, tracks, themeName, customTheme, l
       regionOverlays: t.regionOverlays || [],
       annotationColors: t.annotationColors || null,
       targetChromosomes: t.targetChromosomes || null,
+      // Annotation feature-type filter (v2.8.0+)
+      featureTypes: t.featureTypes || [],
+      hiddenFeatureTypes: t.hiddenFeatureTypes || [],
+      // Read-track strand visibility (v2.9.0+)
+      showFwdStrand: t.showFwdStrand !== false,
+      showRevStrand: t.showRevStrand !== false,
       order: idx,
     })),
     themeName,
@@ -287,6 +293,12 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         color: t.color || '#78909c',
         annotationColors: t.annotationColors || null,
         targetChromosomes: t.targetChromosomes || null,
+        // Annotation feature-type filter (v2.8.0+)
+        featureTypes: t.featureTypes || [],
+        hiddenFeatureTypes: t.hiddenFeatureTypes || [],
+        // Read-track strand visibility (v2.9.0+) — default true for older sessions
+        showFwdStrand: t.showFwdStrand !== false,
+        showRevStrand: t.showRevStrand !== false,
       })))
 
       // 3. Restore theme

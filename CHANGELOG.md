@@ -2,6 +2,29 @@
 
 All notable changes to BiNgo Genome Viewer are documented here.
 
+## [2.9.3] - 2026-05-01
+
+### Fixed (robustness audit follow-up)
+- Session save/restore now preserves the per-track fields added in 2.8.0 / 2.9.0:
+  `featureTypes`, `hiddenFeatureTypes`, `showFwdStrand`, `showRevStrand`. They
+  were silently dropped before, so feature-type filters and strand-visibility
+  toggles were lost across browser reload and session export
+- Retry path in `useTrackData` no longer reads `abortRef.current` at retry-fire
+  time. The `AbortController` is now captured in closure and shared across all
+  retry attempts of a single fetch, so a newly-issued fetch (which reassigns
+  `abortRef.current`) cannot accidentally re-attach the in-flight retry to its
+  own controller's signal — eliminating the window where stale data could
+  overwrite fresh data after rapid pan/zoom + transient failure
+- Backend `load_genome` and `load_track` now perform their state mutations
+  under the existing per-state locks. The new `GenomeReader` is constructed
+  outside the lock (so concurrent /sequence reads aren't blocked during slow
+  GenBank parses) and only the swap is serialised. Prevents a /sequence,
+  /features, or /coverage call landing on a half-initialised reader if the
+  user re-loads a genome / track while requests are in flight
+- `add_chromosomes` endpoint now holds `genome_lock` while merging, so
+  concurrent /sequence and /features cannot read mid-mutation while
+  `_sub_readers` is being appended
+
 ## [2.9.2] - 2026-04-30
 
 ### Changed

@@ -57,7 +57,10 @@ async def add_chromosomes(file: UploadFile = File(...)):
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
-        app_state.genome.add_chromosomes_from(str(dest))
+        # Hold genome_lock so concurrent /sequence and /features requests
+        # can't read mid-mutation while sub-readers are being appended.
+        with app_state.genome_lock:
+            app_state.genome.add_chromosomes_from(str(dest))
         genome = app_state.genome
         return {
             "name": genome.name,

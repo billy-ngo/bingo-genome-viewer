@@ -45,18 +45,27 @@ class AppState:
 
     def load_genome(self, file_path: str):
         from readers.genome_reader import GenomeReader
-        self.genome = GenomeReader(file_path)
-        # If GenBank, auto-add annotation track
-        if self.genome.is_annotated():
-            track_id = "genome_annotations"
-            self.tracks[track_id] = {
-                "id": track_id,
-                "name": f"{self.genome.name} (annotations)",
-                "file_path": file_path,
-                "track_type": "genome_annotations",
-                "file_format": "genbank",
-            }
-            self.readers[track_id] = None  # served directly from genome reader
+        # Build the new reader OUTSIDE the lock — construction can be slow
+        # for large GenBank files and we don't want to block in-flight
+        # /api/genome/sequence calls (which acquire genome_lock).
+        new_genome = GenomeReader(file_path)
+        # Atomic swap: hold genome_lock so concurrent get_sequence /
+        # get_features readers see either the old or fully-built new reader,
+        # never a half-initialised one. Hold _state_lock for tracks/readers
+        # mutation so /api/tracks/load racing against this can't observe
+        # a torn dict.
+        with self._genome_lock, self._state_lock:
+            self.genome = new_genome
+            if self.genome.is_annotated():
+                track_id = "genome_annotations"
+                self.tracks[track_id] = {
+                    "id": track_id,
+                    "name": f"{self.genome.name} (annotations)",
+                    "file_path": file_path,
+                    "track_type": "genome_annotations",
+                    "file_format": "genbank",
+                }
+                self.readers[track_id] = None  # served directly from genome reader
 
     def load_track(self, file_path: str, name: str) -> dict:
         ext = Path(file_path).suffix.lower()
@@ -102,8 +111,12 @@ class AppState:
             "track_type": track_type,
             "file_format": file_format,
         }
-        self.tracks[track_id] = info
-        self.readers[track_id] = reader
+        # Atomic write: keep tracks[] and readers[] consistent so a
+        # concurrent fetch can't observe a track that exists in self.tracks
+        # but is missing from self.readers (or vice-versa).
+        with self._state_lock:
+            self.tracks[track_id] = info
+            self.readers[track_id] = reader
         return info
 
     def check_track_compatibility(self, track_id: str) -> dict:
