@@ -2,6 +2,13 @@
 
 All notable changes to BiNgo Genome Viewer are documented here.
 
+## [2.9.2] - 2026-04-30
+
+### Changed
+- Install instructions now recommend `python -m pip install BiNgoViewer` (with `python3 -m pip ...` as a fallback) instead of bare `pip install`. This binds the install to whichever Python the user invoked — including the active virtualenv — and avoids the "command not found" / wrong-Python issues users hit on macOS and Linux where only `python3`/`pip3` exists on PATH
+- Troubleshooting table in the README now covers `pip` vs `pip3` vs `python -m pip`, the "installs but `bingo` not found" case (PATH scoping), and a one-liner for creating a clean venv
+- `bingo --update` failure message now prints the exact `<sys.executable> -m pip install --upgrade BiNgoViewer` command so users in venvs / on `python3`-only systems can copy a working command verbatim
+
 ## [2.9.1] - 2026-04-30
 
 ### Fixed

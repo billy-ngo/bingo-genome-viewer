@@ -28,9 +28,15 @@ A lightweight, browser-based genomics viewer for visualizing genomes, coverage t
 No Node.js required — the frontend is pre-built and bundled.
 
 ```bash
-pip install BiNgoViewer
+python -m pip install BiNgoViewer
 bingo
 ```
+
+> Using `python -m pip` (instead of bare `pip`) installs into whichever Python
+> you invoke — including a virtual environment — and avoids the common
+> "command not found" / wrong-Python issues some users hit on macOS and Linux
+> where the launcher is `python3`/`pip3`. If `python` is not on your PATH,
+> substitute `python3 -m pip install BiNgoViewer`.
 
 Options:
 
@@ -72,9 +78,11 @@ Then open [http://localhost:8000](http://localhost:8000).
 
 | Problem | Solution |
 |---------|----------|
-| `python` not found | Install Python 3.10+ and check **Add to PATH** during setup |
+| `python` not found | Install Python 3.10+ and check **Add to PATH** during setup. On macOS/Linux you may need `python3` instead of `python` |
+| `pip` not found / wrong version | Use `python -m pip install BiNgoViewer` (or `python3 -m pip ...`). This binds to whatever Python you invoked, including the active virtualenv, and works even when there is no `pip` shim on PATH |
+| Installs but `bingo` not found | Your Python's `Scripts/` (Windows) or `bin/` (macOS/Linux) directory is not on PATH. Either activate your venv first, or run `python -m bingoviewer` instead of `bingo` |
 | "No matching distribution" | Your Python is too old — BiNgo requires **Python 3.10+**. Check with `python --version` |
-| pip install fails | Try `pip install --user BiNgoViewer` or use a virtual environment |
+| pip install fails | Try `python -m pip install --user BiNgoViewer`, or create a virtual environment: `python -m venv .venv && .venv/bin/pip install BiNgoViewer` (use `.venv\Scripts\pip` on Windows) |
 | Port 8000 in use | Run `bingo --port 9000` (or any free port) |
 | Browser doesn't open | Visit `http://localhost:8000` manually |
 | Server won't stop | The server auto-exits when you close all browser tabs; or press `Ctrl+C` |

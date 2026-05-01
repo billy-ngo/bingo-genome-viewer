@@ -479,8 +479,10 @@ def main():
         elif status == 'failed':
             print(f"  Update to {ver} failed.")
             print(f"  Check ~/.bingoviewer/update.log for details.")
-            print(f"  Or update manually:")
-            print(f"    pip install --upgrade bingoviewer")
+            print(f"  Or update manually (this binds to the same Python the")
+            print(f"  bingo command runs under, so it works inside venvs and")
+            print(f"  on systems where only python3/pip3 is on PATH):")
+            print(f"    {sys.executable} -m pip install --upgrade BiNgoViewer")
         elif status == 'skip':
             print(f"  Could not reach PyPI. Check your internet connection.")
         else:

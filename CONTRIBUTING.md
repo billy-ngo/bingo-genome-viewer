@@ -11,9 +11,12 @@ Thank you for your interest in contributing to BiNgo Genome Viewer.
 ### Backend Development
 ```bash
 cd app/backend
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 python -m uvicorn main:app --reload --port 8000
 ```
+
+> Use `python -m pip` (or `python3 -m pip`) rather than bare `pip` so the
+> install lands in the Python you're running, including any active venv.
 
 ### Frontend Development
 ```bash
@@ -31,7 +34,7 @@ npx vite build --outDir ../../bingoviewer/frontend_dist --emptyOutDir
 
 ### Running the Packaged Version
 ```bash
-pip install -e .
+python -m pip install -e .
 bingo
 ```
 
