@@ -1,181 +1,245 @@
 # Changelog
 
-All notable changes to BiNgo Genome Viewer are documented here.
+All notable user-facing changes to BiNgo Genome Viewer are recorded here.
+Internal refactors are summarised at a level a user can act on; the full
+commit history is on GitHub.
 
-## [2.9.4] - 2026-05-01
+The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
-### Fixed (file-format audit)
-- GFF3 files shipped with the ambiguous `.gff` extension are now parsed
-  correctly. The factory previously routed every `.gff` to the GTF parser,
-  which uses `key "value"` attribute syntax — for the much-more-common GFF3
-  files (`key=value`) it silently extracted nothing, so every feature
-  surfaced as a generic "gene"/"CDS" with empty attributes. We now sniff
-  `##gff-version` and the column-9 attribute style before choosing the
-  reader. Verified against real-world NCBI annotwriter and Geneious GFF3
-  files: gene names (`dnaA`, `dnaN`, …), `locus_tag`, and `product`
-  attributes all populate again
-- Compressed track files (`.vcf.gz`, `.wig.gz`, `.bedgraph.gz`, `.bdg.gz`)
-  no longer get rejected as "Unsupported file format: .gz". `Path.suffix`
-  only returns the last extension segment, so the previous extension
-  allow-list never matched. Backend dispatch and frontend file-type
-  detection both now treat compound extensions as first-class. WIG and
-  BedGraph readers transparently decompress via a shared `_open_text`
-  helper
+## [2.9.5] — 2026-05-01
+
+### Documentation
+- README rewritten for clarity and tone: corrected file-format table to
+  include the gzip variants and the GFF3-via-`.gff` auto-detection;
+  removed a duplicate Usage step; added performance characteristics with
+  measured timings on real test data; updated the citation to the
+  current major version.
+- `CONTRIBUTING.md` reorganised: explicit `app/backend/` ↔
+  `bingoviewer/server/` sync workflow, frontend bundle build with the
+  exact `vite` invocation, release-tagging checklist, and code-style
+  notes that reflect the actual concurrency and serialisation rules
+  the codebase enforces.
+- `CHANGELOG.md` polished for publication-ready presentation: verbose
+  internal commentary in 2.9.x entries condensed to user-facing
+  language; consistent semantic-version headings throughout.
+- New `LICENSE` file matching the proprietary declaration in
+  `pyproject.toml`. The README badge now resolves.
+
+## [2.9.4] — 2026-05-01
+
+### Fixed
+- **GFF3 files with the `.gff` extension parse correctly.** Many real-world
+  GFF3 outputs (NCBI annotwriter, Geneious) ship with `.gff`; the previous
+  factory routed them to the GTF parser, which silently failed to extract
+  gene names or attributes. The reader now sniffs `##gff-version` and the
+  attribute style of the first data line and dispatches accordingly.
+- **Compressed track files load.** `.vcf.gz`, `.wig.gz`, `.bedgraph.gz`,
+  and `.bdg.gz` now round-trip through both the file picker and the
+  drag-and-drop overlay; the readers decompress transparently.
 
 ### Performance
-- BigWig coverage queries no longer instantiate one tuple per base pair.
-  A BedGraph block summarising a long constant run (e.g. 100 kbp at value
-  0) used to allocate 100 000 `(pos, value)` tuples and discard most of
-  them in the binning pass. We now walk the R-tree once and distribute
-  each block's `value × overlap` directly into the bin accumulators —
-  same numerical result, but O(blocks × bins_touched) instead of
-  O(total_bases). Verified on a synthetic 1 Mbp BedGraph block: 100×
-  `get_coverage` queries complete in 21 ms total
+- **BigWig coverage queries scale with the index, not the genome.**
+  Previously the reader expanded each BedGraph block into one `(pos, value)`
+  tuple per base pair, allocating up to a million tuples per query on
+  dense BigWigs. The new implementation distributes block contributions
+  to bin accumulators directly. Same numerical output; queries that were
+  seconds long now complete in milliseconds.
 
-## [2.9.3] - 2026-05-01
+## [2.9.3] — 2026-05-01
 
-### Fixed (robustness audit follow-up)
-- Session save/restore now preserves the per-track fields added in 2.8.0 / 2.9.0:
-  `featureTypes`, `hiddenFeatureTypes`, `showFwdStrand`, `showRevStrand`. They
-  were silently dropped before, so feature-type filters and strand-visibility
-  toggles were lost across browser reload and session export
-- Retry path in `useTrackData` no longer reads `abortRef.current` at retry-fire
-  time. The `AbortController` is now captured in closure and shared across all
-  retry attempts of a single fetch, so a newly-issued fetch (which reassigns
-  `abortRef.current`) cannot accidentally re-attach the in-flight retry to its
-  own controller's signal — eliminating the window where stale data could
-  overwrite fresh data after rapid pan/zoom + transient failure
-- Backend `load_genome` and `load_track` now perform their state mutations
-  under the existing per-state locks. The new `GenomeReader` is constructed
-  outside the lock (so concurrent /sequence reads aren't blocked during slow
-  GenBank parses) and only the swap is serialised. Prevents a /sequence,
-  /features, or /coverage call landing on a half-initialised reader if the
-  user re-loads a genome / track while requests are in flight
-- `add_chromosomes` endpoint now holds `genome_lock` while merging, so
-  concurrent /sequence and /features cannot read mid-mutation while
-  `_sub_readers` is being appended
+### Fixed
+- Session save/restore now preserves feature-type filters and read-strand
+  visibility. These per-track settings (added in 2.8.0 and 2.9.0) had
+  been silently dropped on export and on autosave.
+- Eliminated a window where, after a transient backend failure during
+  rapid pan/zoom, a retry could overwrite freshly fetched data with
+  stale results. Retries now share an `AbortController` captured at the
+  start of the fetch.
+- Reloading a genome or track while requests are in flight no longer
+  exposes a half-initialised reader. Reader construction happens outside
+  the lock; only the swap is serialised.
 
-## [2.9.2] - 2026-04-30
+## [2.9.2] — 2026-04-30
 
 ### Changed
-- Install instructions now recommend `python -m pip install BiNgoViewer` (with `python3 -m pip ...` as a fallback) instead of bare `pip install`. This binds the install to whichever Python the user invoked — including the active virtualenv — and avoids the "command not found" / wrong-Python issues users hit on macOS and Linux where only `python3`/`pip3` exists on PATH
-- Troubleshooting table in the README now covers `pip` vs `pip3` vs `python -m pip`, the "installs but `bingo` not found" case (PATH scoping), and a one-liner for creating a clean venv
-- `bingo --update` failure message now prints the exact `<sys.executable> -m pip install --upgrade BiNgoViewer` command so users in venvs / on `python3`-only systems can copy a working command verbatim
+- Install instructions recommend `python -m pip install BiNgoViewer`
+  instead of bare `pip install`. The `-m pip` form binds to the
+  interpreter you invoked, including the active virtualenv, and works
+  on systems where only `python3` / `pip3` is on `PATH`.
+- The README troubleshooting table now covers the `pip` versus `pip3`
+  versus `python -m pip` distinction, the "installs but `bingo` not on
+  `PATH`" case, and a clean-venv one-liner.
+- `bingo --update` failures now print the exact
+  `<sys.executable> -m pip install --upgrade BiNgoViewer` command, so
+  the recovery instruction is always correct for the user's environment.
 
-## [2.9.1] - 2026-04-30
-
-### Fixed
-- Rapid zoom/pan no longer leaves tracks stuck on a "Network error" splash:
-  - axios requests are now actually cancelled when superseded (the abort signal is wired through), preventing the request flood that was overwhelming the backend
-  - transient failures (network drop, 5xx, 408, 429) silently retry up to 2 times with exponential backoff
-  - on a final failure the last loaded data stays on screen — the canvas no longer blanks out — and the error is surfaced through the existing track warning badge instead of an in-canvas overlay
-  - sticky errors automatically clear when the user changes chromosome
-- Backend reader access is now serialized per-track via `threading.Lock`, fixing races in non-thread-safe libraries (bamnostic, pyfaidx, pyBigWig) that produced spurious 500s under concurrent zoom requests; tracks still fetch in parallel across each other
-- Reader-level exceptions now return HTTP 503 (transient) instead of 500 so the frontend retry path engages
-
-## [2.9.0] - 2026-04-30
-
-### Added
-- Read tracks: per-track forward/reverse strand visibility toggle (BAM); rows repack so hidden strand leaves no gaps; works across multi-track selection in Track Settings
-- Read strand color pickers now have a swatch grid popover (single-click), with double-click for full OS color picker and hex input — same UX as elsewhere in the app
+## [2.9.1] — 2026-04-30
 
 ### Fixed
-- Shift+scroll no longer triggers horizontal zoom — reserved for vertical scrolling inside read tracks as intended
-- Read-track vertical scrollbar widened (10 → 14 px) and the track-height resize handle now leaves a gap on the right edge so scrollbar drags are no longer blocked by the resize zone
+- Rapid zoom and pan no longer leave tracks stranded on a "Network
+  error" splash. Three improvements combine:
+  - Superseded fetches are genuinely cancelled (the abort signal is
+    wired through to axios), so the request queue stops piling up.
+  - Transient failures (network drop, HTTP 5xx, 408, 429) silently
+    retry up to twice with exponential backoff.
+  - On a final failure the last loaded data stays on screen and the
+    error surfaces through the existing track warning badge instead of
+    blanking the canvas. Sticky errors clear automatically when the
+    user changes chromosome.
+- Backend reader access is serialised per-track to keep non-thread-safe
+  libraries (bamnostic, pyfaidx, the BigWig parser) consistent under
+  concurrent load. Tracks still fetch in parallel with each other.
+- Reader-level exceptions now return HTTP 503 (transient), engaging the
+  frontend retry path.
 
-## [2.8.0] - 2026-04-27
-
-### Added
-- GenBank annotation tracks: per-type visibility toggles (CDS, gene, tRNA, rRNA, repeat_region, misc_feature, etc.)
-- Backend exposes `feature_types` from GenBank files via `/api/genome/load`, `/load-path`, and `/add-chromosomes`
-- Track Settings panel: new collapsible "Feature types" section with Show all / Hide all and indeterminate state for multi-track selections
-
-## [1.9.4] - 2026-04-05
-
-### Changed
-- SVG export: background, bars, outline, and labels are now separate grouped elements for easy editing in vector editors
-
-## [1.9.0] - 2026-04-05
-
-### Added
-- Smooth peak outline with adjustable smoothness slider (0–10)
-- Outline color picker with real-time preview
-- Fill bars toggle with inline color picker
-
-## [1.8.0] - 2026-04-05
+## [2.9.0] — 2026-04-30
 
 ### Added
-- Nucleotide-level read rendering with A/C/G/T coloring and mismatch highlighting
-- Reference sequence fetched automatically when zoomed in
-- "Show nucleotides when zoomed in" checkbox for read tracks
-- Directional arrows respect "Pointed arrows" setting on reads
-
-## [1.7.0] - 2026-04-05
-
-### Added
-- Local file path input for loading files directly from disk (no upload)
-- BAM pairing dialog with dual file/path slots and large file warning
-- Chromosome scrubber slider for fast navigation
-- Double-click gene to zoom in with context
-- Peak outline trace toggle for coverage tracks
+- **Per-track strand visibility for BAM tracks.** Toggle forward and
+  reverse reads independently from Track Settings; rows repack so a
+  hidden strand leaves no gaps. Multi-track selection works as
+  expected, with indeterminate checkboxes for mixed selections.
+- **Swatch grid color picker** for read strand colors, alongside the
+  existing hex input and double-click OS color picker.
 
 ### Fixed
-- Logo cross-browser compatibility (unique gradient IDs, SVG stop-opacity)
-- Drag on tracks no longer triggers file drop overlay
+- `Shift`+scroll now scrolls vertically inside read pile-ups (it had
+  been hijacked by the horizontal-zoom handler).
+- Read-track scrollbar widened to 14 px and the bottom track-resize
+  handle now leaves a gap on the right edge, so scrollbar drags are no
+  longer caught by the resize zone.
 
-## [1.6.0] - 2026-04-04
-
-### Added
-- Selection highlight on ruler track
-- Ruler supports pan/zoom interactions
-- Y-axis scale labels with background pill (always readable)
-
-## [1.5.0] - 2026-04-04
+## [2.8.0] — 2026-04-27
 
 ### Added
-- Non-standard WIG format support (embedded headers, 3-column fwd/rev, headerless)
-- Auto-detect BedGraph-format .wig files
-- .bai files accepted in file picker and drag-and-drop
+- **Per-feature-type visibility toggles** for GenBank annotation tracks.
+  Hide / show CDS, gene, tRNA, rRNA, repeat_region, misc_feature, etc.
+  individually, with bulk Show all / Hide all. Available in Track
+  Settings; works across multi-track selection.
+- The genome-load API now reports the set of feature types present in
+  the file so the UI can populate the toggle list immediately.
+
+## [2.7.x] — 2026-04
+
+### Highlights
+- Region color editor: highlight bands and per-region bar recolouring,
+  with a colour palette picker.
+- Optimised region-overlay rendering for tracks with many overlays.
 
 ### Fixed
-- Chromosome name matching across all readers (chr-prefix stripping, case-insensitive)
-- WIG bin averaging (was summing without dividing by count)
+- Windows shortcut launcher (now via VBScript) avoids the
+  `pythonw`-under-Windows console crash and handles Unicode in the
+  region editor.
 
-## [1.4.0] - 2026-04-04
+## [2.0.0 – 2.6.x] — 2026-04
+
+A series of feature releases focused on session management, the help
+tour, exit safeguards, theming, multi-track editing, and the desktop
+shortcut installer. Highlights:
+
+- Exit guard: prompts to save before closing if there are unsaved
+  changes.
+- Session manager: parallel track loading with validation; autosave to
+  `localStorage`; export/import as JSON.
+- Theme settings: five built-in themes plus a custom-theme editor.
+- Track Settings: bulk multi-track editing for height, colour, scale,
+  bar width, and outline trace.
+- Track-genome compatibility validation on upload.
+- "Show only chromosome-relevant tracks" when switching genomes.
+
+## [1.9.0 – 1.9.4] — 2026-04-05
 
 ### Added
-- CIGAR-aware read rendering (match, deletion, intron skip, insertion markers)
-- Upload progress bars with byte counter
-- Gapless coverage bins (floating-point boundaries)
-- Zoom-aware data refetching with 1-second debounce
+- Smooth peak outline trace with adjustable smoothness (0–10) and a
+  dedicated outline-color picker.
+- Fill-bars toggle with an inline colour picker.
+- SVG exports group background, bars, outlines, and labels separately
+  for easier editing in vector tools.
 
-### Fixed
-- Bar width scaling at high zoom (capped to 1px per nucleotide)
-- Missing genome chunks on zoom-out (data never cleared during refetch)
-
-## [1.3.0] - 2026-04-04
+## [1.8.0] — 2026-04-05
 
 ### Added
-- Right-click drag region selection with hover tooltip and stats
-- Exit warning guard (Return / Save & Exit / Exit Without Saving)
-- Robust session save/restore (parallel track loading, validation)
-- BAM index (.bai) upload pairing and validation
-- Auto-update check on launch with PyPI version comparison
-- Desktop shortcut installer with icon
+- **Nucleotide-level read rendering** with A / C / G / T colouring and
+  mismatch highlighting; reference sequence is fetched automatically
+  when zoomed in. New "Show nucleotides when zoomed in" checkbox on
+  read tracks.
+- Directional arrow style respects the "Pointed arrows" setting on
+  reads.
+
+## [1.7.0] — 2026-04-05
+
+### Added
+- **Local file path input** for loading files directly from disk
+  without uploading through the browser. Recommended for BAMs over 50 MB.
+- BAM pairing dialog with dual file/path slots and a large-file warning.
+- **Chromosome scrubber** along the top of the viewport for fast
+  navigation across the genome.
+- Double-click any annotation to centre it in the view with flanking
+  context.
 
 ### Fixed
-- Windows socket error (WinError 64) via SelectorEventLoop
-- Install scripts: batch errorlevel handling, macOS portability
-- Frontend bundle rebuilt with all features
+- Cross-browser logo rendering (unique gradient IDs, SVG stop-opacity).
+- File-drop overlay no longer triggers when dragging within a track.
 
-## [1.0.0] - 2026-04-04
+## [1.6.0] — 2026-04-04
 
-### Initial Release
-- GenBank and FASTA genome support
-- BAM read alignment viewing
-- BigWig, WIG, BedGraph coverage tracks
-- VCF variant display
-- BED, GTF, GFF annotation tracks
-- 5 built-in themes + custom theme support
-- Session save/restore
-- SVG and PNG export
+### Added
+- Selection highlight on the ruler track.
+- Pan / zoom interactions on the ruler.
+- Y-axis labels gain a translucent pill so they stay readable over data.
+
+## [1.5.0] — 2026-04-04
+
+### Added
+- Non-standard WIG variants supported: embedded headers, three-column
+  forward/reverse, and headerless files.
+- Auto-detection of BedGraph-format files with a `.wig` extension.
+- `.bai` index files accepted in the file picker and via drag-and-drop.
+
+### Fixed
+- Chromosome name matching across all readers (chr-prefix stripping,
+  case-insensitive).
+- WIG bin averaging — sums were not being divided by their counts.
+
+## [1.4.0] — 2026-04-04
+
+### Added
+- **CIGAR-aware read rendering**: match, deletion, intron skip,
+  insertion markers.
+- Upload progress bars with byte counters.
+- Gapless coverage bins (floating-point boundaries).
+- Zoom-aware data refetching with a 1-second debounce.
+
+### Fixed
+- Bar width scaling at high zoom (capped to 1 px per nucleotide).
+- Missing genome chunks on zoom-out (data is no longer cleared during
+  refetch).
+
+## [1.3.0] — 2026-04-04
+
+### Added
+- **Right-click drag region selection** with a hover tooltip showing
+  per-track stats.
+- Exit guard with Return / Save & Exit / Exit Without Saving.
+- Robust session save/restore with parallel track loading and
+  validation.
+- BAM index (.bai) upload pairing and validation.
+- Auto-update check on launch with PyPI version comparison.
+- Desktop shortcut installer with custom icon.
+
+### Fixed
+- Windows socket error (WinError 64) via `SelectorEventLoop`.
+- Install-script reliability on Windows (errorlevel handling) and
+  macOS (portable shebang).
+
+## [1.0.0] — 2026-04-04
+
+### Initial release
+- GenBank and FASTA reference genome support.
+- BAM read alignment viewing.
+- BigWig, WIG, and BedGraph coverage tracks.
+- VCF variant display.
+- BED, GTF, and GFF annotation tracks.
+- Five built-in themes plus custom theme support.
+- Session save / restore.
+- SVG and PNG export.

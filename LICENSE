@@ -1,0 +1,57 @@
+BiNgo Genome Viewer — Proprietary License
+=========================================
+
+Copyright (c) 2026 Billy M. Ngo. All rights reserved.
+
+This software, including its source code, compiled artefacts, bundled
+frontend assets, and accompanying documentation (collectively, the
+"Software"), is proprietary work of the copyright holder.
+
+1. Permitted use
+----------------
+The Software is made available for personal, academic, and non-commercial
+research use, including:
+
+  - Installing and running the published distribution (e.g. via
+    `pip install BiNgoViewer`) for analysis of biological data.
+  - Reading the source code for educational reference.
+  - Citing the Software in academic publications, with attribution as
+    described in the project README.
+
+2. Restrictions
+---------------
+Unless you have obtained explicit, written permission from the copyright
+holder, you may NOT:
+
+  - Redistribute the Software, in source or binary form, modified or
+    unmodified, in whole or in part.
+  - Incorporate the Software, or any substantial portion thereof, into
+    a derivative work or a commercial product.
+  - Use the Software, or any output thereof, in commercial services,
+    pipelines, or revenue-generating activities.
+  - Remove or alter copyright, attribution, or licence notices.
+
+3. Contributions
+----------------
+Pull requests and bug reports are welcome. By submitting a contribution
+you grant the copyright holder a perpetual, worldwide, non-exclusive,
+royalty-free licence to use, reproduce, modify, publish, distribute,
+and sublicense your contribution as part of the Software.
+
+4. No warranty
+--------------
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES,
+OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+5. Licensing inquiries
+----------------------
+For commercial use, redistribution, or any use beyond the permissions
+described above, contact the copyright holder for a separate licensing
+agreement.
+
+  Billy M. Ngo
+  billy.ngo0108@gmail.com
+  https://github.com/billy-ngo/bingo-genome-viewer

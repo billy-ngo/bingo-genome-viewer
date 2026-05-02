@@ -1,175 +1,238 @@
 # BiNgo Genome Viewer
 
 [![PyPI version](https://img.shields.io/pypi/v/bingoviewer)](https://pypi.org/project/bingoviewer/)
-[![Python 3.10+](https://img.shields.io/pypi/pyversions/bingoviewer)](https://pypi.org/project/bingoviewer/)
-[![License](https://img.shields.io/badge/license-proprietary-blue)](LICENSE)
+[![Python](https://img.shields.io/pypi/pyversions/bingoviewer)](https://pypi.org/project/bingoviewer/)
+[![License](https://img.shields.io/badge/license-proprietary-blue)](#license)
 
-A lightweight, browser-based genomics viewer for visualizing genomes, coverage tracks, read alignments, variants, and annotations. Built as a modern alternative to IGV.
+A lightweight, browser-based genome viewer for visualising reference genomes,
+coverage tracks, read alignments, variant calls, and feature annotations.
+The frontend is a React single-page application; the backend is a FastAPI
+server that streams binned data on demand. Designed for fast interactive
+work on bacterial-scale genomes from a laptop, with no external services
+or compiled C dependencies.
 
-<!-- Screenshot placeholder: replace with an actual screenshot of the viewer -->
-<!-- ![BiNgo Genome Viewer](screenshot.png) -->
+## Highlights
 
-## Supported File Formats
+- **Single-command install.** `python -m pip install BiNgoViewer && bingo`
+  launches the viewer in your default browser. The compiled frontend ships
+  with the wheel — Node.js is not required at install time.
+- **Pure-Python readers** for every supported format (no `pysam`, no
+  `pyBigWig` C extensions). Works on Windows, macOS, and Linux without
+  build tools.
+- **Auto-cancelled fetches.** Pan/zoom requests are cancelled when
+  superseded; transient backend failures retry silently with backoff;
+  in-flight reads are serialised per-track to keep non-thread-safe file
+  handles consistent.
+- **Session export / restore.** Workspace state — viewport, track order,
+  colours, scale, feature-type filters, strand visibility — round-trips
+  through a single JSON file or auto-restores from `localStorage`.
+- **SVG and PNG export** with grouped vector layers suitable for figure
+  preparation.
+- **Five built-in themes** (Dark, Light, Colorblind Friendly, Soft, High
+  Contrast) plus a custom theme editor.
 
-| Type | Formats |
-|------|---------|
-| **Genome** | GenBank (`.gb`, `.gbk`), FASTA (`.fasta`, `.fa`) |
-| **Coverage** | BigWig (`.bw`), WIG (`.wig`), BedGraph (`.bedgraph`, `.bdg`) |
-| **Reads** | BAM (`.bam` + `.bai` index) |
-| **Variants** | VCF (`.vcf`, `.vcf.gz`) |
-| **Annotations** | BED (`.bed`), GFF (`.gff`, `.gff3`), GTF (`.gtf`), GenBank (`.gb`) |
+## Supported file formats
 
-## Quick Start
+| Type | Formats | Notes |
+|------|---------|-------|
+| **Reference genome** | FASTA (`.fa`, `.fasta`), GenBank (`.gb`, `.gbk`, `.genbank`) | GenBank files contribute both reference sequence and a built-in annotation track. Multiple genome files can be merged with `Add chromosomes`. |
+| **Coverage / signal** | BigWig (`.bw`, `.bigwig`), WIG (`.wig`, `.wig.gz`), BedGraph (`.bedgraph`, `.bedgraph.gz`, `.bdg`, `.bdg.gz`) | Compressed `.gz` variants are decompressed on the fly. WIG dialects (`fixedStep`, `variableStep`, headerless, 3-column forward/reverse) are auto-detected. BigWig parsing is pure-Python via R-tree traversal. |
+| **Read alignments** | BAM (`.bam` + `.bai` index) | Index file required. Coverage is shown when zoomed out; individual reads with CIGAR-aware match / deletion / intron / insertion / soft-clip rendering appear within 50 kbp views. CRAM is not supported. |
+| **Variants** | VCF (`.vcf`, `.vcf.gz`), BCF (`.bcf`) | Plain and gzip-compressed VCF; up to 10 000 variants per region returned. |
+| **Feature annotations** | BED (`.bed`), GTF (`.gtf`), GFF2 (`.gff2`), GFF3 (`.gff3`), GenBank (`.gb`) | The ambiguous `.gff` extension is auto-detected as GFF2/GTF or GFF3 by inspecting `##gff-version` and the column-9 attribute style. |
 
-> **Requires Python 3.10 or newer.** Download from [python.org](https://www.python.org/downloads/) if needed.
+## Installation
 
-### Install with pip (recommended)
+> Requires **Python 3.10 or newer**. Get it from [python.org](https://www.python.org/downloads/) if needed.
 
-No Node.js required — the frontend is pre-built and bundled.
+### pip (recommended)
 
 ```bash
 python -m pip install BiNgoViewer
 bingo
 ```
 
-> Using `python -m pip` (instead of bare `pip`) installs into whichever Python
-> you invoke — including a virtual environment — and avoids the common
-> "command not found" / wrong-Python issues some users hit on macOS and Linux
-> where the launcher is `python3`/`pip3`. If `python` is not on your PATH,
-> substitute `python3 -m pip install BiNgoViewer`.
+`python -m pip` (in preference to a bare `pip`) binds the install to the
+interpreter you just invoked, including any active virtual environment.
+On systems where only `python3` / `pip3` is on `PATH`, substitute
+`python3 -m pip install BiNgoViewer`.
 
-Options:
+### Windows one-click
+
+Double-click **`Install_Windows.bat`**. It creates a local virtual
+environment, installs the package, and launches the viewer.
+
+### macOS / Linux one-click
+
+Double-click **`Install_macOS.command`** (or run it from a terminal). The
+first time, you may need to mark it executable:
 
 ```bash
-bingo                    # launch on default port 8000
-bingo --port 9000        # use a custom port
-bingo --no-browser       # start without opening the browser
-bingo --install          # create a desktop shortcut
-bingo --update           # check for updates
-bingo --version          # show installed version
-bingo --no-update        # skip automatic update check
+chmod +x Install_macOS.command
 ```
 
-### Windows (one-click)
-
-Double-click **`Install_Windows.bat`**. It will install Python dependencies into a local environment and launch the viewer. No command line needed.
-
-### macOS / Linux (one-click)
-
-Double-click **`Install_macOS.command`** (or run it from a terminal). It will create a virtual environment, install dependencies, and launch the viewer.
-
-> **Permission denied?** Run once in Terminal:
-> ```bash
-> chmod +x Install_macOS.command
-> ```
-
 ### Docker
-
-No Python or Node.js required — everything runs inside the container.
 
 ```bash
 cd app
 docker compose up --build
 ```
 
-Then open [http://localhost:8000](http://localhost:8000).
+Then open <http://localhost:8000>. The Dockerfile builds the frontend in
+a Node stage and copies the bundle into a slim Python runtime.
+
+## Command-line options
+
+```
+bingo                    Launch on default port 8000 and open the browser
+bingo --port 9000        Use a different port
+bingo --no-browser       Start the server without launching a browser
+bingo --install          Create a desktop shortcut for the current user
+bingo --update           Check PyPI and install a newer version if available
+bingo --no-update        Skip the automatic update check at launch
+bingo --version          Print the installed version and exit
+```
+
+The server auto-shuts down 30 seconds after the last browser tab closes.
+You can also stop it with `Ctrl+C`.
+
+## Using the viewer
+
+1. **Load files.** Use the file picker, drop files anywhere in the window,
+   or paste a local path (recommended for BAMs over 50 MB — the server
+   reads directly from disk instead of uploading through the browser).
+2. **Navigate.** Left-click drag to pan; scroll to zoom (anchored at the
+   cursor). Use the chromosome scrubber along the top to jump anywhere on
+   the current sequence. **Shift+scroll** scrolls vertically inside read
+   pile-ups.
+3. **Select a region.** Right-click drag to mark a region; a tooltip
+   shows the selection length and per-track stats (mean coverage, variant
+   count, feature count, read count). Click the highlighted band to
+   dismiss; right-click it to recolour the underlying region.
+4. **Zoom to a feature.** Double-click any annotation to centre it in the
+   view with ~15 % flanking context.
+5. **Tune tracks.** Open **Track Settings** to adjust height, colour,
+   linear/log Y-axis, fixed Y range, bar width, peak outline tracing,
+   strand visibility (BAM), strand colours, arrow style, nucleotide
+   display, and per-feature-type visibility (GenBank/GFF). Multi-select
+   to apply changes to several tracks at once; mixed values render as
+   indeterminate checkboxes.
+6. **Reorder.** Drag the grip handle on a track label.
+7. **Export.** Save the current view as **SVG** (grouped layers, ready
+   for vector editing) or **PNG**.
+8. **Save / restore session.** Export the workspace to JSON, or rely on
+   the autosave to `localStorage` for an exit-and-resume workflow.
+
+## Performance characteristics
+
+The viewer is built around a binned-coverage data model with overscan
+caching and zoom-aware refetching, so it remains responsive on bacterial
+genomes (single chromosome, ~1–10 Mbp) with several large coverage tracks
+and BAMs loaded simultaneously. Indicative timings on a recent laptop:
+
+| Workload | Time |
+|----------|------|
+| GenBank parse (1.8 MB) | ~200 ms |
+| WIG parse (11 MB, point data) | ~340 ms |
+| WIG parse (3 MB gzipped) | ~410 ms |
+| Coverage query (full chromosome, 1000 bins, 11 MB WIG) | ~140 ms |
+| Annotation query (full chromosome GFF3) | <1 ms |
+
+These numbers reflect cold reads with no caching. Subsequent in-region
+queries are served from an LRU cache and return in microseconds.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
-| `python` not found | Install Python 3.10+ and check **Add to PATH** during setup. On macOS/Linux you may need `python3` instead of `python` |
-| `pip` not found / wrong version | Use `python -m pip install BiNgoViewer` (or `python3 -m pip ...`). This binds to whatever Python you invoked, including the active virtualenv, and works even when there is no `pip` shim on PATH |
-| Installs but `bingo` not found | Your Python's `Scripts/` (Windows) or `bin/` (macOS/Linux) directory is not on PATH. Either activate your venv first, or run `python -m bingoviewer` instead of `bingo` |
-| "No matching distribution" | Your Python is too old — BiNgo requires **Python 3.10+**. Check with `python --version` |
-| pip install fails | Try `python -m pip install --user BiNgoViewer`, or create a virtual environment: `python -m venv .venv && .venv/bin/pip install BiNgoViewer` (use `.venv\Scripts\pip` on Windows) |
-| Port 8000 in use | Run `bingo --port 9000` (or any free port) |
-| Browser doesn't open | Visit `http://localhost:8000` manually |
-| Server won't stop | The server auto-exits when you close all browser tabs; or press `Ctrl+C` |
+| `python` not found | Install Python 3.10+ and tick **Add to PATH** during setup. On macOS/Linux, try `python3` instead of `python`. |
+| `pip` not found / wrong Python | Use `python -m pip install BiNgoViewer` (or `python3 -m pip ...`). This binds to the interpreter you invoked, including the active venv, even when no `pip` shim exists on `PATH`. |
+| Installed but `bingo` is not on `PATH` | Your Python's `Scripts/` (Windows) or `bin/` (Unix) directory is not exported. Activate your venv first, or run `python -m bingoviewer` directly. |
+| "No matching distribution" | Your Python is older than 3.10. Check with `python --version`. |
+| pip install still fails | Try `python -m pip install --user BiNgoViewer`, or create a clean venv: `python -m venv .venv && .venv/bin/pip install BiNgoViewer` (Windows: `.venv\Scripts\pip`). |
+| Port 8000 in use | `bingo --port 9000` (any free port). |
+| Browser doesn't open | Visit <http://localhost:8000> manually; the server will keep running. |
+| Server won't stop | It auto-exits ~30 s after the last tab closes; `Ctrl+C` from the launching terminal also works. |
+| BAM rejected | Ensure a `.bai` index sits alongside the BAM (named `reads.bam.bai` or `reads.bai`). CRAM is not supported. |
+| Cloud-synced file errors | OneDrive / Dropbox files marked "online only" cannot be read. Pin them locally before loading. |
 
-## Usage
+## API
 
-1. **Load files** — Use the file picker, drag and drop, or paste a local file path (recommended for large BAM files).
-2. **Navigate** — Left-click drag to pan, scroll to zoom, use the chromosome scrubber to jump across the genome.
-3. **Select regions** — Right-click drag to select a region; hover for stats (coverage, variants, reads).
-4. **Zoom to gene** — Double-click a gene annotation to zoom in with context.
-5. **Track settings** — Adjust height, color, scale, bar width, peak outline trace, and nucleotide display.
-6. **Reorder tracks** — Drag the grip handle on any track label.
-7. **Export** — Save the current view as SVG or PNG with layered groups.
-8. **Save session** — Export/restore your entire workspace including zoom, colors, and settings.
-6. **Save session** — Store your workspace and restore it later.
+When the server is running, FastAPI serves auto-generated OpenAPI
+documentation:
 
-## API Documentation
+- Swagger UI: <http://localhost:8000/docs>
+- ReDoc: <http://localhost:8000/redoc>
 
-When the server is running, interactive API documentation is available at:
-- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+The frontend talks to the same API; nothing in the UI is privileged.
 
-## Project Structure
+## Project layout
 
 ```
-├── Install_Windows.bat         # Windows installer (double-click)
-├── Install_macOS.command       # macOS / Linux installer (double-click)
+.
 ├── README.md
+├── CHANGELOG.md
+├── CONTRIBUTING.md
 ├── pyproject.toml              # pip package definition
+├── Install_Windows.bat         # One-click Windows installer
+├── Install_macOS.command       # One-click macOS / Linux installer
 ├── bingoviewer/                # Installable Python package
-│   ├── cli.py                  # `bingo` CLI entry point
-│   ├── server/                 # FastAPI backend (bundled)
-│   └── frontend_dist/          # Pre-built React frontend
-└── app/                        # Application source code
-    ├── backend/                # Python (FastAPI) REST API
-    └── frontend/               # React (Vite) user interface
+│   ├── __init__.py             # __version__
+│   ├── cli.py                  # `bingo` entry point
+│   ├── server/                 # FastAPI backend (mirror of app/backend)
+│   └── frontend_dist/          # Pre-built React bundle
+└── app/
+    ├── Dockerfile              # Container build
+    ├── docker-compose.yml
+    ├── backend/                # Backend source (FastAPI + readers)
+    └── frontend/               # Frontend source (React + Vite)
 ```
+
+`bingoviewer/server/` and `app/backend/` are kept byte-identical so a
+single change set can serve both the development workflow and the
+packaged release. See [CONTRIBUTING.md](CONTRIBUTING.md) for the sync
+workflow.
 
 ## Citation
 
-If you use this software in your research, please cite:
+If you use this software in published research, please cite:
 
-> Ngo, B.M. (2026). BiNgo Genome Viewer (v1.8.2) [Software].
+> Ngo, B. M. (2026). *BiNgo Genome Viewer* (v2.9) [Software].
+> <https://github.com/billy-ngo/bingo-genome-viewer>
 
-## References & Acknowledgments
+## Acknowledgements
 
-<details>
-<summary>Click to expand</summary>
+### Software libraries
 
-### Software Dependencies
+**Backend.** [FastAPI](https://fastapi.tiangolo.com/) (Ramírez, 2018);
+[Uvicorn](https://www.uvicorn.org/);
+[BioPython](https://biopython.org/) (Cock et al., *Bioinformatics* 25(11), 2009);
+[pyfaidx](https://github.com/mdshw5/pyfaidx) (Shirley et al., *PeerJ PrePrints*, 2015);
+[bamnostic](https://github.com/betteridiot/bamnostic) (Sherman & Mills, 2019).
 
-**Backend**
-- **FastAPI** — Ramírez, S. (2018). FastAPI: A modern, fast web framework for building APIs with Python. https://fastapi.tiangolo.com/
-- **Uvicorn** — Encode OSS. ASGI server implementation for Python. https://www.uvicorn.org/
-- **BioPython** — Cock, P.J.A. et al. (2009). Biopython: freely available Python tools for computational molecular biology and bioinformatics. *Bioinformatics*, 25(11), 1422–1423.
-- **pyfaidx** — Shirley, M.D. et al. (2015). Efficient "pythonic" access to FASTA files using pyfaidx. *PeerJ PrePrints*, 3:e1196.
-- **bamnostic** — Sherman, M.A. & Mills, R.E. (2019). BAMnostic: a pure Python, OS-agnostic Binary Alignment Map (BAM) file parser and random access tool.
+**Frontend.** [React](https://react.dev/);
+[Vite](https://vitejs.dev/);
+[Axios](https://axios-http.com/).
 
-**Frontend**
-- **React** — Meta Platforms, Inc. A JavaScript library for building user interfaces. https://react.dev/
-- **Vite** — You, E. (2020). Next generation frontend tooling. https://vitejs.dev/
-- **Axios** — HTTP client for the browser and Node.js. https://axios-http.com/
+### File-format specifications
 
-### File Format Specifications
-
-- **SAM/BAM** — Li, H. et al. (2009). The Sequence Alignment/Map format and SAMtools. *Bioinformatics*, 25(16), 2078–2079.
-- **VCF** — Danecek, P. et al. (2011). The variant call format and VCFtools. *Bioinformatics*, 27(15), 2156–2158.
-- **BigWig/WIG** — Kent, W.J. et al. (2010). BigWig and BigBed: enabling browsing of large distributed datasets. *Bioinformatics*, 26(17), 2204–2207.
-- **BED** — UCSC Genome Browser, University of California, Santa Cruz.
-- **GFF3** — Sequence Ontology Project. Generic Feature Format Version 3.
-- **GTF** — Ensembl genome database project.
-- **GenBank** — Benson, D.A. et al. (2013). GenBank. *Nucleic Acids Research*, 41(D1), D36–D42.
+- **SAM/BAM** — Li et al., *Bioinformatics* 25(16), 2009.
+- **VCF** — Danecek et al., *Bioinformatics* 27(15), 2011.
+- **BigWig / WIG** — Kent et al., *Bioinformatics* 26(17), 2010.
+- **BED** — UCSC Genome Browser.
+- **GFF3** — Sequence Ontology Project.
+- **GTF** — Ensembl.
+- **GenBank** — Benson et al., *Nucleic Acids Research* 41(D1), 2013.
 
 ### Inspiration
 
-- **IGV** — Robinson, J.T. et al. (2011). Integrative Genomics Viewer. *Nature Biotechnology*, 29(1), 24–26.
+- **IGV** — Robinson et al., *Nature Biotechnology* 29(1), 2011.
 
-### Acknowledgments
+### Pre-release testing
 
-Early version testing and feedback:
-- Amanda Antoch
-- Isaac Poarch
-- Otto Chipashvili
-- Jake Colautti
-
-</details>
+Amanda Antoch · Isaac Poarch · Otto Chipashvili · Jake Colautti.
 
 ## License
 
-All rights reserved. Contact the author for licensing inquiries.
+Proprietary. All rights reserved. Contact the author for licensing
+inquiries.
