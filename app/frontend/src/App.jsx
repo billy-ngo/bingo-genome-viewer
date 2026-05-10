@@ -21,7 +21,7 @@ import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.9.5'
+const APP_VERSION = '2.9.6'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -103,13 +103,49 @@ function BrowserApp() {
 
   useAutoSave(labelWidth)
 
-  // Heartbeat — keeps the backend server alive while any tab is open.
-  // When all tabs close the heartbeats stop and the server auto-exits.
+  // Heartbeat — keeps the backend server alive while this tab is open.
+  // The server tracks tabs individually by UUID so that closing one tab
+  // doesn't prematurely terminate the server while others are still open;
+  // an explicit "tab closing" beacon on pagehide/beforeunload lets the
+  // server drop us immediately instead of waiting for the heartbeat
+  // timeout. We also fire an extra ping when the tab regains visibility
+  // because Chrome throttles `setInterval` to ~1 / minute in hidden
+  // background tabs after about five minutes.
   useEffect(() => {
-    const ping = () => fetch('/api/heartbeat').catch(() => {})
+    const tabId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `t-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+    const ping = () => fetch(`/api/heartbeat?tab=${encodeURIComponent(tabId)}`).catch(() => {})
     ping()
     const id = setInterval(ping, 10_000)
-    return () => clearInterval(id)
+
+    const onVisibility = () => { if (!document.hidden) ping() }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    // Notify the server eagerly when the tab is going away so it can
+    // drop us from its active set without waiting for a heartbeat to
+    // time out. sendBeacon survives the unload; a fetch with keepalive
+    // is the spec-equivalent fallback path.
+    const notifyClose = () => {
+      const url = `/api/tab-closing?tab=${encodeURIComponent(tabId)}`
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(url)
+          return
+        }
+      } catch { /* fall through */ }
+      try { fetch(url, { method: 'POST', keepalive: true }) } catch { /* ignore */ }
+    }
+    window.addEventListener('pagehide', notifyClose)
+    window.addEventListener('beforeunload', notifyClose)
+
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', notifyClose)
+      window.removeEventListener('beforeunload', notifyClose)
+    }
   }, [])
 
   // Restore hidden genome annotation tracks when the user switches chromosomes.

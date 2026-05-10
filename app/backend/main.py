@@ -1,13 +1,45 @@
 """
 BiNgo Genome Viewer — FastAPI application entry point.
 
-Mounts the REST API routers (/api/genome, /api/tracks) and serves
-the bundled Vite frontend. Works both in pip-installed mode (frontend
-bundled inside the package) and in development mode (frontend/dist/).
+Mounts the REST API routers (/api/genome, /api/tracks, /api/tracks/{id}/...)
+and serves the bundled Vite frontend. Works in both pip-installed mode
+(frontend bundled inside the package) and development mode
+(``frontend/dist/``).
 
-When launched via the CLI (BINGO_AUTO_SHUTDOWN=1), a background watchdog
-shuts the server down automatically once all browser tabs have closed
-(no heartbeat received for 30 seconds).
+Auto-shutdown
+-------------
+When launched via the CLI (``BINGO_AUTO_SHUTDOWN=1``), a background
+watchdog terminates the server soon after the user closes the last
+browser tab. The previous single-timestamp approach had several gaps:
+
+* No proactive close detection — closing a tab took the full 30 s
+  timeout to register.
+* Background-tab timer throttling (Chrome reduces ``setInterval`` to
+  ~1 / minute after 5 min of being hidden) could trigger a false
+  shutdown while the user still had the viewer open.
+* If the frontend never loaded at all (e.g., the user dismissed the
+  browser launch), the server lived forever — the watchdog short-
+  circuited on the initial-zero timestamp.
+* A page reload briefly drops the active tab to zero between
+  ``pagehide`` and the new page's first heartbeat; the old logic could
+  race that gap and exit.
+
+This implementation tracks tabs individually (each tab generates a
+UUID and sends it with every heartbeat) and supports two notifications:
+
+* Periodic ``GET  /api/heartbeat?tab=<uuid>``  — keep-alive.
+* One-shot ``POST /api/tab-closing?tab=<uuid>`` — sent via
+  ``navigator.sendBeacon`` on ``pagehide`` / ``beforeunload`` so the
+  server can drop the tab from its active set immediately.
+
+The watchdog exits when *all* of the following hold:
+
+* No tab has heartbeated within ``_HEARTBEAT_TIMEOUT`` seconds
+  (90 s — covers throttled hidden tabs).
+* The "no active tabs" condition has held for at least
+  ``_CLOSE_GRACE`` seconds (15 s — absorbs the reload gap).
+* If the frontend has *never* connected, exits after
+  ``_STARTUP_GRACE`` seconds (60 s).
 """
 
 import os
@@ -24,7 +56,7 @@ from api.genome import router as genome_router
 from api.tracks import router as tracks_router
 from api.data import router as data_router
 
-app = FastAPI(title="BiNgo Genome Viewer API", version="2.7.5")
+app = FastAPI(title="BiNgo Genome Viewer API", version="2.9.5")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,39 +88,100 @@ def health():
     return {"status": "ok"}
 
 
-# ── Auto-shutdown heartbeat system ─────────────────────────────
-# The frontend sends GET /api/heartbeat every 10 seconds.
-# If no heartbeat is received for _HEARTBEAT_TIMEOUT seconds after
-# the first one, the server shuts itself down.  Only active when
-# the BINGO_AUTO_SHUTDOWN environment variable is set (i.e. launched
-# from the CLI / installer, not during development).
+# ── Auto-shutdown heartbeat system ─────────────────────────────────
+# See module docstring for the design rationale.
 
-_last_heartbeat = 0.0
-_HEARTBEAT_TIMEOUT = 30  # seconds
+_HEARTBEAT_TIMEOUT = 90      # seconds: drop a tab if no heartbeat in this long
+_STARTUP_GRACE = 60          # seconds: exit if no tab ever connected
+_CLOSE_GRACE = 15            # seconds: hold-off after active==0 before exiting
+_WATCHDOG_TICK = 5           # seconds: how often the watchdog re-checks state
+
+_tab_state: dict[str, float] = {}   # tab_id -> last_seen wall-clock time
+_tab_lock = threading.Lock()
+_ever_seen_tab = False
+_server_started_at = time.time()
+
+
+def _record_tab(tab_id: str | None) -> None:
+    """Mark a tab as alive (called by /api/heartbeat)."""
+    global _ever_seen_tab
+    key = tab_id or "_default"
+    with _tab_lock:
+        _tab_state[key] = time.time()
+        _ever_seen_tab = True
+
+
+def _drop_tab(tab_id: str | None) -> None:
+    """Remove a tab from the active set (called by /api/tab-closing)."""
+    key = tab_id or "_default"
+    with _tab_lock:
+        _tab_state.pop(key, None)
 
 
 @app.get("/api/heartbeat")
-def heartbeat():
-    global _last_heartbeat
-    _last_heartbeat = time.time()
+def heartbeat(tab: str = ""):
+    """Keep-alive ping from a browser tab."""
+    _record_tab(tab)
     return {"status": "ok"}
 
 
+@app.post("/api/tab-closing")
+def tab_closing(tab: str = ""):
+    """Sent by the frontend on pagehide/beforeunload via sendBeacon so
+    the server can drop the tab immediately rather than waiting for the
+    heartbeat timeout. Returns 204 because the browser may have already
+    started discarding the response by the time it arrives."""
+    _drop_tab(tab)
+    return {"status": "ok"}
+
+
+def _exit_now() -> None:
+    """Clean up the lock file and terminate. ``os._exit`` skips uvicorn's
+    graceful-shutdown path — that's intentional, the user has closed
+    every tab and we don't want to wait for in-flight connections."""
+    try:
+        (Path.home() / ".bingoviewer" / "server.lock").unlink(missing_ok=True)
+    except Exception:
+        pass
+    os._exit(0)
+
+
 def _auto_shutdown_watchdog():
-    """Background thread: exit when all browser tabs are closed."""
-    global _last_heartbeat
+    """Background thread that exits the server when no tab has been
+    alive recently. See module docstring for the full state machine."""
+    last_empty_at: float | None = None
     while True:
-        time.sleep(10)
-        if _last_heartbeat > 0:
-            elapsed = time.time() - _last_heartbeat
-            if elapsed > _HEARTBEAT_TIMEOUT:
-                # Clean up lock file before exiting
-                lock_file = Path.home() / ".bingoviewer" / "server.lock"
-                try:
-                    lock_file.unlink(missing_ok=True)
-                except Exception:
-                    pass
-                os._exit(0)
+        time.sleep(_WATCHDOG_TICK)
+        now = time.time()
+
+        # Expire stale tabs (heartbeat older than HEARTBEAT_TIMEOUT)
+        with _tab_lock:
+            stale = [t for t, ts in _tab_state.items() if now - ts > _HEARTBEAT_TIMEOUT]
+            for t in stale:
+                _tab_state.pop(t, None)
+            active = len(_tab_state)
+
+        if active > 0:
+            last_empty_at = None
+            continue
+
+        # No active tabs right now.
+        if last_empty_at is None:
+            last_empty_at = now
+
+        if not _ever_seen_tab:
+            # Frontend never connected (user dismissed the browser launch,
+            # backend was started without a UI, etc.). Wait for STARTUP_GRACE
+            # before assuming nobody will show up.
+            if (now - _server_started_at) > _STARTUP_GRACE:
+                _exit_now()
+            continue
+
+        # We did see tabs at some point and they're all gone now. Wait a
+        # short close grace to absorb page reloads (pagehide → new page
+        # load briefly leaves us with zero active tabs).
+        if (now - last_empty_at) > _CLOSE_GRACE:
+            _exit_now()
 
 
 if os.environ.get("BINGO_AUTO_SHUTDOWN") == "1":

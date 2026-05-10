@@ -6,6 +6,39 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.9.6] — 2026-05-10
+
+### Fixed (auto-shutdown reliability)
+- The server now exits reliably when the user closes their browser. Five
+  problems with the previous heartbeat-only mechanism are addressed:
+  - **Tab close is detected immediately.** The frontend sends a
+    `navigator.sendBeacon` POST to `/api/tab-closing` on `pagehide` and
+    `beforeunload`. The server drops that tab from its active set
+    instantly instead of waiting the full heartbeat timeout. Closing the
+    last tab now stops the server in ~15 s instead of ~30 s.
+  - **Multiple tabs are tracked individually.** Each tab generates a UUID
+    on load and includes it in every heartbeat. Closing one tab no
+    longer requires a 30 s wait to confirm the others are still alive,
+    and the server can distinguish "one tab is gone" from "all tabs are
+    gone".
+  - **Hidden tabs no longer cause false shutdowns.** Browsers throttle
+    `setInterval` to roughly one fire per minute in tabs that have been
+    hidden for 5+ minutes. The heartbeat timeout was bumped from 30 s
+    to 90 s so a throttled hidden tab still counts as alive, and the
+    frontend now also pings immediately on `visibilitychange` so a tab
+    coming back to the foreground is recognised without delay.
+  - **Server no longer runs forever if the frontend never connects.**
+    The previous watchdog short-circuited until the first heartbeat
+    arrived. A 60 s startup grace now triggers shutdown when no UI ever
+    appears (browser launch dismissed, headless invocation, etc.).
+  - **Page reloads no longer race the watchdog.** A 15 s close grace
+    absorbs the brief gap between `pagehide` of the old page and the
+    first heartbeat from the reloaded one.
+- Verified end-to-end with an integration test that runs the live
+  uvicorn server through each scenario (alive while heartbeating, fast
+  exit on explicit close, startup-grace exit, multi-tab survival, exit
+  after closing the last of several tabs).
+
 ## [2.9.5] — 2026-05-01
 
 ### Documentation
