@@ -1,21 +1,54 @@
 /**
  * SelectionOverlay.jsx — Renders selection highlight and persistent region
  * color overlays on each track. Optimized to avoid unnecessary re-renders.
+ *
+ * The properties tooltip appears in two ways:
+ *   1. on hover — the highlight div has pointer-events:auto and listens for
+ *      mousemove / mouseleave.
+ *   2. on selection change — when a new selection is created (via right-
+ *      click drag or via double-click on a gene), the tooltip auto-appears
+ *      anchored to the highlight for a few seconds. This gives immediate
+ *      feedback without requiring the user to first move the mouse onto a
+ *      highlight that may already be under the cursor.
  */
-import React, { useState, useCallback, useMemo } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
+
+const AUTO_SHOW_MS = 3500  // tooltip dwells this long after a new selection
 
 export default function SelectionOverlay({ width, height, trackData, trackType, trackId, regionOverlays }) {
   const { region, selection, clearSelection } = useBrowser()
   const { theme } = useTheme()
   const [hover, setHover] = useState(false)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const [autoShow, setAutoShow] = useState(false)
+  const overlayRef = useRef(null)
+  const prevSelKeyRef = useRef(null)
 
   const isReadTrack = trackType === 'reads'
   const hasOverlays = regionOverlays && regionOverlays.length > 0
   const hasSelection = Boolean(selection && region && selection.chrom === region.chrom)
+
+  // When the selection changes, show the tooltip briefly so the user
+  // gets immediate region-properties feedback after right-click drag /
+  // double-click — they shouldn't have to wiggle the mouse first.
+  useEffect(() => {
+    const key = selection
+      ? `${selection.chrom}:${selection.start}-${selection.end}`
+      : null
+    if (key && key !== prevSelKeyRef.current) {
+      prevSelKeyRef.current = key
+      setAutoShow(true)
+      const t = setTimeout(() => setAutoShow(false), AUTO_SHOW_MS)
+      return () => clearTimeout(t)
+    }
+    if (!key) {
+      prevSelKeyRef.current = null
+      setAutoShow(false)
+    }
+  }, [selection?.chrom, selection?.start, selection?.end])
 
   const onMouseMove = useCallback((e) => {
     setMousePos({ x: e.clientX, y: e.clientY })
@@ -45,15 +78,33 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
     if (selPxWidth < 1) selPxWidth = 0
   }
 
-  // Only compute stats when actually hovering
-  const stats = hover && selPxWidth > 0 ? computeStats(selection, trackData, trackType) : []
+  const shouldShowTip = (hover || autoShow) && selPxWidth > 0
+  // Only compute stats when the tooltip is actually visible
+  const stats = shouldShowTip ? computeStats(selection, trackData, trackType) : []
   const selLen = selection ? selection.end - selection.start : 0
   const tipWidth = 260
-  const tipX = Math.min(mousePos.x + 14, window.innerWidth - tipWidth - 10)
-  const tipY = Math.min(mousePos.y + 14, window.innerHeight - 200)
+
+  // Position the tooltip near the cursor when hovering. When auto-showing
+  // immediately after a fresh selection (cursor hasn't moved over the
+  // highlight yet), anchor it to the top-centre of the highlight instead
+  // — that way the tooltip is visible even if the mouse is still resting.
+  let tipX, tipY
+  if (hover) {
+    tipX = Math.min(mousePos.x + 14, window.innerWidth - tipWidth - 10)
+    tipY = Math.min(mousePos.y + 14, window.innerHeight - 200)
+  } else if (autoShow && overlayRef.current) {
+    const rect = overlayRef.current.getBoundingClientRect()
+    tipX = Math.max(8, Math.min(
+      rect.left + selPxLeft + selPxWidth / 2 - tipWidth / 2,
+      window.innerWidth - tipWidth - 10,
+    ))
+    tipY = Math.min(rect.top + height + 6, window.innerHeight - 200)
+  } else {
+    tipX = 0; tipY = 0
+  }
 
   return (
-    <div style={{ position: 'absolute', top: 0, left: 0, width, height, pointerEvents: 'none' }}>
+    <div ref={overlayRef} style={{ position: 'absolute', top: 0, left: 0, width, height, pointerEvents: 'none' }}>
       {/* Persistent region highlight overlays */}
       {hasOverlays && regionOverlays.map((o, i) => {
         if (!o.highlightColor || o.chrom !== region.chrom) return null
@@ -74,6 +125,11 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
           borderLeft: '1px solid rgba(100, 181, 246, 0.6)',
           borderRight: '1px solid rgba(100, 181, 246, 0.6)',
           pointerEvents: 'auto', cursor: 'crosshair',
+          // Stay above the canvas defensively — both elements default to
+          // z-index auto and DOM order alone is usually enough, but this
+          // guarantees the highlight wins hit-testing for hover regardless
+          // of any stacking context introduced elsewhere.
+          zIndex: 5,
         }}
           onMouseMove={onMouseMove}
           onMouseLeave={onMouseLeave}
@@ -82,8 +138,8 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
         />
       )}
 
-      {/* Tooltip — only when hovering */}
-      {hover && selPxWidth > 0 && createPortal(
+      {/* Tooltip — on hover, or briefly after a fresh selection */}
+      {shouldShowTip && createPortal(
         <div style={{
           position: 'fixed', left: tipX, top: tipY,
           background: theme.panelBg, border: `1px solid ${theme.borderAccent}`,

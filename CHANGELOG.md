@@ -6,6 +6,32 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.9.7] — 2026-05-10
+
+### Fixed
+- Region-properties tooltip now appears when hovering a selection that was
+  just created via right-click drag or via double-click on a gene. Two
+  underlying problems were addressed:
+  - The browser fires a `contextmenu` on the mouseup of a right-click drag,
+    which used to immediately open `RegionColorEditor`'s context menu on
+    top of the brand-new highlight. That menu renders a full-viewport
+    scrim at `zIndex: 10001` which intercepted every subsequent mousemove,
+    preventing the hover from ever reaching the highlight. We now detect
+    whether the right-press actually moved (≥ 3 px) and, if so, swallow
+    the trailing `contextmenu` event in the capture phase — so the
+    selection sticks, the menu does not pop, and hover works. A
+    stationary right-click on an existing selection still opens the menu
+    as before.
+  - After a double-click on a gene, the cursor is usually already inside
+    the new highlight, so the user has no mousemove to fire and the
+    tooltip never appears. The selection tooltip now auto-displays for
+    ~3.5 s whenever the selection changes, anchored just below the
+    highlight; hovering after that point continues to track the cursor as
+    usual.
+- Defensive `zIndex: 5` on the highlight div so it wins hit-testing for
+  hover even in browsers where a future stacking-context change could
+  push the canvas above it.
+
 ## [2.9.6] — 2026-05-10
 
 ### Fixed (auto-shutdown reliability)
