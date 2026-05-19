@@ -439,6 +439,81 @@ def _open_when_ready(url, timeout=8):
     webbrowser.open(url)
 
 
+# ── Close parent terminal on exit (opt-in via --close-window) ─────
+
+_SAFE_PARENT_SHELL_NAMES = {"cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"}
+
+
+def _get_parent_process_name_windows(pid):
+    """Return the executable name of `pid` (e.g. 'cmd.exe') or None.
+
+    Uses Win32 directly so we don't pull in psutil. Falls back silently on
+    any failure — the caller treats that as "don't try to close the
+    window" so we never accidentally kill an IDE / SSH session / etc.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return None
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(len(buf))
+            ok = kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size))
+            if not ok:
+                return None
+            return Path(buf.value).name.lower()
+        finally:
+            kernel32.CloseHandle(h)
+    except Exception:
+        return None
+
+
+def _close_parent_terminal():
+    """Close the shell window the user launched ``bingo`` from.
+
+    Called from an ``atexit`` hook when the user passed ``--close-window``
+    (and from the auto-launched shortcut). Only acts on Windows and only
+    when:
+
+    * the process has a real attached console (``GetConsoleWindow != 0``),
+      i.e. we weren't launched from pythonw, a service, or with
+      stdin/stdout redirected, and
+    * the immediate parent process is a known shell (cmd.exe,
+      powershell.exe, pwsh.exe). This rules out IDE-integrated terminals
+      (VS Code's terminal parent is ``Code.exe`` etc.), SSH agents, and
+      build hooks — we will not terminate those.
+
+    The shell is terminated with ``TerminateProcess`` so the console
+    window vanishes immediately and cmd doesn't prompt "Terminate batch
+    job (Y/N)?".
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        if not kernel32.GetConsoleWindow():
+            return
+        ppid = os.getppid()
+        parent_name = _get_parent_process_name_windows(ppid)
+        if parent_name not in _SAFE_PARENT_SHELL_NAMES:
+            return
+        PROCESS_TERMINATE = 0x0001
+        h = kernel32.OpenProcess(PROCESS_TERMINATE, False, ppid)
+        if not h:
+            return
+        try:
+            kernel32.TerminateProcess(h, 0)
+        finally:
+            kernel32.CloseHandle(h)
+    except Exception:
+        pass
+
+
 # ── Entry point ───────────────────────────────────────────────────
 
 def main():
@@ -453,6 +528,11 @@ def main():
     parser.add_argument("--update", action="store_true", help="Check for updates now")
     parser.add_argument("--no-update", action="store_true", help="Skip automatic update check")
     parser.add_argument("--version", action="store_true", help="Show version and exit")
+    parser.add_argument(
+        "--close-window", action="store_true",
+        help="Close the launching terminal window when the server exits "
+             "(Windows only; only takes effect when launched from cmd / PowerShell)",
+    )
     args = parser.parse_args()
 
     if args.version:
@@ -534,6 +614,16 @@ def main():
     # Write lock file and register cleanup
     _write_lock(args.host, args.port)
     atexit.register(_remove_lock)
+
+    # If requested, close the launching terminal once the server exits.
+    # The auto-shutdown watchdog terminates with os._exit() which skips
+    # atexit, so we both register an atexit fallback (for graceful exits
+    # like Ctrl-C) AND signal the watchdog via env vars so it can run the
+    # same teardown before its hard exit.
+    if args.close_window:
+        atexit.register(_close_parent_terminal)
+        os.environ["BINGO_CLOSE_WINDOW"] = "1"
+        os.environ["BINGO_PARENT_PID"] = str(os.getppid())
 
     # Background update check for pythonw (shortcut) launches
     if not args.no_update and not has_terminal:

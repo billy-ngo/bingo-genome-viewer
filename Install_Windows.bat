@@ -192,5 +192,5 @@ echo.
 if exist "!VENV!\Scripts\pythonw.exe" (
     start "" "!VENV!\Scripts\pythonw.exe" -m bingoviewer
 ) else (
-    start /min "" "!VENV!\Scripts\python.exe" -m bingoviewer
+    start /min "" "!VENV!\Scripts\python.exe" -m bingoviewer --close-window
 )

@@ -73,12 +73,15 @@ def _install_windows(target_dir):
     ico_path = config_dir / "bingo_icon.ico"
     ico_path.write_bytes(generate_ico())
 
-    # Create a batch launcher that runs python with minimized window
+    # Create a batch launcher that runs python with a minimized window.
+    # --close-window terminates that minimized cmd once the server shuts
+    # down (browser closed → heartbeat times out → server exits) so the
+    # user doesn't accumulate stale tray icons from past launches.
     python_exe = sys.executable
     bat_path = config_dir / "launch_bingo.bat"
     bat_path.write_text(
         '@echo off\n'
-        f'start /min "" "{python_exe}" -m bingoviewer --no-update\n'
+        f'start /min "" "{python_exe}" -m bingoviewer --no-update --close-window\n'
     )
 
     lnk_path = target_dir / f"{_APP_NAME}.lnk"

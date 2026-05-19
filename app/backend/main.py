@@ -138,12 +138,68 @@ def tab_closing(tab: str = ""):
 def _exit_now() -> None:
     """Clean up the lock file and terminate. ``os._exit`` skips uvicorn's
     graceful-shutdown path — that's intentional, the user has closed
-    every tab and we don't want to wait for in-flight connections."""
+    every tab and we don't want to wait for in-flight connections.
+
+    If the CLI was started with ``--close-window`` the parent shell PID
+    is in ``BINGO_PARENT_PID``; we terminate it here so the user's
+    minimised cmd window vanishes when the browser closes. Guarded by
+    parent-process-name check so we never kill an IDE, SSH session, or
+    anything that isn't a known Windows shell."""
     try:
         (Path.home() / ".bingoviewer" / "server.lock").unlink(missing_ok=True)
     except Exception:
         pass
+    if os.environ.get("BINGO_CLOSE_WINDOW") == "1":
+        _terminate_parent_shell_if_safe()
     os._exit(0)
+
+
+_SAFE_PARENT_SHELL_NAMES = {"cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"}
+
+
+def _terminate_parent_shell_if_safe() -> None:
+    """Windows-only: close the launching terminal window iff it's a
+    recognised shell. No-op on macOS / Linux, no-op when launched without
+    a console (pythonw, service), no-op when the parent is anything other
+    than cmd / PowerShell."""
+    import sys
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32
+        if not kernel32.GetConsoleWindow():
+            return
+        try:
+            pid = int(os.environ.get("BINGO_PARENT_PID", "") or os.getppid())
+        except (TypeError, ValueError):
+            return
+        # Identify the parent — only kill known shells
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(len(buf))
+            ok = kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size))
+            parent_name = Path(buf.value).name.lower() if ok else None
+        finally:
+            kernel32.CloseHandle(h)
+        if parent_name not in _SAFE_PARENT_SHELL_NAMES:
+            return
+        # Open with TERMINATE rights and kill
+        PROCESS_TERMINATE = 0x0001
+        h = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+        if not h:
+            return
+        try:
+            kernel32.TerminateProcess(h, 0)
+        finally:
+            kernel32.CloseHandle(h)
+    except Exception:
+        pass
 
 
 def _auto_shutdown_watchdog():

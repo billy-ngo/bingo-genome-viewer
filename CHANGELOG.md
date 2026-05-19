@@ -6,6 +6,31 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.9.8] — 2026-05-10
+
+### Added
+- ``bingo --close-window`` (Windows): closes the launching command-prompt
+  window automatically when the server shuts down. Useful when launching
+  ``bingo`` directly from cmd / PowerShell — you no longer need to type
+  ``exit`` after closing the browser.
+- The Windows desktop-shortcut launcher (``launch_bingo.bat``) and the
+  "Launch BiNgo now?" prompt in ``Install_Windows.bat`` both pass
+  ``--close-window`` automatically, so the minimised launcher window
+  vanishes when the user closes their browser.
+
+### Safety
+- The terminal close is guarded by a parent-process-name check. We only
+  ever terminate a process named ``cmd.exe``, ``powershell.exe``,
+  ``pwsh.exe``, or ``conhost.exe``. Launches from VS Code's integrated
+  terminal, JetBrains terminals, SSH sessions, Git Bash, or any other
+  parent are left alone — ``--close-window`` is a no-op in those
+  environments.
+- Also no-op when the process has no attached console (e.g.
+  ``pythonw`` shortcut launches) and on macOS / Linux.
+- The close runs from inside the auto-shutdown watchdog (``os._exit``
+  skips ``atexit``), so closing the browser reliably terminates the
+  shell window — not just on graceful Ctrl-C exits.
+
 ## [2.9.7] — 2026-05-10
 
 ### Fixed
