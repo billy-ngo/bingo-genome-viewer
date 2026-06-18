@@ -47,6 +47,11 @@ function makeCache(maxSize = 200) {
       }
       return result
     },
+    deleteByPrefix(prefix) {
+      for (const key of map.keys()) {
+        if (key.startsWith(prefix)) map.delete(key)
+      }
+    },
   }
 }
 const cache = makeCache()
@@ -56,6 +61,14 @@ const liveData = new Map()
 function setLiveData(trackId, data) { liveData.set(trackId, data) }
 
 export function getLiveTrackData(trackId) { return liveData.get(trackId) || null }
+
+/** Drop all cached + live data for a track. Called when a track is removed so
+ *  stale data can never resurface (e.g. in a re-added track that reuses an id)
+ *  and the module-level maps don't grow unbounded across add/remove cycles. */
+export function clearTrackData(trackId) {
+  liveData.delete(trackId)
+  cache.deleteByPrefix(`${trackId}|`)
+}
 
 export function getCachedDataForTrack(trackId, chrom) {
   const live = liveData.get(trackId)

@@ -60,6 +60,9 @@ export function collectSession(genome, region, tracks, themeName, customTheme, l
       regionOverlays: t.regionOverlays || [],
       annotationColors: t.annotationColors || null,
       targetChromosomes: t.targetChromosomes || null,
+      // Deliberate removal of a genome-annotation track (v2.9.9+) — persist
+      // so it stays gone across reloads instead of being auto-revived.
+      userRemoved: t.userRemoved || false,
       // Annotation feature-type filter (v2.8.0+)
       featureTypes: t.featureTypes || [],
       hiddenFeatureTypes: t.hiddenFeatureTypes || [],
@@ -299,6 +302,8 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         // Read-track strand visibility (v2.9.0+) — default true for older sessions
         showFwdStrand: t.showFwdStrand !== false,
         showRevStrand: t.showRevStrand !== false,
+        // Deliberate annotation-track removal (v2.9.9+)
+        userRemoved: t.userRemoved || false,
       })))
 
       // 3. Restore theme

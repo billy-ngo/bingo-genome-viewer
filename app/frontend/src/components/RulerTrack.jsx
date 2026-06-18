@@ -84,7 +84,7 @@ export default function RulerTrack({ width }) {
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
-      <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height: RULER_HEIGHT }} />
+      <canvas ref={canvasRef} data-export-ruler="1" style={{ display: 'block', width: '100%', height: RULER_HEIGHT }} />
     </div>
   )
 }

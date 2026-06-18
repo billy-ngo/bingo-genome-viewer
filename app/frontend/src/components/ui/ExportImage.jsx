@@ -404,10 +404,16 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = theme.canvasBg; ctx.fillRect(0, 0, fullW, totalH)
 
-  // Grab existing rendered canvases from the DOM and composite them
+  // Composite each track's live canvas, looked up BY IDENTITY (not by DOM
+  // position). The previous positional indexing — querySelectorAll('canvas')
+  // walked with a fixed +1 ruler offset — mis-mapped every track after any
+  // deselected/removed track, compositing the wrong (ghost) image into a
+  // neighbour's slot. Identity lookup composites each selected track from
+  // its own current canvas and silently skips any that are gone.
   let yOff = 0
   if (includeRuler) {
-    const rulerCanvas = document.querySelector('canvas') // first canvas is ruler
+    const rulerCanvas = document.querySelector('canvas[data-export-ruler]')
+      || document.querySelector('canvas') // fallback: first canvas is the ruler
     if (rulerCanvas) {
       try {
         ctx.drawImage(rulerCanvas, 0, 0, rulerCanvas.width, rulerCanvas.height, labelW, 0, trackW, rulerH)
@@ -416,8 +422,6 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
     yOff += rulerH
   }
 
-  const allCanvases = document.querySelectorAll('canvas')
-  let canvasIdx = 1 // skip ruler
   for (const track of tracks) {
     if (includeLabels) {
       ctx.fillStyle = theme.panelBg; ctx.fillRect(0, yOff, labelW, track.height)
@@ -426,17 +430,27 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
       ctx.strokeStyle = theme.border; ctx.beginPath()
       ctx.moveTo(labelW, yOff); ctx.lineTo(labelW, yOff + track.height); ctx.stroke()
     }
-    if (allCanvases[canvasIdx]) {
+    const host = document.querySelector(`[data-export-track-id="${cssEscape(track.id)}"]`)
+    const srcCanvas = host ? host.querySelector('canvas') : null
+    if (srcCanvas) {
       try {
-        ctx.drawImage(allCanvases[canvasIdx], 0, 0, allCanvases[canvasIdx].width, allCanvases[canvasIdx].height, labelW, yOff, trackW, track.height)
+        ctx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, labelW, yOff, trackW, track.height)
       } catch {}
     }
     ctx.strokeStyle = theme.border; ctx.beginPath()
     ctx.moveTo(0, yOff + track.height); ctx.lineTo(fullW, yOff + track.height); ctx.stroke()
     yOff += track.height
-    canvasIdx++
   }
   return canvas
+}
+
+/** CSS.escape with a conservative fallback for older runtimes. Track ids are
+ *  8-char hex UUIDs or the literal 'genome_annotations', so escaping is mostly
+ *  defensive, but a missing CSS.escape would otherwise throw. */
+function cssEscape(s) {
+  const str = String(s)
+  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(str)
+  return str.replace(/["\\]/g, '\\$&')
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

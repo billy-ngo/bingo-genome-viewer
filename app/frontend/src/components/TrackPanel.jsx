@@ -237,7 +237,7 @@ export default function TrackPanel({
           />
         )}
       </div>
-      <div style={S.trackArea} ref={containerRef}>
+      <div style={S.trackArea} ref={containerRef} data-export-track-id={track.id}>
         <TrackErrorBoundary>{renderTrack()}</TrackErrorBoundary>
         <SelectionOverlay
           width={width}

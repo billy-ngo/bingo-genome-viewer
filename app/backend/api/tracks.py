@@ -190,7 +190,11 @@ def list_tracks():
 
 @router.delete("/{track_id}")
 def remove_track(track_id: str):
-    if track_id not in app_state.tracks:
-        raise HTTPException(status_code=404, detail="Track not found")
-    app_state.remove_track(track_id)
+    # Idempotent: a missing id means the track is already gone (e.g. the
+    # server was restarted by the auto-shutdown watchdog while the browser
+    # kept its state). Report success rather than 404 so the client can
+    # prune its UI without the removal being treated as a failure — a
+    # failed removal used to leave a phantom track that ghosted the export.
+    if track_id in app_state.tracks:
+        app_state.remove_track(track_id)
     return {"status": "removed"}

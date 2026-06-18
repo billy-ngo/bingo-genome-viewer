@@ -6,6 +6,7 @@
  */
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react'
 import { tracksApi } from '../api/client'
+import { clearTrackData } from '../hooks/useTrackData'
 
 const TrackContext = createContext(null)
 
@@ -101,24 +102,41 @@ export function TrackProvider({ children }) {
   }, [uploadTrack, commitTrack])
 
   const removeTrack = useCallback(async (id) => {
+    const track = tracksRef.current.find(t => t.id === id)
     // Genome annotation tracks are hidden (not deleted) so they can be
     // restored when the user navigates back to an annotated chromosome.
-    const track = tracksRef.current.find(t => t.id === id)
+    // Mark `userRemoved` so a *deliberate* removal is NOT auto-revived on
+    // the next chromosome change (see restoreAnnotationTracks). Without
+    // this flag the removed annotation track reappeared on navigation and
+    // ghosted back into the export.
     if (track && track.track_type === 'genome_annotations') {
-      setTracks(prev => prev.map(t => t.id === id ? { ...t, visible: false } : t))
+      setTracks(prev => prev.map(t => t.id === id ? { ...t, visible: false, userRemoved: true } : t))
       return
     }
+    // Optimistically drop the track from UI state — the backend DELETE is
+    // best-effort cleanup, not a precondition for the row disappearing.
+    // Previously the filter ran only AFTER `await tracksApi.remove(id)`
+    // resolved, so any failed DELETE (404 for a stale id after a server
+    // restart, a 5xx, or a network drop) left the track in tracks[] with
+    // visible:true — a phantom row that then ghosted into the SVG/PNG
+    // export and enlarged it by its full height.
+    setTracks(prev => prev.filter(t => t.id !== id))
+    clearTrackData(id)
     try {
       await tracksApi.remove(id)
-      setTracks(prev => prev.filter(t => t.id !== id))
     } catch (e) {
-      setError(e.response?.data?.detail || e.message)
+      // 404 = already gone server-side (expected after a restart). Any
+      // other error is non-fatal now that the UI is already consistent;
+      // surface it but never re-add the track.
+      if (e.response?.status !== 404) {
+        setError(e.response?.data?.detail || e.message)
+      }
     }
   }, [])
 
   const restoreAnnotationTracks = useCallback(() => {
     setTracks(prev => prev.map(t =>
-      t.track_type === 'genome_annotations' && !t.visible
+      t.track_type === 'genome_annotations' && !t.visible && !t.userRemoved
         ? { ...t, visible: true }
         : t
     ))
@@ -154,6 +172,7 @@ export function TrackProvider({ children }) {
           ...updated[idx],
           name: cleanName(info.name) || info.name,
           visible: true,
+          userRemoved: false,  // re-loading the genome un-does a prior removal
           ...(info.targetChromosomes ? { targetChromosomes: info.targetChromosomes } : {}),
         }
         // Merge new feature types with existing (when adding chromosomes from another file)
@@ -168,6 +187,7 @@ export function TrackProvider({ children }) {
         ...info,
         name: cleanName(info.name) || info.name,
         color: '#a5d6a7', height: 80, visible: true, useArrows: true,
+        userRemoved: false,
         annotationColors: null,
         targetChromosomes: info.targetChromosomes || null,
         featureTypes: info.featureTypes || [],

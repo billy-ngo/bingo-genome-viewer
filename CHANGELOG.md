@@ -6,6 +6,34 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.9.9] — 2026-05-19
+
+### Fixed
+- Removed tracks no longer "ghost" into exported images or inflate their
+  dimensions. A multi-path audit found and closed every way a deleted track
+  could still contribute to an SVG/PNG export:
+  - **Track removal is now immediate and unconditional.** Deleting a track
+    previously waited for the backend to confirm, and a failed delete
+    (a stale id after the server auto-restarted, a transient 5xx, or a
+    dropped connection) silently left the row in place — still counted in
+    the export height. The row now disappears from the UI the instant you
+    click ✕, with backend cleanup done best-effort in the background.
+  - **Deleting a genome-annotation track now sticks.** Annotation tracks are
+    hidden rather than deleted so they can re-appear when you switch to a
+    chromosome that has annotations. A deliberate removal was being undone by
+    that same auto-restore on the next navigation. Removals are now
+    remembered (and persisted in saved sessions); re-loading the genome
+    brings the annotations back as before.
+  - **PNG/JPG export composites each track by identity.** The raster exporter
+    matched on-screen canvases to tracks by position, so deselecting a track
+    in the export dialog shifted every later track to the wrong image. Each
+    track is now matched to its own canvas, so deselecting or reordering
+    composites correctly.
+  - The backend `DELETE /api/tracks/{id}` is now idempotent (a missing id
+    returns success, not 404), and per-track data caches are cleared on
+    removal so stale data can't resurface and memory doesn't grow across
+    add/remove cycles.
+
 ## [2.9.8] — 2026-05-10
 
 ### Added
