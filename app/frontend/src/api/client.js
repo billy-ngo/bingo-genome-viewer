@@ -100,10 +100,13 @@ export const tracksApi = {
     if (indexFile) fd.append('index', indexFile)
     return uploadFile('/tracks/load', fd, onProgress)
   },
-  loadPath: (path, name) => {
+  loadPath: (path, name, indexPath) => {
     const fd = new FormData()
     fd.append('path', path)
     if (name) fd.append('name', name)
+    // Optional explicit .bai path — lets a user load a BAM whose index lives
+    // in a different directory or has a non-standard name.
+    if (indexPath) fd.append('index_path', indexPath)
     return uploadFile('/tracks/load-path', fd)
   },
   list: () => api.get('/tracks'),

@@ -46,22 +46,42 @@ async def load_track(
 ):
     clean_filename = _clean_name(file.filename)
     dest = _upload_dir / clean_filename
+    saved_paths = [dest]  # for cleanup on failure
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        # Save index file (.bai) alongside BAM with correct naming
         ext = dest.suffix.lower()
-        if index is not None and ext in (".bam", ".cram"):
-            # Always save as <bamname>.bam.bai so _find_index() can find it
+        # Save the index file. Only BAM uses the <bamname>.bam.bai convention
+        # that _find_index() looks for; saving a CRAM's .crai under that name
+        # would guarantee a downstream failure, so CRAM/SAM are rejected by
+        # load_track regardless and we just keep the original index name here.
+        if index is not None and ext == ".bam":
             index_dest = dest.parent / (dest.name + ".bai")
             with index_dest.open("wb") as f:
                 shutil.copyfileobj(index.file, f)
+            saved_paths.append(index_dest)
         elif index is not None:
-            # Non-BAM index file — save with original name
             index_dest = _upload_dir / _clean_name(index.filename)
             with index_dest.open("wb") as f:
                 shutil.copyfileobj(index.file, f)
+            saved_paths.append(index_dest)
+
+        # Fail fast for a BAM uploaded without any resolvable index, BEFORE
+        # constructing the reader, and clean up the orphaned upload so the
+        # temp dir doesn't fill up with rejected multi-GB BAMs.
+        if ext == ".bam":
+            from readers.bam_reader import _find_index
+            if _find_index(str(dest)) is None:
+                _cleanup_paths(saved_paths)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"BAM '{clean_filename}' has no index. Select its .bai "
+                        f"alongside the .bam (or create one with: samtools "
+                        f"index '{clean_filename}')."
+                    ),
+                )
 
         display_name = _clean_name(name) if name else clean_filename
         track = app_state.load_track(str(dest), display_name)
@@ -83,15 +103,42 @@ async def load_track(
         if hint:
             result["hint"] = hint
         return result
+    except HTTPException:
+        raise
     except Exception as e:
+        # Clean up the orphaned upload(s) so a rejected file doesn't linger.
+        _cleanup_paths(saved_paths)
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _cleanup_paths(paths):
+    """Best-effort removal of saved upload files (used when a load fails)."""
+    for p in paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _clean_path(raw: str) -> str:
+    """Strip whitespace, surrounding quotes, and shell-escaped spaces."""
+    p = raw.strip()
+    for q in ('"', "'", '`'):
+        p = p.strip(q)
+    return p.strip().replace('\\ ', ' ')
 
 
 @router.post("/load-path")
-async def load_track_from_path(path: str = Form(...), name: str = Form("")):
-    """Load track from a local file path (no upload needed)."""
+async def load_track_from_path(
+    path: str = Form(...),
+    name: str = Form(""),
+    index_path: str = Form(""),
+):
+    """Load track from a local file path (no upload needed).
+
+    ``index_path`` is optional and lets the user point at a .bai that lives in
+    a different directory or has a non-standard name than its BAM.
+    """
     from pathlib import Path as P
 
     # Clean up the path: strip whitespace, all quote types, shell escapes
@@ -148,20 +195,37 @@ async def load_track_from_path(path: str = Form(...), name: str = Form("")):
     except OSError as e:
         raise HTTPException(status_code=400, detail=f"Cannot read file: {p.name}. {e}")
 
-    # Validate BAM files have an index
+    # Resolve an explicit index path (allows a .bai in a different folder).
+    resolved_index = None
+    if index_path.strip():
+        ip = P(_clean_path(index_path)).expanduser()
+        if not ip.exists() and not ip.resolve().exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Index file not found: {ip}. Check the .bai path for typos."
+            )
+        resolved_index = str(ip.resolve())
+
+    # Validate BAM files have an index (CRAM/SAM are rejected by load_track).
     ext = p.suffix.lower()
-    if ext in (".bam", ".cram"):
+    if ext == ".bam":
         from readers.bam_reader import _find_index
-        if _find_index(path) is None:
+        try:
+            found = _find_index(path, resolved_index)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if found is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"BAM index (.bai) not found for '{p.name}'. "
-                       f"Expected '{p.name}.bai' or '{p.stem}.bai' in the same directory."
+                detail=f"BAM index (.bai) not found for '{p.name}'. Expected "
+                       f"'{p.name}.bai' or '{p.stem}.bai' beside the BAM, or "
+                       f"supply the index path explicitly. Create one with: "
+                       f"samtools index '{p.name}'"
             )
 
     try:
         display_name = _clean_name(name) if name else p.name
-        track = app_state.load_track(path, display_name)
+        track = app_state.load_track(path, display_name, index_path=resolved_index)
         compatibility = app_state.check_track_compatibility(track["id"])
         target_chromosomes = app_state.get_target_chromosomes(track["id"])
 

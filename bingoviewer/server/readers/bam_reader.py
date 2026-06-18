@@ -1,7 +1,7 @@
 """
 BAM reader — uses bamnostic (pure Python, Windows-compatible).
 Requires a .bai index alongside the BAM file for random-access queries.
-CRAM is not supported by bamnostic; use BAM instead.
+CRAM and SAM are not supported by bamnostic; convert to an indexed BAM.
 """
 
 from pathlib import Path
@@ -16,21 +16,64 @@ READ_DETAIL_THRESHOLD = 50_000  # bp
 # Standard index naming conventions: file.bam.bai and file.bai
 _INDEX_SUFFIXES = (".bam.bai", ".bai")
 
+# A valid .bai begins with the 4-byte magic "BAI\1" and a non-trivial body.
+_BAI_MAGIC = b"BAI\x01"
+_MIN_BAI_SIZE = 8  # magic (4) + n_ref (4) at the very least
 
-def _find_index(bam_path: str) -> Optional[str]:
-    """Locate a .bai index for the given BAM file.
 
-    Checks both naming conventions (.bam.bai and .bai) in the same
-    directory as the BAM file.
+def _valid_bai(path: Path) -> bool:
+    """Return True only if `path` looks like a real, non-empty .bai index.
+
+    Catches the empty/zero-byte and wrong-format cases that would otherwise
+    surface as a cryptic ``struct.error: unpack requires a buffer of 8 bytes``
+    or ``AssertionError: Wrong BAI magic header`` from deep inside bamnostic.
     """
+    try:
+        if path.stat().st_size < _MIN_BAI_SIZE:
+            return False
+        with path.open("rb") as f:
+            return f.read(4) == _BAI_MAGIC
+    except OSError:
+        return False
+
+
+def _find_index(bam_path: str, index_path: Optional[str] = None) -> Optional[str]:
+    """Locate a usable .bai index for the given BAM file.
+
+    If ``index_path`` is supplied (e.g. the user pointed at a .bai that lives
+    in a different directory), it takes precedence when it exists and is a
+    valid index. Otherwise both standard naming conventions (file.bam.bai and
+    file.bai) are checked in the BAM's own directory. Only indexes that pass
+    the magic/size sanity check are returned.
+    """
+    if index_path:
+        ip = Path(index_path).expanduser()
+        if ip.exists() and _valid_bai(ip):
+            return str(ip.resolve())
+        # An explicit-but-bad index path is a hard error so the user learns
+        # their index is empty/corrupt rather than silently falling back.
+        if ip.exists():
+            raise ValueError(
+                f"The supplied index '{ip.name}' is not a valid .bai file "
+                f"(empty or wrong format). Rebuild it with: samtools index <file>.bam"
+            )
+
     p = Path(bam_path)
     for candidate in (
         p.parent / (p.name + ".bai"),   # reads.bam.bai
         p.with_suffix(".bai"),           # reads.bai
     ):
-        if candidate.exists():
+        if candidate.exists() and _valid_bai(candidate):
             return str(candidate)
     return None
+
+
+def _fetch_error_msg(file_path: str) -> str:
+    return (
+        f"Failed reading alignments from '{Path(file_path).name}' — the BAM or "
+        f"its index appears to be corrupt or truncated. Re-create it with "
+        f"samtools (samtools sort, then samtools index)."
+    )
 
 
 def _parse_cigar(cigar_string: str) -> list[tuple[int, str]]:
@@ -47,47 +90,126 @@ def _parse_cigar(cigar_string: str) -> list[tuple[int, str]]:
     return ops
 
 
+def _norm_chrom(name: str) -> str:
+    """Normalise a contig name for comparison: strip a *leading* 'chr' prefix
+    only (not internal occurrences) and lowercase. So 'chr1'/'1' match but
+    'achrb' is not mangled to 'ab'."""
+    n = name[3:] if name[:3].lower() == "chr" else name
+    return n.lower()
+
+
 class BamReader:
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, index_path: Optional[str] = None):
         self.file_path = file_path
 
         # Validate BAM file exists
         if not Path(file_path).exists():
             raise FileNotFoundError(f"BAM file not found: {file_path}")
 
-        # Validate index exists before opening
-        index_path = _find_index(file_path)
-        if index_path is None:
+        # Resolve (and validate) the index before opening.
+        resolved_index = _find_index(file_path, index_path)
+        if resolved_index is None:
             bam_name = Path(file_path).name
             raise FileNotFoundError(
                 f"BAM index (.bai) not found for '{bam_name}'. "
-                f"Please provide a .bai file alongside the BAM file "
-                f"(expected '{bam_name}.bai' or '{Path(bam_name).stem}.bai')."
+                f"A BAM must be sorted and indexed. Create one with: "
+                f"samtools index '{bam_name}'  "
+                f"(expected '{bam_name}.bai' or '{Path(bam_name).stem}.bai' "
+                f"beside the BAM, or supply its path explicitly)."
             )
 
-        self._aln = bam.AlignmentFile(file_path, "rb", index_filename=index_path)
+        # Open tolerantly (ignore a missing EOF marker — common for BAMs
+        # copied/streamed without the trailing block) and convert any
+        # low-level decode failure into an actionable message instead of a
+        # raw 'Malformed BGZF block' / 'Wrong BAI magic header' traceback.
+        try:
+            self._aln = bam.AlignmentFile(
+                file_path, "rb",
+                index_filename=resolved_index,
+                ignore_truncation=True,
+            )
+        except Exception as e:
+            msg = str(e).lower()
+            if "bai" in msg or "index" in msg or "magic" in msg:
+                raise ValueError(
+                    f"The BAM index for '{Path(file_path).name}' is corrupt or "
+                    f"incompatible. Rebuild it with: samtools index "
+                    f"'{Path(file_path).name}'"
+                ) from e
+            raise ValueError(
+                f"'{Path(file_path).name}' could not be read as a BAM file — it "
+                f"may be corrupt, truncated, or not a BAM. Re-create it with "
+                f"samtools (sort, then index)."
+            ) from e
+
+        # A BAM with no reference sequences can't be queried meaningfully.
+        if not self.chromosomes:
+            raise ValueError(
+                f"'{Path(file_path).name}' has no reference sequences in its "
+                f"header — it cannot be displayed. Ensure the BAM was aligned "
+                f"to a reference and retains its @SQ header."
+            )
 
     def close(self):
-        self._aln.close()
+        try:
+            self._aln.close()
+        except Exception:
+            pass
 
     @property
     def chromosomes(self) -> list[dict]:
-        header = self._aln.header
-        sq = header.get("SQ", [])
-        return [{"name": s["SN"], "length": s["LN"]} for s in sq]
+        """Reference contigs as [{name, length}].
+
+        Reads from bamnostic's authoritative binary reference block via the
+        pysam-compatible ``references``/``lengths`` tuples (always present,
+        regardless of whether the BAM carries an @SQ SAM *text* header). The
+        previous implementation used ``header.get('SQ')`` which raises
+        ``AttributeError`` on bamnostic's ``BAMheader`` object (it is not a
+        dict) — i.e. it broke for *every* BAM. Falls back to the raw refs
+        map, then to a dict-style header, for resilience across versions.
+        """
+        aln = self._aln
+        refs = getattr(aln, "references", None)
+        lengths = getattr(aln, "lengths", None)
+        if refs and lengths and len(refs) == len(lengths):
+            return [{"name": n, "length": int(l)} for n, l in zip(refs, lengths)]
+
+        # Fallback 1: bamnostic's binary header refs map {tid: (name, length)}
+        header = getattr(aln, "header", None)
+        refs_map = getattr(header, "refs", None)
+        if isinstance(refs_map, dict) and refs_map:
+            return [
+                {"name": v[0], "length": int(v[1])}
+                for _, v in sorted(refs_map.items())
+            ]
+
+        # Fallback 2: dict-style header (older/other bamnostic builds)
+        if hasattr(header, "get"):
+            sq = header.get("SQ", []) or []
+            return [{"name": s["SN"], "length": int(s["LN"])} for s in sq]
+
+        return []
 
     def _resolve_chrom(self, chrom: str) -> str:
-        chroms = self.chromosomes
-        names = [c["name"] for c in chroms]
+        """Map a requested chromosome name to one the BAM actually has.
+
+        Matches exact names first, then with/without a leading 'chr', then
+        case-insensitively, then by accession base (strip a trailing
+        '.version'). Returns the original name unchanged when nothing matches
+        (bamnostic.fetch then raises KeyError, which the callers turn into an
+        empty result) — it NEVER silently remaps to a different contig, which
+        previously made single-contig BAMs serve the wrong data under any
+        requested name.
+        """
+        names = [c["name"] for c in self.chromosomes]
         if chrom in names:
             return chrom
-        if len(names) == 1:
-            return names[0]
+
+        target = _norm_chrom(chrom)
         for name in names:
-            if name.replace("chr", "") == chrom.replace("chr", ""):
+            if _norm_chrom(name) == target:
                 return name
-            if name.lower() == chrom.lower():
-                return name
+
         chrom_base = chrom.rsplit(".", 1)[0] if "." in chrom else chrom
         for name in names:
             name_base = name.rsplit(".", 1)[0] if "." in name else name
@@ -146,9 +268,17 @@ class BamReader:
                     break
                 chunk_start = chunk_end
         except KeyError:
+            # Chromosome genuinely absent from this BAM's index — a legitimate
+            # empty result (e.g. a per-chromosome BAM viewed on another chrom).
             return []
-        except Exception:
-            pass
+        except Exception as e:
+            # Corrupt index / BGZF decode failure mid-fetch. The previous
+            # `except Exception: pass` returned whatever partial counts had
+            # accumulated — a coverage track that looks valid but is silently
+            # wrong. Convert to a clear message that data.py turns into an
+            # HTTP 503 the frontend surfaces as an "update failed" warning,
+            # rather than leaking a cryptic 'unpack requires a buffer' error.
+            raise RuntimeError(_fetch_error_msg(self.file_path)) from e
 
         result = []
         for i in range(n_bins):
@@ -191,6 +321,10 @@ class BamReader:
                     break
         except KeyError:
             return []  # chromosome not in index
+        except Exception as e:
+            # Corrupt/truncated BAM or index surfacing mid-fetch as a low-level
+            # struct/decode error — convert to a clear, actionable message.
+            raise RuntimeError(_fetch_error_msg(self.file_path)) from e
 
         _assign_rows(reads)
         return reads

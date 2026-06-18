@@ -67,7 +67,7 @@ class AppState:
                 }
                 self.readers[track_id] = None  # served directly from genome reader
 
-    def load_track(self, file_path: str, name: str) -> dict:
+    def load_track(self, file_path: str, name: str, index_path: str = None) -> dict:
         # Detect compound extensions (.vcf.gz / .wig.gz / .bedgraph.gz / .bdg.gz)
         # — Path.suffix only returns the last segment ('.gz') so a naive
         # check rejects every gzip-compressed track even though every
@@ -82,11 +82,23 @@ class AppState:
             ext = Path(file_path).suffix.lower()
         track_id = str(uuid.uuid4())[:8]
 
-        if ext in (".bam", ".cram", ".sam"):
+        if ext == ".bam":
             from readers.bam_reader import BamReader
-            reader = BamReader(file_path)
+            reader = BamReader(file_path, index_path=index_path)
             track_type = "reads"
-            file_format = ext.lstrip(".")
+            file_format = "bam"
+
+        elif ext in (".cram", ".sam"):
+            # bamnostic only reads BGZF-compressed BAM. Reject CRAM/SAM with a
+            # clear, actionable message instead of routing them to BamReader,
+            # which would fail with a cryptic low-level decode error (and, for
+            # CRAM, demand a .bai when the real index is .crai).
+            fmt = ext.lstrip(".").upper()
+            raise ValueError(
+                f"{fmt} alignments are not supported. Convert to a sorted, "
+                f"indexed BAM first:  samtools view -b in{ext} | "
+                f"samtools sort -o out.bam  &&  samtools index out.bam"
+            )
 
         elif ext in (".bw", ".bigwig", ".bedgraph", ".bdg", ".wig",
                      ".wig.gz", ".bedgraph.gz", ".bdg.gz"):

@@ -6,6 +6,42 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.9.10] — 2026-06-18
+
+### Fixed
+- **BAM reads now work at all.** The reader fetched the chromosome list with a
+  call (`header.get("SQ")`) that the bundled bamnostic library does not
+  support — it raised on every BAM, so coverage and read tracks silently
+  failed to render. Chromosomes are now read from bamnostic's authoritative
+  reference table (`references`/`lengths`), with fallbacks for other versions.
+  Verified end-to-end: a real BAM now returns its reads and coverage.
+- **Clear, actionable errors instead of cryptic tracebacks** for every bad-BAM
+  case: a missing, empty, or corrupt `.bai` index; a corrupt or truncated BAM;
+  and a BAM with no reference sequences. Each now tells the user what to do
+  (e.g. "Create one with: samtools index …") rather than leaking an internal
+  "unpack requires a buffer of 8 bytes" / "Wrong BAI magic header" message.
+- **Corrupt coverage is no longer shown as valid.** A decode error part-way
+  through a coverage scan used to be swallowed, leaving a flat/partial track
+  that looked real. Such errors now surface as a clear "update failed" warning.
+- **Wrong-contig data fixed.** A single-contig BAM previously served its one
+  contig's reads under *any* chromosome name requested. Chromosome-name
+  matching is now exact (with sensible `chr1`/`1` and accession-version
+  fallbacks) and never silently substitutes a different contig.
+
+### Added
+- **Load a BAM whose `.bai` lives in a different folder** (or has a
+  non-standard name) by supplying the index path explicitly — previously the
+  typed index path was ignored and the load failed unless the `.bai` sat right
+  next to the `.bam`.
+- A BAM uploaded without an index is now rejected up front with a clear
+  message, and the orphaned upload is cleaned up instead of lingering in the
+  temp directory.
+
+### Changed
+- CRAM and SAM are now rejected with a clear "convert to an indexed BAM"
+  message instead of being routed to a reader that cannot read them (which
+  produced an opaque low-level error, and for CRAM wrongly demanded a `.bai`).
+
 ## [2.9.9] — 2026-05-19
 
 ### Fixed

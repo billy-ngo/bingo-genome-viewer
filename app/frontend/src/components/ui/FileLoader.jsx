@@ -297,6 +297,12 @@ export default function FileLoader() {
       const otherUnknown = unknownFiles.filter(f => !f._indexOrphan)
       if (orphanBai.length) {
         setBamPrompt({ bamFile: null, indexFile: orphanBai[0], bamPath: '', indexPath: '', error: null })
+        if (orphanBai.length > 1) {
+          // We can only pair one index at a time — tell the user the rest were
+          // not handled rather than silently dropping them.
+          setErr(`Multiple .bai index files selected; pairing '${orphanBai[0].name}' first. ` +
+            `Load the others with their BAMs separately: ${orphanBai.slice(1).map(f => f.name).join(', ')}`)
+        }
       }
       if (otherUnknown.length) {
         setErr(`Unsupported: ${otherUnknown.map(f => f.name).join(', ')}`)
@@ -356,7 +362,7 @@ export default function FileLoader() {
     if (inputRef.current) inputRef.current.value = ''
   }
 
-  async function loadFromPath(rawPath) {
+  async function loadFromPath(rawPath, indexPath) {
     const path = rawPath.trim()
     if (!path) return
     setErr(null)
@@ -396,7 +402,7 @@ export default function FileLoader() {
       setLoading(true); setStatus(`Loading track from path...`)
       try {
         const name = path.split(/[/\\]/).pop() || path
-        const res = await tracksApi.loadPath(path, name)
+        const res = await tracksApi.loadPath(path, name, indexPath && indexPath.trim())
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
         commitTrack(info)
@@ -521,7 +527,9 @@ export default function FileLoader() {
     setBamPrompt(null)
 
     if (!bamFile && hasBamPath) {
-      await loadFromPath(hasBamPath)
+      // Pass the index path through so a .bai in a different folder (or with a
+      // non-standard name) is honored instead of silently dropped.
+      await loadFromPath(hasBamPath, hasBaiPath)
       return
     }
 
