@@ -46,6 +46,9 @@ export default function TrackSettings({ onClose }) {
   const hasCoverageBars = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads')
 
   const commonHeight = selectedTracks.length > 0 && selectedTracks.every(t => t.height === selectedTracks[0].height) ? selectedTracks[0].height : ''
+  const commonAutoHeight = selectedTracks.length > 0 && selectedTracks.every(t => (t.autoHeight !== false) === (selectedTracks[0].autoHeight !== false)) ? (selectedTracks[0].autoHeight !== false) : null
+  // Only reads + annotation tracks stack rows, so auto-fit only matters there.
+  const hasRowStacked = selectedTracks.some(t => t.track_type === 'reads' || t.track_type === 'annotations' || t.track_type === 'genome_annotations')
   const commonColor = selectedTracks.length > 0 && selectedTracks.every(t => t.color === selectedTracks[0].color) ? selectedTracks[0].color : '#888888'
   const commonVisible = selectedTracks.length > 0 && selectedTracks.every(t => t.visible === selectedTracks[0].visible) ? selectedTracks[0].visible : null
   const commonArrows = selectedTracks.length > 0 && selectedTracks.every(t => t.useArrows === selectedTracks[0].useArrows) ? selectedTracks[0].useArrows : null
@@ -112,16 +115,29 @@ export default function TrackSettings({ onClose }) {
           <div style={S.section}>
             <div style={S.sectionTitle}>Edit {selectedTracks.length} selected track{selectedTracks.length > 1 ? 's' : ''}</div>
 
-            {/* 1. Height */}
+            {/* 1. Height — a manual change turns auto-fit OFF so the value sticks */}
             <div style={S.controlRow}>
               <span style={S.controlLabel}>Height (px)</span>
               <input type="range" min={30} max={500} step={1} value={commonHeight || 80}
-                onChange={e => applyToSelected({ height: parseInt(e.target.value) })}
+                onChange={e => applyToSelected({ height: parseInt(e.target.value), autoHeight: false })}
                 style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
               <input type="text" inputMode="numeric" value={commonHeight} placeholder="mixed" style={{ ...S.input, width: 48 }}
-                onChange={e => { const v = parseInt(e.target.value); if (v >= 30 && v <= 500) applyToSelected({ height: v }) }}
-                onBlur={e => { const v = parseInt(e.target.value); if (!v || v < 30) applyToSelected({ height: 30 }); if (v > 500) applyToSelected({ height: 500 }) }} />
+                onChange={e => { const v = parseInt(e.target.value); if (v >= 30 && v <= 500) applyToSelected({ height: v, autoHeight: false }) }}
+                onBlur={e => { const v = parseInt(e.target.value); if (!v || v < 30) applyToSelected({ height: 30, autoHeight: false }); if (v > 500) applyToSelected({ height: 500, autoHeight: false }) }} />
             </div>
+            {/* Auto-fit height (reads + annotation tracks stack rows) */}
+            {hasRowStacked && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Auto height</span>
+                <label style={S.cbLabel}>
+                  <input type="checkbox" checked={commonAutoHeight === true}
+                    ref={el => { if (el) el.indeterminate = commonAutoHeight === null }}
+                    onChange={e => applyToSelected({ autoHeight: e.target.checked })}
+                    style={{ cursor: 'pointer' }} />
+                  Fit to show all rows
+                </label>
+              </div>
+            )}
 
             {/* 2. Visible */}
             <div style={S.controlRow}>

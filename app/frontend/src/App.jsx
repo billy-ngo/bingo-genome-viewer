@@ -21,7 +21,7 @@ import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.9.10'
+const APP_VERSION = '2.9.11'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {

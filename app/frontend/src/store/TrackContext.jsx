@@ -59,7 +59,8 @@ export function TrackProvider({ children }) {
       const isAnnotation = info.track_type === 'annotations' || info.track_type === 'genome_annotations'
       return [...prev, {
         ...info, color,
-        height: defaultHeight(info.track_type),
+        height: defaultTrackHeight(info.track_type),
+        autoHeight: true,   // auto-fit height to show all rows (see TrackPanel)
         visible: true,
         useArrows: true,
         scaleMax: null,
@@ -186,7 +187,7 @@ export function TrackProvider({ children }) {
       return [...prev, {
         ...info,
         name: cleanName(info.name) || info.name,
-        color: '#a5d6a7', height: 80, visible: true, useArrows: true,
+        color: '#a5d6a7', height: 80, autoHeight: true, visible: true, useArrows: true,
         userRemoved: false,
         annotationColors: null,
         targetChromosomes: info.targetChromosomes || null,
@@ -211,7 +212,7 @@ export function useTracks() {
   return useContext(TrackContext)
 }
 
-function defaultHeight(trackType) {
+export function defaultTrackHeight(trackType) {
   switch (trackType) {
     case 'reads': return 120
     case 'coverage': return 120

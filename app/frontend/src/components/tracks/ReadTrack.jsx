@@ -42,7 +42,10 @@ function log2Scale(val, max) {
   return Math.log2(val + 1) / Math.log2(max + 1)
 }
 
-export default function ReadTrack({ track, width, height, onWarning }) {
+export default function ReadTrack({ track, width, height, onWarning, onAutoHeight }) {
+  // Report 0 when there are no stacked rows (coverage mode / no reads) so the
+  // panel's auto-fit reverts to the default reads height.
+  const reportAuto = (px) => { if (onAutoHeight) onAutoHeight(px) }
   const canvasRef = useRef(null)
   const { region } = useBrowser()
   const { theme } = useTheme()
@@ -138,6 +141,9 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       return
     }
     if (!data) { if (onWarning) onWarning(null); return }
+    // Coverage mode and the empty/error states have no stacked rows \u2014 let the
+    // panel auto-fit revert to the default reads height.
+    if (data.bins) reportAuto(0)
 
     const regionStart = region.start
     const regionLen = region.end - region.start
@@ -196,12 +202,14 @@ export default function ReadTrack({ track, width, height, onWarning }) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
       ctx.fillText('No reads in region', 8, height / 2 + 4)
       if (onWarning) onWarning(null)
+      reportAuto(0)
       return
     }
     if (!visibleReads?.length) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
       ctx.fillText('All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
       if (onWarning) onWarning(null)
+      reportAuto(0)
       return
     }
 
@@ -214,6 +222,9 @@ export default function ReadTrack({ track, width, height, onWarning }) {
     // Calculate total rows and visible rows for scrolling
     const maxRow = Math.max(0, ...visibleReads.map(r => r.row))
     const totalRows = maxRow + 1
+    // Height needed to show every row (top pad + rows + bottom pad). The panel
+    // clamps this to [default, 500]; deeper pileups keep the scrollbar.
+    reportAuto(2 + totalRows * (rh + rg) + 4)
     const visibleRows = Math.floor(height / (rh + rg))
     const needsScroll = totalRows > visibleRows
     const trackW = needsScroll ? width - SCROLLBAR_WIDTH - 2 : width

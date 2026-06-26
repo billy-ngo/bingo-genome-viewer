@@ -41,6 +41,7 @@ export function collectSession(genome, region, tracks, themeName, customTheme, l
       file_format: t.file_format,
       color: t.color,
       height: t.height,
+      autoHeight: t.autoHeight !== false,
       visible: t.visible,
       useArrows: t.useArrows,
       scaleMax: t.scaleMax ?? null,
@@ -276,6 +277,7 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         ...t,
         name: cleanName(t.name) || t.name,
         height: t.height || 80,
+        autoHeight: t.autoHeight !== false,  // default on for older sessions
         visible: t.visible !== false,
         useArrows: t.useArrows !== false,
         scaleMax: t.scaleMax ?? null,

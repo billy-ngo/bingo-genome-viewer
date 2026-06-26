@@ -5,9 +5,9 @@
  * the appropriate canvas track component (Coverage, Annotation, Read, Variant).
  * Supports drag-to-reorder, inline color picker, and warning badges.
  */
-import React, { useRef, useState, useCallback, Component } from 'react'
+import React, { useRef, useState, useCallback, useEffect, Component } from 'react'
 import { createPortal } from 'react-dom'
-import { useTracks, DEFAULT_ANNOTATION_COLORS } from '../store/TrackContext'
+import { useTracks, DEFAULT_ANNOTATION_COLORS, defaultTrackHeight } from '../store/TrackContext'
 import { useTheme } from '../store/ThemeContext'
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction'
 import CoverageTrack from './tracks/CoverageTrack'
@@ -41,11 +41,32 @@ export default function TrackPanel({
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [showAnnotationPicker, setShowAnnotationPicker] = useState(false)
   const [warning, setWarning] = useState(null)
+  // Pixel height the track's content (stacked rows) needs to be fully visible.
+  // Reported by row-stacking tracks (reads, annotations); data-derived and
+  // independent of the current height, so applying it is loop-safe.
+  const [contentHeight, setContentHeight] = useState(null)
   const colorSwatchRef = useRef(null)
   const nativeColorRef = useRef(null)
 
   const isAnnotation = track.track_type === 'annotations' || track.track_type === 'genome_annotations'
   useCanvasInteraction(containerRef)
+
+  // Stable callback for tracks to report the height their content needs.
+  const onAutoHeight = useCallback((px) => {
+    setContentHeight(prev => (prev === px ? prev : px))
+  }, [])
+
+  // Auto-fit: when auto-height is on, grow the track to show every row (capped
+  // at AUTO_MAX_HEIGHT, never below the track type's default). Disabled the
+  // moment the user drags the resize handle or sets a height in Track Settings.
+  const AUTO_MAX_HEIGHT = 500
+  useEffect(() => {
+    if (track.autoHeight === false) return
+    if (contentHeight == null) return
+    const base = defaultTrackHeight(track.track_type)
+    const target = Math.min(AUTO_MAX_HEIGHT, Math.max(base, Math.ceil(contentHeight)))
+    if (target !== track.height) updateTrack(track.id, { height: target })
+  }, [contentHeight, track.autoHeight, track.height, track.track_type, track.id, updateTrack])
 
   // Ordered by hue: reds → oranges → yellows → greens → cyans → blues → purples → grays
   const QUICK_COLORS = [
@@ -80,9 +101,10 @@ export default function TrackPanel({
     e.preventDefault(); e.stopPropagation()
     const startY = e.clientY
     const startHeight = track.height
+    // A manual drag turns OFF auto-fit so the user's chosen height sticks.
     function onMouseMove(ev) {
       const newH = Math.max(30, Math.min(500, startHeight + (ev.clientY - startY)))
-      updateTrack(track.id, { height: newH })
+      updateTrack(track.id, { height: newH, autoHeight: false })
     }
     function onMouseUp() {
       window.removeEventListener('mousemove', onMouseMove)
@@ -95,7 +117,7 @@ export default function TrackPanel({
   }, [track.id, track.height, updateTrack])
 
   function renderTrack() {
-    const props = { track, width, height: track.height, onWarning: setWarning }
+    const props = { track, width, height: track.height, onWarning: setWarning, onAutoHeight }
     switch (track.track_type) {
       case 'reads': return <ReadTrack {...props} />
       case 'coverage': return <CoverageTrack {...props} />

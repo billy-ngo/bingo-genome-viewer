@@ -19,7 +19,10 @@ const ARROW_TIP = 8
 const NUCL_PX_THRESHOLD = 6  // min px/bp to show nucleotide letters
 const BASE_COLORS = { A: '#4caf50', T: '#f44336', C: '#2196f3', G: '#ff9800', N: '#9e9e9e' }
 
-export default function AnnotationTrack({ track, width, height, onWarning }) {
+export default function AnnotationTrack({ track, width, height, onWarning, onAutoHeight }) {
+  // Report 0 when there is nothing stacked so the panel's auto-fit reverts to
+  // the default annotation height.
+  const reportAuto = (px) => { if (onAutoHeight) onAutoHeight(px) }
   const canvasRef = useRef(null)
   const { region, navigateTo, setSelection } = useBrowser()
   const { tracks } = useTracks()
@@ -91,6 +94,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
         ctx.fillText('No features in region', 8, height / 2 + 4)
       }
       if (onWarning) onWarning(null)
+      reportAuto(0)
       return
     }
 
@@ -104,6 +108,7 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
       ctx.font = '11px Arial, Helvetica, sans-serif'
       ctx.fillText('All feature types hidden \u2014 enable types in Track Settings', 8, height / 2 + 4)
       if (onWarning) onWarning(null)
+      reportAuto(0)
       return
     }
 
@@ -226,6 +231,12 @@ export default function AnnotationTrack({ track, width, height, onWarning }) {
     }
 
     hitBoxesRef.current = boxes
+
+    // Height needed to show every row. rowEnds.length is the full row count
+    // (assigned before the height-clip check), so this is independent of the
+    // current height \u2014 the panel clamps it to [default, 500].
+    const stripPad = showBases ? 16 : 4
+    reportAuto(2 + rowEnds.length * (fh + ROW_GAP) + stripPad)
 
     if (onWarning) {
       const warnings = []

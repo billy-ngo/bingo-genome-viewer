@@ -6,6 +6,20 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.9.11] — 2026-06-18
+
+### Added
+- **Automatic track height.** Read and annotation tracks now grow automatically
+  to show all of their stacked rows, so you no longer have to drag each track
+  taller to reveal hidden reads or genes when several tracks are open. The
+  height fits the content, never shrinks below the track's default, and is
+  capped at 500 px (deeper pileups keep the scrollbar). It recomputes as you
+  zoom/pan and reverts to the default when a read track is showing coverage.
+- A manual resize (dragging the track's bottom edge) or setting a height in
+  Track Settings turns auto-fit off for that track, so your chosen height
+  sticks. Track Settings has a new **Auto height — "Fit to show all rows"**
+  toggle to turn it back on. The setting is saved with your session.
+
 ## [2.9.10] — 2026-06-18
 
 ### Fixed
