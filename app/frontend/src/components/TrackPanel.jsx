@@ -87,7 +87,11 @@ export default function TrackPanel({
   const width = containerWidth - labelWidth
 
   const S = {
-    row: { display: 'flex', borderBottom: `1px solid ${theme.border}`, minHeight: 40 },
+    // flexShrink:0 — the track list is a flex column; without this the browser
+    // shrinks each row below its set height when many tracks overflow the
+    // viewport, clipping the bottom of every track (e.g. BigWig bars) instead
+    // of letting the list scroll.
+    row: { display: 'flex', borderBottom: `1px solid ${theme.border}`, minHeight: 40, flexShrink: 0 },
     label: {
       width: labelWidth, minWidth: labelWidth, background: theme.panelBg, borderRight: `1px solid ${theme.border}`,
       display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '4px 8px', overflow: 'hidden',

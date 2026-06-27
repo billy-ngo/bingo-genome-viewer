@@ -22,7 +22,7 @@ import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.10.0'
+const APP_VERSION = '2.10.1'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -57,7 +57,7 @@ function BingoLogo({ size = 32 }) {
 function SkeletonTrack({ theme, labelWidth }) {
   const trackH = 60
   return (
-    <div style={{ display: 'flex', borderBottom: `1px solid ${theme.border}`, height: trackH, opacity: 0.45 }}>
+    <div style={{ display: 'flex', borderBottom: `1px solid ${theme.border}`, height: trackH, opacity: 0.45, flexShrink: 0 }}>
       <div
         data-tour="skeleton-track-label"
         style={{
@@ -558,7 +558,7 @@ function BrowserApp() {
           </div>
         ) : (
           <>
-            <div style={{ display: 'flex' }}>
+            <div style={{ display: 'flex', flexShrink: 0 }}>
               <div style={{
                 width: labelWidth, minWidth: labelWidth, background: theme.panelBg,
                 borderRight: `1px solid ${theme.border}`, position: 'relative',

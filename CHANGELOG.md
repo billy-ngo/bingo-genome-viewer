@@ -6,6 +6,18 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.10.1] — 2026-06-27
+
+### Fixed
+- Tracks are no longer clipped at the bottom when many are loaded at once
+  (most visible on BigWig/coverage tracks, whose bars sit at the bottom). The
+  track list is a vertical flexbox, and the track rows lacked `flex-shrink: 0`,
+  so once the tracks overflowed the viewport the browser *compressed* each row
+  below its set height — cutting off the bottom of every track — instead of
+  letting the list scroll. Rows, the ruler, and the placeholder track now keep
+  their full height and the list scrolls as intended. (The auto-fit height
+  added in 2.9.11 made this more noticeable by increasing total height.)
+
 ## [2.10.0] — 2026-06-26
 
 ### Added
