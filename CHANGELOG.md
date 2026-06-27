@@ -6,6 +6,28 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.10.0] — 2026-06-26
+
+### Added
+- **Gene/feature search.** A magnifying-glass button next to the chromosome
+  scrubber opens a search box that finds genes and features by name, gene,
+  `locus_tag`, or product across the loaded genome's annotations and every
+  uploaded GFF/GTF/BED track. Results show type and location; click one (or
+  press Enter / arrow keys) to jump straight to it with the feature framed and
+  selected. Backend endpoint: `GET /api/genome/search?q=…`.
+- **Ranked peak annotations.** Upload a `.gff` (or `.bed`) of ChIP peaks and
+  each peak is drawn across its full width and labeled with its **enrichment
+  rank**. Ranking is computed automatically: peaks are ordered by enrichment
+  (the GFF score column, or an `enrichment=` / `fold_enrichment=` /
+  `signalValue=` attribute) and numbered 1 (most enriched) … N; a file that is
+  already pre-ranked (numeric feature name) is honored as-is. Plain gene/CDS
+  annotations are never ranked.
+- **Rank labels over coverage tracks.** Peak rank numbers also float above the
+  matching positions on your signal/coverage tracks, so you can see which peak
+  ranks where in the data. Labels are collision-aware — when peaks are close or
+  you zoom out, the most-enriched peak's label wins so the view stays readable.
+  Hovering a peak shows its rank and enrichment value.
+
 ## [2.9.11] — 2026-06-18
 
 ### Added

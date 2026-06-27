@@ -101,3 +101,12 @@ class GenomeReader:
             if fmt == "genbank":
                 types.update(reader.feature_types)
         return sorted(types)
+
+    def search_features(self, q_lower: str, limit: int = 50) -> list[dict]:
+        """Search GenBank annotations across all sub-readers for a gene/feature."""
+        results = []
+        for fmt, reader in self._sub_readers:
+            if fmt == "genbank" and hasattr(reader, "search_features"):
+                results.extend(reader.search_features(q_lower, limit))
+        results.sort(key=lambda r: (-r["relevance"], r["start"]))
+        return results[:limit]

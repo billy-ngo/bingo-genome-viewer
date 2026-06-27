@@ -10,6 +10,7 @@ import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTrackData, getCachedDataForTrack } from '../../hooks/useTrackData'
+import { usePeaks } from '../../store/PeakContext'
 import { genomeApi } from '../../api/client'
 
 const FEAT_HEIGHT = 16
@@ -28,12 +29,28 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
   const { tracks } = useTracks()
   const { theme } = useTheme()
   const { data, loading, error } = useTrackData(track, region, width)
+  const { publishPeaks, clearPeaks } = usePeaks()
   const useArrows = track.useArrows !== false
   const showNucleotides = track.showNucleotides !== false
   const hitBoxesRef = useRef([])   // [{feat, x, y, w, h}, ...]
   const [tooltip, setTooltip] = useState(null)  // { feat, x, y }
   const [refSeq, setRefSeq] = useState(null)
   const refFetchRef = useRef(null)
+
+  // Publish ranked peak features so coverage/read tracks can overlay rank
+  // labels at the matching positions. Cleared when this track has no ranks
+  // (e.g. a plain gene track) or unmounts.
+  useEffect(() => {
+    // Tag each peak with the chromosome it was fetched for so the overlay can
+    // strictly exclude stale peaks right after a chromosome switch (before this
+    // track re-fetches the new chromosome's features).
+    const peaks = (data?.features || [])
+      .filter(f => f.rank != null)
+      .map(f => (f.chrom ? f : { ...f, chrom: data?.chrom }))
+    if (peaks.length) publishPeaks(track.id, peaks)
+    else clearPeaks(track.id)
+  }, [data, track.id, publishPeaks, clearPeaks])
+  useEffect(() => () => clearPeaks(track.id), [track.id, clearPeaks])
 
   // Fetch reference sequence when zoomed in enough
   useEffect(() => {
@@ -213,6 +230,19 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
             }
           }
         }
+      } else if (feat.rank != null) {
+        // Peak rank label — the rank number, centered on the peak bar.
+        const rankLabel = String(feat.rank)
+        ctx.fillStyle = '#fff'
+        ctx.font = 'bold 10px Arial, Helvetica, sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        const tw = ctx.measureText(rankLabel).width
+        const cx = Math.max(x + w / 2, 3 + tw / 2)  // keep visible if peak starts off-screen left
+        if (w >= tw + 2) {
+          ctx.fillText(rankLabel, Math.min(cx, width - tw / 2 - 1), y + fh / 2)
+        }
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
       } else if (w > 20) {
         // Feature name label (only when not showing nucleotides)
         ctx.fillStyle = '#fff'
@@ -322,8 +352,11 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
       wordBreak: 'break-word',
     }}>
       <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 2 }}>
-        {tooltip.feat.name || tooltip.feat.feature_type}
+        {tooltip.feat.rank != null ? `Peak #${tooltip.feat.rank}` : (tooltip.feat.name || tooltip.feat.feature_type)}
       </div>
+      {tooltip.feat.rank != null && (
+        <TooltipRow label="Rank" value={`#${tooltip.feat.rank}${tooltip.feat.enrichment != null ? ` (enrichment ${Number(tooltip.feat.enrichment).toFixed(2)})` : ''}`} />
+      )}
       <TooltipRow label="Type" value={tooltip.feat.feature_type} />
       <TooltipRow label="Strand" value={tooltip.feat.strand || '.'} />
       <TooltipRow label="Location" value={`${tooltip.feat.start.toLocaleString()}\u2013${tooltip.feat.end.toLocaleString()}`} />

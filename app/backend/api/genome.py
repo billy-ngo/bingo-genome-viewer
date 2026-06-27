@@ -126,6 +126,20 @@ def get_chromosomes():
     return {"chromosomes": app_state.genome.chromosomes}
 
 
+@router.get("/search")
+def search_features(q: str = "", limit: int = 30):
+    """Search the genome's annotations and all loaded annotation/peak tracks
+    for a gene/feature by name, gene, locus_tag, or product."""
+    q = (q or "").strip()
+    if len(q) < 1:
+        return {"query": q, "results": []}
+    try:
+        results = app_state.search(q, limit=max(1, min(limit, 100)))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"query": q, "results": results}
+
+
 @router.get("/sequence")
 def get_sequence(chrom: str, start: int, end: int):
     if app_state.genome is None:

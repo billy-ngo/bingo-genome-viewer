@@ -45,6 +45,58 @@ class GenBankReader:
                     types.add(feat.type)
         return sorted(types)
 
+    def _build_search_index(self):
+        """Build a flat, lowercased index of searchable feature names once."""
+        index = []
+        for chrom, record in self._records.items():
+            for feat in record.features:
+                if feat.type == "source":
+                    continue
+                quals = feat.qualifiers
+                names = []
+                for k in ("gene", "locus_tag", "product", "Name", "note"):
+                    v = quals.get(k)
+                    if not v:
+                        continue
+                    names.append(v[0] if isinstance(v, list) and v else str(v))
+                if not names:
+                    continue
+                try:
+                    fstart = int(feat.location.start)
+                    fend = int(feat.location.end)
+                except Exception:
+                    continue
+                for nm in names:
+                    index.append((str(nm).lower(), str(nm), chrom, fstart, fend, feat.type))
+        return index
+
+    def search_features(self, q_lower: str, limit: int = 50) -> list[dict]:
+        """Find genome features whose gene/locus_tag/product/name matches the
+        query. relevance: 3=exact, 2=prefix, 1=substring."""
+        if getattr(self, "_search_index", None) is None:
+            self._search_index = self._build_search_index()
+        # De-dup by (chrom, start, end) keeping the best relevance.
+        best_by_loc: dict[tuple, dict] = {}
+        for nm_lower, nm, chrom, start, end, ftype in self._search_index:
+            if q_lower == nm_lower:
+                rel = 3
+            elif nm_lower.startswith(q_lower):
+                rel = 2
+            elif q_lower in nm_lower:
+                rel = 1
+            else:
+                continue
+            key = (chrom, start, end)
+            prev = best_by_loc.get(key)
+            if prev is None or rel > prev["relevance"]:
+                best_by_loc[key] = {
+                    "name": nm, "matched": nm, "chrom": chrom,
+                    "start": start, "end": end,
+                    "feature_type": ftype, "relevance": rel,
+                }
+        results = sorted(best_by_loc.values(), key=lambda r: (-r["relevance"], r["start"]))
+        return results[:limit]
+
     def get_sequence(self, chrom: str, start: int, end: int) -> str:
         """Return subsequence [start, end) (0-based half-open)."""
         record = self._get_record(chrom)

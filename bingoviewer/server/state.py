@@ -135,6 +135,9 @@ class AppState:
             "file_path": file_path,
             "track_type": track_type,
             "file_format": file_format,
+            # True when this annotation track carries enrichment-ranked peaks,
+            # so the frontend can overlay rank labels on coverage tracks.
+            "has_ranks": bool(getattr(reader, "has_ranks", False)),
         }
         # Atomic write: keep tracks[] and readers[] consistent so a
         # concurrent fetch can't observe a track that exists in self.tracks
@@ -143,6 +146,51 @@ class AppState:
             self.tracks[track_id] = info
             self.readers[track_id] = reader
         return info
+
+    def search(self, query: str, limit: int = 50) -> list:
+        """Search the loaded genome's annotations and all annotation/peak
+        tracks for features matching `query` (gene name, locus_tag, product,
+        feature name). Returns ranked, de-duplicated result dicts."""
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        results = []
+
+        if self.genome is not None and hasattr(self.genome, "search_features"):
+            with self._genome_lock:
+                try:
+                    for r in self.genome.search_features(q, limit):
+                        r = dict(r)
+                        r.setdefault("source", "genome")
+                        results.append(r)
+                except Exception:
+                    pass
+
+        for tid, reader in list(self.readers.items()):
+            if reader is None or not hasattr(reader, "search_features"):
+                continue
+            track = self.tracks.get(tid, {})
+            with self.track_lock(tid):
+                try:
+                    track_results = reader.search_features(q, limit)
+                except Exception:
+                    track_results = []
+            for r in track_results:
+                r = dict(r)
+                r["source"] = track.get("name", "track")
+                r["track_id"] = tid
+                results.append(r)
+
+        # Sort by relevance then position, de-dup by location+name.
+        seen = set()
+        deduped = []
+        for r in sorted(results, key=lambda r: (-r.get("relevance", 0), r.get("start", 0))):
+            key = (r.get("chrom"), r.get("start"), r.get("end"), r.get("name"))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(r)
+        return deduped[:limit]
 
     def check_track_compatibility(self, track_id: str) -> dict:
         """Compare a track reader's chromosomes against the loaded genome.

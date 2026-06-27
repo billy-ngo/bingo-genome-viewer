@@ -8,6 +8,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react'
 import { BrowserProvider, useBrowser } from './store/BrowserContext'
 import { TrackProvider, useTracks, cleanName } from './store/TrackContext'
 import { ThemeProvider, useTheme } from './store/ThemeContext'
+import { PeakProvider } from './store/PeakContext'
 import { genomeApi } from './api/client'
 import FileLoader from './components/ui/FileLoader'
 import TrackSettings from './components/ui/TrackSettings'
@@ -21,7 +22,7 @@ import TrackPanel from './components/TrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.9.11'
+const APP_VERSION = '2.10.0'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -842,7 +843,9 @@ export default function App() {
     <ThemeProvider>
       <BrowserProvider>
         <TrackProvider>
-          <BrowserApp />
+          <PeakProvider>
+            <BrowserApp />
+          </PeakProvider>
         </TrackProvider>
       </BrowserProvider>
     </ThemeProvider>

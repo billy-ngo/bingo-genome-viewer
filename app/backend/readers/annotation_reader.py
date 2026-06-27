@@ -13,6 +13,13 @@ class BedReader:
         self._features: dict[str, list] = {}
         self._chroms: dict[str, int] = {}
         self._load()
+        # Rank peak-like features by enrichment (BED col-5 score) across the file.
+        self.has_ranks = _assign_ranks(
+            [f for fs in self._features.values() for f in fs]
+        )
+
+    def search_features(self, q_lower: str, limit: int = 50) -> list[dict]:
+        return _search_in_chrom_map(self._features, q_lower, limit)
 
     def _load(self):
         with open(self.file_path) as f:
@@ -73,6 +80,14 @@ class GtfReader:
         self._genes: dict[str, list] = {}
         self._chroms: dict[str, int] = {}
         self._load()
+        # Rank peak-like features by enrichment across the file (genes have a
+        # '.' score so they are never ranked).
+        self.has_ranks = _assign_ranks(
+            [f for fs in self._genes.values() for f in fs]
+        )
+
+    def search_features(self, q_lower: str, limit: int = 50) -> list[dict]:
+        return _search_in_chrom_map(self._genes, q_lower, limit)
 
     def _load(self):
         transcripts: dict[str, dict] = {}
@@ -95,7 +110,7 @@ class GtfReader:
                     name = attrs.get("gene_name") or attrs.get("gene_id") or ftype
                     feat = {
                         "start": start, "end": end, "strand": strand,
-                        "name": name, "feature_type": ftype,
+                        "name": name, "feature_type": ftype, "score": score,
                         "attributes": attrs, "sub_features": [],
                     }
                     self._genes.setdefault(chrom, []).append(feat)
@@ -105,7 +120,7 @@ class GtfReader:
                     name = attrs.get("transcript_name") or attrs.get("gene_name") or tid
                     transcripts[tid] = {
                         "start": start, "end": end, "strand": strand,
-                        "name": name, "feature_type": ftype,
+                        "name": name, "feature_type": ftype, "score": score,
                         "attributes": attrs, "sub_features": [],
                         "_chrom": chrom,
                     }
@@ -114,13 +129,26 @@ class GtfReader:
                     tid = attrs.get("transcript_id", "")
                     sf = {
                         "start": start, "end": end, "strand": strand,
-                        "name": ftype, "feature_type": ftype,
+                        "name": ftype, "feature_type": ftype, "score": score,
                         "attributes": attrs, "sub_features": [],
                     }
                     if tid in transcripts:
                         transcripts[tid]["sub_features"].append(sf)
                     else:
                         orphans.setdefault(chrom, []).append(sf)
+
+                else:
+                    # Unknown feature type (e.g. a 'peak'/'region' from a
+                    # peak-caller GFF written in GTF-attribute style) — keep it
+                    # as a standalone top-level feature so it can be ranked and
+                    # displayed instead of silently dropped.
+                    name = (attrs.get("Name") or attrs.get("name")
+                            or attrs.get("gene_id") or ftype)
+                    self._genes.setdefault(chrom, []).append({
+                        "start": start, "end": end, "strand": strand,
+                        "name": name, "feature_type": ftype, "score": score,
+                        "attributes": attrs, "sub_features": [],
+                    })
 
         # Attach transcripts to gene lists (or add directly if no gene parent)
         for tid, tr in transcripts.items():
@@ -171,6 +199,13 @@ class Gff3Reader:
         self._top_level: dict[str, list] = {}
         self._chroms: dict[str, int] = {}
         self._load()
+        # Rank peak-like features (those carrying an enrichment score) globally.
+        self.has_ranks = _assign_ranks(
+            [f for fs in self._top_level.values() for f in fs]
+        )
+
+    def search_features(self, q_lower: str, limit: int = 50) -> list[dict]:
+        return _search_in_chrom_map(self._top_level, q_lower, limit)
 
     def _load(self):
         by_id: dict[str, dict] = {}
@@ -193,7 +228,7 @@ class Gff3Reader:
                 name = attrs.get("Name") or attrs.get("gene") or attrs.get("locus_tag") or ftype
                 feat = {
                     "start": start, "end": end, "strand": strand,
-                    "name": name, "feature_type": ftype,
+                    "name": name, "feature_type": ftype, "score": score,
                     "attributes": attrs, "sub_features": [],
                     "_chrom": chrom,
                 }
@@ -271,6 +306,126 @@ def _parse_gff3_attrs(raw: str) -> dict:
             k, v = item.split("=", 1)
             attrs[k.strip()] = v.strip()
     return attrs
+
+
+# ── Peak ranking + search helpers ─────────────────────────────────────────────
+
+# Attribute keys (lowercased) that may carry a peak's enrichment value, in
+# priority order. The score column is captured onto feat["score"].
+_ENRICHMENT_KEYS = ("enrichment", "fold_enrichment", "foldenrichment", "fold",
+                    "signalvalue", "signal", "score")
+
+
+def _feature_enrichment(feat: dict):
+    """Return a peak's numeric enrichment value, or None if it has none.
+
+    Looks at the captured score column first (feat['score']), then common
+    enrichment attributes. A literal '.', '', or '0' score counts as "no
+    enrichment" so plain gene/CDS GFFs (score '.') are never ranked.
+    """
+    candidates = []
+    sc = feat.get("score")
+    if sc not in (None, "", ".", "0", 0):
+        candidates.append(sc)
+    attrs = feat.get("attributes") or {}
+    lowered = {k.lower(): v for k, v in attrs.items()}
+    for key in _ENRICHMENT_KEYS:
+        if key in lowered and lowered[key] not in (None, "", ".", "0"):
+            candidates.append(lowered[key])
+    for v in candidates:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _assign_ranks(all_feats: list) -> bool:
+    """Assign a global rank (1 = most enriched) to peak-like features in place.
+
+    Strategy (mirrors the clarified requirement):
+      1. If any feature carries an enrichment value, rank ALL such features by
+         it descending and set feat['rank'] / feat['enrichment'].
+      2. Otherwise, if most features have a purely-numeric name (a pre-ranked
+         file like a QuEST/MACS peak BED whose col-4 name IS the rank), use
+         that number as the rank.
+    Returns True if any rank was assigned.
+    """
+    scored = []
+    for f in all_feats:
+        e = _feature_enrichment(f)
+        if e is not None:
+            scored.append((e, f))
+    if scored:
+        scored.sort(key=lambda x: x[0], reverse=True)
+        for i, (e, f) in enumerate(scored):
+            f["rank"] = i + 1
+            f["enrichment"] = e
+        return True
+
+    numeric = [f for f in all_feats if str(f.get("name", "")).strip().isdigit()]
+    if numeric and len(numeric) >= max(2, len(all_feats) // 2):
+        for f in numeric:
+            f["rank"] = int(str(f["name"]).strip())
+        return True
+    return False
+
+
+# Attribute keys (case-insensitive) searched for a gene/feature name match.
+_SEARCH_ATTR_KEYS = ("gene", "gene_name", "name", "locus_tag", "product", "id",
+                     "transcript_name", "transcript_id", "gene_id")
+
+
+def _match_feature(feat: dict, q_lower: str):
+    """Return (relevance, matched_text) if the feature matches the query, else
+    None. relevance: 3=exact, 2=prefix, 1=substring (higher is better)."""
+    candidates = [str(feat.get("name") or "")]
+    attrs = feat.get("attributes") or {}
+    for k, v in attrs.items():
+        if k.lower() in _SEARCH_ATTR_KEYS and v:
+            candidates.append(str(v))
+    best = None
+    for c in candidates:
+        cl = c.lower()
+        if not cl:
+            continue
+        if cl == q_lower:
+            rel = 3
+        elif cl.startswith(q_lower):
+            rel = 2
+        elif q_lower in cl:
+            rel = 1
+        else:
+            continue
+        if best is None or rel > best[0]:
+            best = (rel, c)
+    return best
+
+
+def _search_in_chrom_map(features_by_chrom: dict, q_lower: str, limit: int) -> list[dict]:
+    """Search a {chrom: [feature]} map (and one level of sub_features) for the
+    query, returning the best matches as result dicts sorted by relevance."""
+    results = []
+    for chrom, feats in features_by_chrom.items():
+        for f in feats:
+            m = _match_feature(f, q_lower)
+            if m is None:
+                for sf in (f.get("sub_features") or []):
+                    m = _match_feature(sf, q_lower)
+                    if m:
+                        break
+            if m:
+                results.append({
+                    "name": f.get("name") or m[1],
+                    "matched": m[1],
+                    "chrom": chrom,
+                    "start": int(f["start"]),
+                    "end": int(f["end"]),
+                    "feature_type": f.get("feature_type", ""),
+                    "relevance": m[0],
+                })
+    results.sort(key=lambda r: (-r["relevance"], r["start"]))
+    return results[:limit]
 
 
 def _sniff_gff_dialect(file_path: str) -> str:

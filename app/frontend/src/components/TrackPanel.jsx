@@ -16,6 +16,7 @@ import AnnotationTrack from './tracks/AnnotationTrack'
 import VariantTrack from './tracks/VariantTrack'
 import TrackWarningBadge from './ui/TrackWarningBadge'
 import SelectionOverlay from './ui/SelectionOverlay'
+import PeakRankOverlay from './ui/PeakRankOverlay'
 import { getLiveTrackData } from '../hooks/useTrackData'
 
 class TrackErrorBoundary extends Component {
@@ -261,6 +262,9 @@ export default function TrackPanel({
       </div>
       <div style={S.trackArea} ref={containerRef} data-export-track-id={track.id}>
         <TrackErrorBoundary>{renderTrack()}</TrackErrorBoundary>
+        {(track.track_type === 'coverage' || track.track_type === 'reads') && (
+          <PeakRankOverlay width={width} height={track.height} />
+        )}
         <SelectionOverlay
           width={width}
           height={track.height}

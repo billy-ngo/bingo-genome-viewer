@@ -8,13 +8,83 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useBrowser } from '../store/BrowserContext'
 import { useTheme } from '../store/ThemeContext'
+import { genomeApi } from '../api/client'
 
 export default function NavigationBar() {
   const { theme } = useTheme()
-  const { genome, region, selection, navigateTo, zoom, pan } = useBrowser()
+  const { genome, region, selection, navigateTo, zoom, pan, setSelection } = useBrowser()
   const [coordText, setCoordText] = useState('')
   const scrubberRef = useRef(null)
   const draggingRef = useRef(false)
+
+  // ── Gene/feature search ────────────────────────────────────────
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [activeIdx, setActiveIdx] = useState(0)
+  const [searching, setSearching] = useState(false)
+  const searchInputRef = useRef(null)
+  const searchAbortRef = useRef(null)
+  const searchDebounceRef = useRef(null)
+  const searchContainerRef = useRef(null)
+
+  // Close the search popover on an outside click
+  useEffect(() => {
+    if (!searchOpen) return
+    function onDocMouseDown(e) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) {
+        setSearchOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [searchOpen])
+
+  // Debounced query → backend search
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    const q = query.trim()
+    if (!q) { setResults([]); setSearching(false); return }
+    setSearching(true)
+    searchDebounceRef.current = setTimeout(async () => {
+      if (searchAbortRef.current) searchAbortRef.current.abort()
+      const controller = new AbortController()
+      searchAbortRef.current = controller
+      try {
+        const res = await genomeApi.search(q, 30, { signal: controller.signal })
+        setResults(res.data.results || [])
+        setActiveIdx(0)
+      } catch (e) {
+        if (e.name !== 'CanceledError' && e.code !== 'ERR_CANCELED') setResults([])
+      } finally {
+        if (!controller.signal.aborted) setSearching(false)
+      }
+    }, 220)
+    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current) }
+  }, [query])
+
+  // Focus the input when the search opens
+  useEffect(() => {
+    if (searchOpen && searchInputRef.current) searchInputRef.current.focus()
+  }, [searchOpen])
+
+  const goToFeature = useCallback((feat) => {
+    if (!feat) return
+    const featLen = Math.max(1, feat.end - feat.start)
+    const context = featLen * 0.4   // ~70% of the view is the feature
+    navigateTo(feat.chrom, feat.start - context, feat.end + context)
+    if (setSelection) setSelection({ chrom: feat.chrom, start: feat.start, end: feat.end })
+    setSearchOpen(false)
+    setQuery('')
+    setResults([])
+  }, [navigateTo, setSelection])
+
+  const onSearchKeyDown = useCallback((e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(results.length - 1, i + 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx(i => Math.max(0, i - 1)) }
+    else if (e.key === 'Enter') { e.preventDefault(); if (results[activeIdx]) goToFeature(results[activeIdx]) }
+    else if (e.key === 'Escape') { e.preventDefault(); setSearchOpen(false); setQuery(''); setResults([]) }
+  }, [results, activeIdx, goToFeature])
 
   // Build short label map: full name → "chr1", "chr2", etc.
   const chromMap = useMemo(() => {
@@ -156,6 +226,73 @@ export default function NavigationBar() {
           <line x1="9" y1="6" x2="12" y2="6" />
         </svg>
       </button>
+
+      {/* Gene / feature search */}
+      <div ref={searchContainerRef} style={{ position: 'relative', display: 'flex' }}>
+        <button
+          style={{ ...S.btn, display: 'flex', alignItems: 'center', justifyContent: 'center', background: searchOpen ? theme.btnActive || theme.borderAccent : theme.btnBg }}
+          onClick={() => setSearchOpen(o => !o)}
+          title="Search genes / features (name, locus_tag, product, peak)"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" style={{ display: 'block' }}>
+            <circle cx="6.8" cy="6.8" r="4.5" />
+            <line x1="10.4" y1="10.4" x2="15" y2="15" />
+          </svg>
+        </button>
+        {searchOpen && (
+          <div style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 1200,
+            background: theme.panelBg, border: `1px solid ${theme.borderAccent}`,
+            borderRadius: 6, boxShadow: '0 6px 20px rgba(0,0,0,0.5)', width: 320,
+            overflow: 'hidden',
+          }}>
+            <input
+              ref={searchInputRef}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={onSearchKeyDown}
+              placeholder="Gene, locus_tag, product, peak rank…"
+              style={{
+                width: '100%', boxSizing: 'border-box', border: 'none',
+                borderBottom: `1px solid ${theme.border}`, background: theme.inputBg,
+                color: theme.textPrimary, padding: '8px 10px', fontSize: 13, outline: 'none',
+              }}
+            />
+            <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+              {query.trim() && !searching && results.length === 0 && (
+                <div style={{ padding: '10px 12px', fontSize: 12, color: theme.textTertiary }}>No matches</div>
+              )}
+              {searching && results.length === 0 && (
+                <div style={{ padding: '10px 12px', fontSize: 12, color: theme.textTertiary }}>Searching…</div>
+              )}
+              {results.map((r, i) => {
+                const shortChrom = chromMap.toShort[r.chrom] || r.chrom
+                return (
+                  <div
+                    key={`${r.chrom}:${r.start}-${r.end}:${r.name}:${i}`}
+                    onMouseDown={(e) => { e.preventDefault(); goToFeature(r) }}
+                    onMouseEnter={() => setActiveIdx(i)}
+                    style={{
+                      padding: '6px 10px', cursor: 'pointer', fontSize: 12,
+                      background: i === activeIdx ? (theme.selectedRow || 'rgba(255,255,255,0.08)') : 'transparent',
+                      borderBottom: `1px solid ${theme.border}`,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ color: theme.textPrimary, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+                      <span style={{ color: theme.textTertiary, flexShrink: 0, fontSize: 10 }}>{r.feature_type}</span>
+                    </div>
+                    <div style={{ color: theme.textSecondary, fontSize: 10, marginTop: 1, fontFamily: 'monospace' }}>
+                      {shortChrom}:{r.start.toLocaleString()}-{r.end.toLocaleString()}
+                      {r.source && r.source !== 'genome' && <span style={{ color: theme.textTertiary }}> · {r.source}</span>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Chromosome scrubber */}
       {region && chromLen > 0 && (

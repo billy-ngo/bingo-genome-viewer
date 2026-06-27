@@ -87,6 +87,10 @@ export const genomeApi = {
   chromosomes: () => api.get('/genome/chromosomes'),
   sequence: (chrom, start, end, opts = {}) =>
     api.get('/genome/sequence', { params: { chrom, start, end }, signal: opts.signal }),
+  // Gene/feature search across the genome annotations and all loaded
+  // annotation/peak tracks.
+  search: (q, limit = 30, opts = {}) =>
+    api.get('/genome/search', { params: { q, limit }, signal: opts.signal }),
 }
 
 export const tracksApi = {
