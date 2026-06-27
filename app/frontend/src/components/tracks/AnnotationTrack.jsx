@@ -185,7 +185,9 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
           if (featMid >= o.start && featMid < o.end) { regionBarColor = o.barColor; break }
         }
       }
-      const color = regionBarColor || featureColor(feat.feature_type, track, theme)
+      // Precedence: an explicit region recolor → the file's own itemRgb colour
+      // (e.g. BED9 peaks/summits) → the per-type annotation colour.
+      const color = regionBarColor || feat.color || featureColor(feat.feature_type, track, theme)
 
       if (feat.sub_features && feat.sub_features.length > 0) {
         ctx.fillStyle = color + '66'

@@ -6,6 +6,24 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.10.2] — 2026-06-27
+
+### Fixed
+- Peak ranking now handles QuEST/MACS peak BEDs that interleave wide **peak**
+  rows (named `1`, `2`, `3`… = the rank) with narrow **summit** rows
+  (`P1`, `P2`…). Previously every row — including the 4 bp summits — was
+  ranked by enrichment, which pushed each peak's displayed rank out of step
+  (peak `2` showed as rank 3, peak `3` as rank 5, …). When a file is already
+  numbered in its name column, that number is now used directly as the rank,
+  and auxiliary rows like the summits are left unranked so they don't shift
+  the peak numbers. Files that carry only an enrichment score (no rank in the
+  name) are still ranked by enrichment as before.
+
+### Added
+- BED `itemRgb` (column 9) is now honored, so a file's own per-feature colors
+  render as written — e.g. QuEST peaks in blue and summits in red — both
+  on screen and in SVG/PNG export.
+
 ## [2.10.1] — 2026-06-27
 
 ### Fixed

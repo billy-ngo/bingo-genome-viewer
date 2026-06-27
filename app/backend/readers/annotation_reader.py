@@ -47,6 +47,10 @@ class BedReader:
                     "attributes": {"score": score},
                     "sub_features": [],
                 }
+                # BED9 itemRgb (col 9): honor the file's per-feature colour so
+                # e.g. QuEST peaks (blue) and summits (red) render as written.
+                if len(parts) > 8 and re.match(r"^\d{1,3},\d{1,3},\d{1,3}$", parts[8].strip()):
+                    feat["color"] = f"rgb({parts[8].strip()})"
                 self._features.setdefault(chrom, []).append(feat)
                 self._chroms[chrom] = max(self._chroms.get(chrom, 0), end)
 
@@ -341,16 +345,40 @@ def _feature_enrichment(feat: dict):
 
 
 def _assign_ranks(all_feats: list) -> bool:
-    """Assign a global rank (1 = most enriched) to peak-like features in place.
+    """Assign each peak its enrichment rank (1 = most enriched), in place.
 
-    Strategy (mirrors the clarified requirement):
-      1. If any feature carries an enrichment value, rank ALL such features by
-         it descending and set feat['rank'] / feat['enrichment'].
-      2. Otherwise, if most features have a purely-numeric name (a pre-ranked
-         file like a QuEST/MACS peak BED whose col-4 name IS the rank), use
-         that number as the rank.
+    Strategy (handles QuEST/MACS peak BEDs whose col-4 name is already the
+    rank, and which often interleave the wide *peak* rows with 4 bp *summit*
+    rows named P1, P2, …):
+
+      1. PRE-RANKED FILE — if features have purely-numeric names that look
+         like a 1..N ranking (distinct, contiguous-ish), use that number as
+         the rank. Only those features are ranked; auxiliary rows (e.g. the
+         'P#' summits) are left unranked so they don't shift the peak numbers.
+         The enrichment value is still attached for the tooltip.
+      2. ENRICHMENT-ONLY FILE — otherwise, if features carry an enrichment
+         value, rank ALL of them by it descending.
+
     Returns True if any rank was assigned.
     """
+    # 1. Pre-ranked: numeric col-4 / Name is the rank.
+    numeric = []
+    for f in all_feats:
+        nm = str(f.get("name", "")).strip()
+        if nm.isdigit():
+            numeric.append((int(nm), f))
+    vals = [v for v, _ in numeric]
+    if (len(numeric) >= 2
+            and len(set(vals)) == len(vals)          # distinct
+            and max(vals) <= 3 * len(vals)):          # looks like 1..N, not arbitrary IDs
+        for v, f in numeric:
+            f["rank"] = v
+            e = _feature_enrichment(f)
+            if e is not None:
+                f["enrichment"] = e
+        return True
+
+    # 2. Derive ranks from the enrichment value.
     scored = []
     for f in all_feats:
         e = _feature_enrichment(f)
@@ -361,12 +389,6 @@ def _assign_ranks(all_feats: list) -> bool:
         for i, (e, f) in enumerate(scored):
             f["rank"] = i + 1
             f["enrichment"] = e
-        return True
-
-    numeric = [f for f in all_feats if str(f.get("name", "")).strip().isdigit()]
-    if numeric and len(numeric) >= max(2, len(all_feats) // 2):
-        for f in numeric:
-            f["rank"] = int(str(f["name"]).strip())
         return True
     return False
 

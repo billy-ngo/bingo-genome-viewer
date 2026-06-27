@@ -331,7 +331,7 @@ function svgAnnotations(data, region, track, w, h, theme) {
     const fw = Math.max(2, ((feat.end - feat.start) / regionLen) * w)
     const y = row * (FH + RG) + 2
     if (y + FH > h) continue
-    const color = featColor(feat.feature_type, track.color, theme)
+    const color = feat.color || featColor(feat.feature_type, track.color, theme)
 
     if (feat.sub_features?.length > 0) {
       s += `<rect x="${x}" y="${y + FH / 2 - 1}" width="${fw}" height="2" fill="${color}" opacity="0.4"/>\n`
