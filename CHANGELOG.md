@@ -6,6 +6,24 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.11.2] — 2026-06-29
+
+### Fixed
+- **SVG image export now matches the screen when "Fit to visible region" (or
+  "Link scales") is on.** The vector export re-rendered coverage/read tracks
+  from the fetched data range, so bar heights and the Y-axis label used the
+  whole-fetch maximum instead of the visible/linked auto-scale shown on screen —
+  the exported picture didn't match what you saw. The export now applies the
+  same auto-scale the live tracks use, so the heights and axis label agree.
+- The SVG export also now honors per-track customizations it previously ignored:
+  region bar-recoloring and persistent region highlight overlays
+  (Region Colors), hidden GenBank feature types, and numbered peak labels. The
+  PNG export likewise paints region highlight overlays, which live in a separate
+  layer and were missing from the rasterized image.
+- A zoomed-in read pileup no longer exports as a blank track in SVG — the
+  per-read view (which isn't practical to vectorize faithfully) is embedded as
+  an image so the exported track matches the screen.
+
 ## [2.11.1] — 2026-06-29
 
 ### Fixed

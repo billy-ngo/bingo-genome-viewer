@@ -8,7 +8,7 @@ import React, { useState } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
-import { getLiveTrackData } from '../../hooks/useTrackData'
+import { getLiveTrackData, computeAutoScale } from '../../hooks/useTrackData'
 import NumberInput from './NumberInput'
 
 const FORMATS = ['svg', 'png', 'jpg']
@@ -49,7 +49,7 @@ export default function ExportImage({ onClose }) {
       const totalH = rulerH + selectedTracks.reduce((sum, t) => sum + t.height, 0)
 
       if (format === 'svg') {
-        const svg = buildSVG(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels)
+        const svg = buildSVG(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, tracks)
         download(svg, 'genomics-export.svg', 'image/svg+xml')
       } else {
         const canvas = buildCanvas(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, exportWidth, includeRuler, includeLabels)
@@ -127,10 +127,10 @@ export default function ExportImage({ onClose }) {
 
 // ─── SVG Builder ────────────────────────────────────────────────────────────
 
-function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels) {
+function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, allTracks) {
   const w = trackW + labelW
   let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`
-  svg += `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${totalH}" viewBox="0 0 ${w} ${totalH}" font-family="Arial, Helvetica, sans-serif">\n`
+  svg += `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${totalH}" viewBox="0 0 ${w} ${totalH}" font-family="Arial, Helvetica, sans-serif">\n`
   svg += `<defs>\n`
   svg += `  <clipPath id="trackClip"><rect width="${trackW}" height="${totalH}"/></clipPath>\n`
   svg += `</defs>\n`
@@ -151,15 +151,26 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
     svg += `<rect width="${trackW}" height="${track.height}" fill="${theme.canvasBg}" class="track-bg"/>\n`
     // Track content in grouped layers
     if (track.track_type === 'coverage' || track.track_type === 'reads') {
-      const parts = svgCoverageParts(data, region, track, trackW, track.height, theme)
-      if (parts.bars) svg += `<g class="track-bars">\n${parts.bars}</g>\n`
-      if (parts.outline) svg += `<g class="track-outline">\n${parts.outline}</g>\n`
-      if (parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
+      if (track.track_type === 'reads' && data?.reads != null && !data?.bins?.length) {
+        // Zoomed-in read pileup — impractical to vectorize faithfully, so embed
+        // the live canvas as a raster image so the SVG matches the screen
+        // instead of showing a blank track.
+        const img = trackCanvasDataURL(track.id)
+        if (img) svg += `<image x="0" y="0" width="${trackW}" height="${track.height}" preserveAspectRatio="none" href="${img}" xlink:href="${img}"/>\n`
+      } else {
+        const parts = svgCoverageParts(data, region, track, trackW, track.height, theme, allTracks)
+        if (parts.bars) svg += `<g class="track-bars">\n${parts.bars}</g>\n`
+        if (parts.outline) svg += `<g class="track-outline">\n${parts.outline}</g>\n`
+        if (parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
+      }
     } else if (track.track_type === 'annotations' || track.track_type === 'genome_annotations') {
       svg += `<g class="track-features">\n${svgAnnotations(data, region, track, trackW, track.height, theme)}</g>\n`
     } else if (track.track_type === 'variants') {
       svg += `<g class="track-variants">\n${svgVariants(data, region, track, trackW, track.height, theme)}</g>\n`
     }
+    // Persistent region highlight overlays (RegionColorEditor) — drawn over
+    // the content within the clipped track group, matching SelectionOverlay.
+    svg += svgRegionHighlights(track, region, trackW, track.height)
     svg += `</g>\n`
     // Draw labels ON TOP so they are never obscured
     if (includeLabels) {
@@ -173,6 +184,36 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
 
   svg += `</svg>`
   return svg
+}
+
+/** Persistent region highlight overlays (RegionColorEditor highlightColor),
+ *  mirroring SelectionOverlay so the export matches the screen. */
+function svgRegionHighlights(track, region, w, h) {
+  const overlays = (track.regionOverlays || []).filter(o => o.highlightColor && o.chrom === region.chrom)
+  if (!overlays.length) return ''
+  const regionLen = region.end - region.start
+  if (regionLen <= 0) return ''
+  let s = ''
+  for (const o of overlays) {
+    const x0 = Math.max(0, ((o.start - region.start) / regionLen) * w)
+    const x1 = Math.min(w, ((o.end - region.start) / regionLen) * w)
+    const ow = x1 - x0
+    if (ow < 1) continue
+    s += `<rect x="${x0}" y="0" width="${ow}" height="${h}" fill="${o.highlightColor}" opacity="${o.highlightOpacity || 0.35}"/>\n`
+  }
+  return s
+}
+
+/** PNG data URL of a track's live on-screen canvas (looked up by id), used to
+ *  embed an un-vectorizable read pileup into the SVG so it's not blank. */
+function trackCanvasDataURL(trackId) {
+  try {
+    const host = document.querySelector(`[data-export-track-id="${cssEscape(trackId)}"]`)
+    const c = host ? host.querySelector('canvas') : null
+    return c ? c.toDataURL('image/png') : null
+  } catch {
+    return null
+  }
 }
 
 function svgRuler(region, x0, y0, w, h, theme) {
@@ -231,12 +272,20 @@ function svgLogScale(val, max) {
 }
 
 /** Returns { bars, outline, labels } as separate SVG strings for grouping. */
-function svgCoverageParts(data, region, track, w, h, theme) {
+function svgCoverageParts(data, region, track, w, h, theme, allTracks) {
   if (!data?.bins?.length) return { bars: '', outline: '', labels: '' }
   let bars = '', outline = '', labels = ''
-  const maxVal = data.max_value || 0
-  const minVal = data.min_value || 0
-  const hasNeg = minVal < 0
+  // Match CoverageTrack: the forward/reverse split is decided from the fetched
+  // range (stable), but the auto-scale magnitude follows the "fit to visible
+  // region" / "link scales" toggles so the export matches what's on screen.
+  const hasNeg = (data.min_value || 0) < 0
+  let maxVal = data.max_value || 0
+  let minVal = data.min_value || 0
+  if (track.autoScaleVisible || track.linkScale) {
+    const a = computeAutoScale(track, region, allTracks)
+    maxVal = a.max
+    minVal = a.min
+  }
   const rStart = region.start, rEnd = region.end
   const regionLen = rEnd - rStart
   const color = track.color || '#78909c'
@@ -253,6 +302,16 @@ function svgCoverageParts(data, region, track, w, h, theme) {
   const showOutline = track.showOutline === true
   const outColor = track.outlineColor || null
   const outSmooth = track.outlineSmooth || 0
+
+  // Region bar-recolor overlays (RegionColorEditor) — matches CoverageTrack.
+  const regionOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
+  function binOverride(binMid) {
+    for (let i = 0; i < regionOverlays.length; i++) {
+      const o = regionOverlays[i]
+      if (binMid >= o.start && binMid < o.end) return o.barColor
+    }
+    return null
+  }
 
   function autoW(binW) {
     if (!barAuto) return Math.min(barFixedPx, binW)
@@ -273,8 +332,9 @@ function svgCoverageParts(data, region, track, w, h, theme) {
         const bw = autoW(((bin.end - bin.start) / regionLen) * w)
         const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
         const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
-        if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; bars += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${color}"/>\n` }
-        if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; bars += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${adjustColorSvg(color, -40)}"/>\n` }
+        const ov = binOverride((bin.start + bin.end) / 2)
+        if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; bars += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${ov || color}"/>\n` }
+        if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; bars += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${ov || adjustColorSvg(color, -40)}"/>\n` }
       }
     }
     if (showOutline && visibleBins.length > 0) {
@@ -297,7 +357,8 @@ function svgCoverageParts(data, region, track, w, h, theme) {
         const bw = autoW(((bin.end - bin.start) / regionLen) * w)
         const r = useLog ? svgLogScale(bin.value, effMax) : bin.value / effMax
         const bh = r * (h - 14)
-        bars += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${color}"/>\n`
+        const ov = binOverride((bin.start + bin.end) / 2)
+        bars += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${ov || color}"/>\n`
       }
     }
     if (showOutline && visibleBins.length > 0) {
@@ -321,8 +382,13 @@ function svgAnnotations(data, region, track, w, h, theme) {
   const FH = 16, RG = 4, AT = 8
   const useArrows = track.useArrows !== false
   const rowEnds = []
-  // Filter to only features overlapping the visible region
-  const visibleFeats = data.features.filter(f => f.end > rStart && f.start < rEnd)
+  // Mirror AnnotationTrack: drop user-hidden feature types BEFORE region filter
+  // and row packing, so retained features land on the same rows as on screen.
+  const hiddenSet = new Set(track.hiddenFeatureTypes || [])
+  const visibleFeats = data.features.filter(f =>
+    f.end > rStart && f.start < rEnd && !hiddenSet.has(f.feature_type))
+  // Region bar-recolor overlays for the current chromosome (RegionColorEditor)
+  const barOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
 
   for (const feat of visibleFeats) {
     let row = rowEnds.findIndex(e => feat.start >= e)
@@ -332,7 +398,13 @@ function svgAnnotations(data, region, track, w, h, theme) {
     const fw = Math.max(2, ((feat.end - feat.start) / regionLen) * w)
     const y = row * (FH + RG) + 2
     if (y + FH > h) continue
-    const color = feat.color || featColor(feat.feature_type, track.color, theme)
+    // Precedence (matches AnnotationTrack): region recolor → file itemRgb → per-type colour.
+    let regionBarColor = null
+    if (barOverlays.length > 0) {
+      const featMid = (feat.start + feat.end) / 2
+      for (const o of barOverlays) { if (featMid >= o.start && featMid < o.end) { regionBarColor = o.barColor; break } }
+    }
+    const color = regionBarColor || feat.color || featColor(feat.feature_type, track.color, theme)
 
     if (feat.sub_features?.length > 0) {
       s += `<rect x="${x}" y="${y + FH / 2 - 1}" width="${fw}" height="2" fill="${color}" opacity="0.4"/>\n`
@@ -350,7 +422,15 @@ function svgAnnotations(data, region, track, w, h, theme) {
       else { s += `<rect x="${x}" y="${y}" width="${fw}" height="${FH}" fill="${color}"/>\n` }
     }
 
-    if (fw > 20) {
+    if (feat.rank != null) {
+      // Peak rank label — the rank number, centered on the bar (matches AnnotationTrack).
+      const rankLabel = String(feat.rank)
+      const tw = rankLabel.length * 6   // ≈ bold 10px monospace width
+      if (fw >= tw + 2) {
+        const cx = Math.min(Math.max(x + fw / 2, 3 + tw / 2), w - tw / 2 - 1)
+        s += `<text x="${cx}" y="${y + FH / 2}" text-anchor="middle" dominant-baseline="central" fill="#fff" font-size="10" font-weight="bold">${esc(rankLabel)}</text>\n`
+      }
+    } else if (fw > 20) {
       const label = esc(feat.name || feat.feature_type)
       const maxChars = Math.floor((fw - (useArrows ? AT : 0) - 4) / 6)
       if (maxChars > 0) {
@@ -437,6 +517,26 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
       try {
         ctx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, labelW, yOff, trackW, track.height)
       } catch {}
+    }
+    // Persistent region highlight overlays live in a separate DOM layer
+    // (SelectionOverlay), so the track canvas above doesn't include them —
+    // paint them on here so the raster export matches the screen.
+    const hl = (track.regionOverlays || []).filter(o => o.highlightColor && o.chrom === region.chrom)
+    if (hl.length) {
+      const regionLen = region.end - region.start
+      if (regionLen > 0) {
+        for (const o of hl) {
+          const x0 = labelW + Math.max(0, ((o.start - region.start) / regionLen) * trackW)
+          const x1 = labelW + Math.min(trackW, ((o.end - region.start) / regionLen) * trackW)
+          const ow = x1 - x0
+          if (ow < 1) continue
+          ctx.save()
+          ctx.globalAlpha = o.highlightOpacity || 0.35
+          ctx.fillStyle = o.highlightColor
+          ctx.fillRect(x0, yOff, ow, track.height)
+          ctx.restore()
+        }
+      }
     }
     ctx.strokeStyle = theme.border; ctx.beginPath()
     ctx.moveTo(0, yOff + track.height); ctx.lineTo(fullW, yOff + track.height); ctx.stroke()
