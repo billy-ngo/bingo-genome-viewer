@@ -131,9 +131,6 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
   const w = trackW + labelW
   let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`
   svg += `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${totalH}" viewBox="0 0 ${w} ${totalH}" font-family="Arial, Helvetica, sans-serif">\n`
-  svg += `<defs>\n`
-  svg += `  <clipPath id="trackClip"><rect width="${trackW}" height="${totalH}"/></clipPath>\n`
-  svg += `</defs>\n`
   svg += `<rect width="${w}" height="${totalH}" fill="${theme.canvasBg}"/>\n`
 
   let yOff = 0
@@ -143,10 +140,20 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
     yOff += rulerH
   }
 
-  for (const track of tracks) {
+  for (const [i, track] of tracks.entries()) {
     const data = getLiveTrackData(track.id)
     const trackName = esc(track.name).replace(/\s+/g, '_')
-    svg += `<g transform="translate(${labelW},${yOff})" clip-path="url(#trackClip)" id="track-${trackName}">\n`
+    // Per-track clip sized to THIS track's box. A single shared clip rect of
+    // height=totalH (referenced from each translated group under the default
+    // userSpaceOnUse) spans root-y [yOff, yOff+totalH], so lower tracks' clip
+    // masks extend far below the document. Illustrator imports each clip-path as
+    // a real mask object and unions their bounds into the artwork bbox, inflating
+    // the artboard to ~2x the height — the "large empty space" below the image.
+    // A rect of height=track.height confines each clip to its own row, so the
+    // imported bounds collapse back to the document rectangle (the viewBox).
+    const clipId = `trackClip-${i}`
+    svg += `<clipPath id="${clipId}"><rect width="${trackW}" height="${track.height}"/></clipPath>\n`
+    svg += `<g transform="translate(${labelW},${yOff})" clip-path="url(#${clipId})" id="track-${trackName}">\n`
     // Background (separate element)
     svg += `<rect width="${trackW}" height="${track.height}" fill="${theme.canvasBg}" class="track-bg"/>\n`
     // Track content in grouped layers

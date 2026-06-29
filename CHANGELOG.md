@@ -6,6 +6,19 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.11.3] — 2026-06-29
+
+### Fixed
+- **SVG exports no longer carry a large empty area below the image.** Every
+  track group shared one clip path whose rectangle was the full document height;
+  because that clip was evaluated inside each track's own (shifted) coordinate
+  system, the lower tracks' clip regions extended far below the artwork — up to
+  nearly twice the real height. On-screen viewers ignored the overflow, but
+  Adobe Illustrator (and other editors that size the artboard to clip geometry)
+  imported the SVG much taller than expected, with empty space below. Each track
+  now gets its own clip sized to that track, so the exported SVG's bounds match
+  the visible content exactly.
+
 ## [2.11.2] — 2026-06-29
 
 ### Fixed
