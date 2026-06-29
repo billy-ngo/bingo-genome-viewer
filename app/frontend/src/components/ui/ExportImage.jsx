@@ -9,6 +9,7 @@ import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { getLiveTrackData } from '../../hooks/useTrackData'
+import NumberInput from './NumberInput'
 
 const FORMATS = ['svg', 'png', 'jpg']
 const LABEL_W = 140
@@ -88,8 +89,8 @@ export default function ExportImage({ onClose }) {
           {/* Width */}
           <div style={S.row}>
             <span style={S.label}>Width (px)</span>
-            <input type="number" min={400} max={4000} step={100} value={exportWidth}
-              onChange={e => setExportWidth(Math.max(400, parseInt(e.target.value) || 1200))} style={S.input} />
+            <NumberInput value={exportWidth} onCommit={v => setExportWidth(v ?? 1200)}
+              min={400} max={4000} integer style={S.input} />
           </div>
           {/* Options */}
           <div style={S.row}>

@@ -6,6 +6,21 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.11.1] — 2026-06-29
+
+### Fixed
+- Numeric text boxes are now actually typeable. The Track Height, Y‑scale
+  (+Ymax/−Ymax), Bar width, and Export width fields previously validated and
+  clamped on every keystroke against their controlled value, which silently
+  reverted intermediate input — you couldn't clear the box, couldn't type "5"
+  on the way to "50", and out‑of‑range or partial entries jumped back. They now
+  accept free typing (including a partial decimal like "60."), apply valid
+  in‑range values live, and clamp to the allowed range only when you click away
+  or press Enter.
+- The region color hex fields (highlight/bar color) had the same problem — they
+  only accepted a complete valid hex per keystroke, so they couldn't be edited
+  by typing. They now allow free editing and commit on a valid hex or on blur.
+
 ## [2.11.0] — 2026-06-29
 
 ### Added

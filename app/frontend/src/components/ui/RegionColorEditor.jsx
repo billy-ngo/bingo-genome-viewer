@@ -14,6 +14,7 @@ import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import DraggablePanel from './DraggablePanel'
+import { HexInput } from './NumberInput'
 
 export default function RegionColorEditor() {
   const { selection } = useBrowser()
@@ -181,12 +182,8 @@ export default function RegionColorEditor() {
                     <input type="color" value={editor.highlightColor}
                       onChange={e => setEditor(p => ({ ...p, highlightColor: e.target.value }))}
                       style={{ width: 28, height: 20, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
-                    <input type="text" value={editor.highlightColor}
-                      onChange={e => {
-                        let v = e.target.value.trim()
-                        if (v && !v.startsWith('#')) v = '#' + v
-                        if (/^#[0-9a-fA-F]{3,8}$/.test(v)) setEditor(p => ({ ...p, highlightColor: v }))
-                      }}
+                    <HexInput value={editor.highlightColor}
+                      onCommit={v => setEditor(p => ({ ...p, highlightColor: v }))}
                       style={{ background: t.inputBg, border: `1px solid ${t.borderAccent}`, borderRadius: 3,
                         color: t.textPrimary, padding: '3px 6px', fontSize: 12, fontFamily: 'monospace', width: 72 }}
                     />
@@ -215,12 +212,8 @@ export default function RegionColorEditor() {
                   <input type="color" value={editor.barColor}
                     onChange={e => setEditor(p => ({ ...p, barColor: e.target.value }))}
                     style={{ width: 28, height: 20, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
-                  <input type="text" value={editor.barColor}
-                    onChange={e => {
-                      let v = e.target.value.trim()
-                      if (v && !v.startsWith('#')) v = '#' + v
-                      if (/^#[0-9a-fA-F]{3,8}$/.test(v)) setEditor(p => ({ ...p, barColor: v }))
-                    }}
+                  <HexInput value={editor.barColor}
+                    onCommit={v => setEditor(p => ({ ...p, barColor: v }))}
                     style={{ background: t.inputBg, border: `1px solid ${t.borderAccent}`, borderRadius: 3,
                       color: t.textPrimary, padding: '3px 6px', fontSize: 12, fontFamily: 'monospace', width: 72 }}
                   />

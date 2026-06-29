@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom'
 import { useTracks, DEFAULT_ANNOTATION_COLORS } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import DraggablePanel from './DraggablePanel'
+import NumberInput from './NumberInput'
 
 // Ordered by hue: reds → oranges → yellows → greens → cyans → blues → purples → grays
 const ORDERED_COLORS = [
@@ -122,9 +123,9 @@ export default function TrackSettings({ onClose }) {
               <input type="range" min={30} max={500} step={1} value={commonHeight || 80}
                 onChange={e => applyToSelected({ height: parseInt(e.target.value), autoHeight: false })}
                 style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
-              <input type="text" inputMode="numeric" value={commonHeight} placeholder="mixed" style={{ ...S.input, width: 48 }}
-                onChange={e => { const v = parseInt(e.target.value); if (v >= 30 && v <= 500) applyToSelected({ height: v, autoHeight: false }) }}
-                onBlur={e => { const v = parseInt(e.target.value); if (!v || v < 30) applyToSelected({ height: 30, autoHeight: false }); if (v > 500) applyToSelected({ height: 500, autoHeight: false }) }} />
+              <NumberInput value={commonHeight === '' ? null : commonHeight}
+                onCommit={v => { if (v != null) applyToSelected({ height: v, autoHeight: false }) }}
+                min={30} max={500} integer placeholder="mixed" style={{ ...S.input, width: 48 }} />
             </div>
             {/* Auto-fit height (reads + annotation tracks stack rows) */}
             {hasRowStacked && (
@@ -195,8 +196,8 @@ export default function TrackSettings({ onClose }) {
                     <input type="range" min={1} max={50} step={1} value={commonBarWidth ?? 2}
                       onChange={e => applyToSelected({ barWidth: parseInt(e.target.value) })}
                       style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
-                    <input type="number" min={1} max={50} step={1} value={commonBarWidth ?? 2} style={{ ...S.input, width: 48 }}
-                      onChange={e => { const v = parseInt(e.target.value); if (v >= 1 && v <= 50) applyToSelected({ barWidth: v }) }} />
+                    <NumberInput value={commonBarWidth ?? 2} onCommit={v => { if (v != null) applyToSelected({ barWidth: v }) }}
+                      min={1} max={50} integer style={{ ...S.input, width: 48 }} />
                     <span style={{ fontSize: 11, color: t.textTertiary }}>px</span>
                   </div>
                 )}
@@ -272,11 +273,13 @@ export default function TrackSettings({ onClose }) {
             {hasCoverage && !isAutoScale && (
               <div style={S.subRow}>
                 <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>+Ymax</span>
-                <input type="number" min={1} step={10} value={commonScaleMax ?? ''} placeholder="max" style={S.input}
-                  onChange={e => { const v = parseFloat(e.target.value); if (v > 0) applyToSelected({ scaleMax: v }) }} />
+                <NumberInput value={commonScaleMax == null ? null : commonScaleMax}
+                  onCommit={v => { if (v != null && v > 0) applyToSelected({ scaleMax: v }) }}
+                  min={1} integer={false} placeholder="max" style={S.input} />
                 <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>{'\u2212'}Ymax</span>
-                <input type="number" min={1} step={10} value={commonScaleMin ?? ''} placeholder="min" style={S.input}
-                  onChange={e => { const v = parseFloat(e.target.value); if (v > 0) applyToSelected({ scaleMin: v }) }} />
+                <NumberInput value={commonScaleMin == null ? null : commonScaleMin}
+                  onCommit={v => { if (v != null && v > 0) applyToSelected({ scaleMin: v }) }}
+                  min={1} integer={false} placeholder="min" style={S.input} />
               </div>
             )}
 
