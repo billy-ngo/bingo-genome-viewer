@@ -61,6 +61,9 @@ export function collectSession(genome, region, tracks, themeName, customTheme, l
       arrowStyle: t.arrowStyle || 'pointed',
       arrowSize: t.arrowSize || 4,
       regionOverlays: t.regionOverlays || [],
+      // Coverage overlay groups (v2.12.0+)
+      overlayGroup: t.overlayGroup || null,
+      overlayOpacity: t.overlayOpacity ?? 0.6,
       annotationColors: t.annotationColors || null,
       targetChromosomes: t.targetChromosomes || null,
       // Deliberate removal of a genome-annotation track (v2.9.9+) — persist
@@ -299,6 +302,9 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
       arrowStyle: t.arrowStyle || 'pointed',
       arrowSize: t.arrowSize || 4,
       regionOverlays: t.regionOverlays || [],
+        // Coverage overlay groups (v2.12.0+)
+        overlayGroup: t.overlayGroup || null,
+        overlayOpacity: t.overlayOpacity ?? 0.6,
         color: t.color || '#78909c',
         annotationColors: t.annotationColors || null,
         targetChromosomes: t.targetChromosomes || null,

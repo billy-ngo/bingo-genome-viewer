@@ -58,9 +58,37 @@ const cache = makeCache()
 
 const liveData = new Map()
 
-function setLiveData(trackId, data) { liveData.set(trackId, data) }
+// ── Live-data change subscription ──────────────────────────────────
+// liveData is a plain module Map, so writing track B's data re-renders only
+// B's own component. Tracks that derive their Y axis from SIBLINGS (overlay
+// groups and linked scales) must also re-render when a sibling's data arrives,
+// otherwise they stay drawn at a stale shared max until the next pan/zoom.
+// They subscribe here and bump a version included in their draw deps.
+let liveDataVersion = 0
+const liveDataListeners = new Set()
+function notifyLiveDataChange() {
+  liveDataVersion++
+  for (const fn of liveDataListeners) fn(liveDataVersion)
+}
+
+function setLiveData(trackId, data) { liveData.set(trackId, data); notifyLiveDataChange() }
 
 export function getLiveTrackData(trackId) { return liveData.get(trackId) || null }
+
+/** Subscribe to ANY live-data change. Pass active=false to opt out (standalone
+ *  tracks don't depend on siblings, so they skip the extra re-renders). Returns
+ *  a monotonically increasing version to feed into an effect dependency list. */
+export function useLiveDataVersion(active) {
+  const [v, setV] = useState(liveDataVersion)
+  useEffect(() => {
+    if (!active) return undefined
+    const fn = (nv) => setV(nv)
+    liveDataListeners.add(fn)
+    setV(liveDataVersion)   // resync in case data changed between render and effect
+    return () => { liveDataListeners.delete(fn) }
+  }, [active])
+  return active ? v : 0
+}
 
 /** Drop all cached + live data for a track. Called when a track is removed so
  *  stale data can never resurface (e.g. in a re-added track that reuses an id)
@@ -68,6 +96,7 @@ export function getLiveTrackData(trackId) { return liveData.get(trackId) || null
 export function clearTrackData(trackId) {
   liveData.delete(trackId)
   cache.deleteByPrefix(`${trackId}|`)
+  notifyLiveDataChange()
 }
 
 export function getCachedDataForTrack(trackId, chrom) {
@@ -92,11 +121,24 @@ export function getCachedDataForTrack(trackId, chrom) {
  *     that re-fits the visible region as you pan).
  *  Returns { max, min } in data units. */
 export function computeAutoScale(track, region, tracks) {
-  const visible = track.autoScaleVisible === true && region
-  const group = (track.linkScale === true && Array.isArray(tracks))
-    ? tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') && t.linkScale === true)
-    : [track]
+  // Overlay groups always share one Y axis (the union of all members) so the
+  // layered, transparent profiles are directly comparable. This takes
+  // precedence over linkScale. Otherwise fall back to a linked group, or just
+  // the track itself.
+  let group
+  if (track.overlayGroup && Array.isArray(tracks)) {
+    group = tracks.filter(t => t.overlayGroup === track.overlayGroup)
+  } else if (track.linkScale === true && Array.isArray(tracks)) {
+    group = tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') && t.linkScale === true)
+  } else {
+    group = [track]
+  }
   const members = group.length ? group : [track]
+  // For an overlay group, "fit to visible region" applies if ANY member has it
+  // on, so every member resolves to the same axis regardless of which one asks.
+  const visible = (track.overlayGroup
+    ? members.some(m => m.autoScaleVisible === true)
+    : track.autoScaleVisible === true) && region
   let maxV = 0, minV = 0
   for (const t of members) {
     const d = liveData.get(t.id)

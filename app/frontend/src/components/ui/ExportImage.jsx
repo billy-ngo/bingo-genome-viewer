@@ -46,7 +46,9 @@ export default function ExportImage({ onClose }) {
       const labelW = includeLabels ? LABEL_W : 0
       const trackW = exportWidth - labelW
       const rulerH = includeRuler ? 30 : 0
-      const totalH = rulerH + selectedTracks.reduce((sum, t) => sum + t.height, 0)
+      // Overlay groups occupy a single row (host height), not the sum of members.
+      const units = buildExportUnits(selectedTracks)
+      const totalH = rulerH + units.reduce((sum, u) => sum + unitHeight(u), 0)
 
       if (format === 'svg') {
         const svg = buildSVG(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, tracks)
@@ -125,6 +127,31 @@ export default function ExportImage({ onClose }) {
   )
 }
 
+// ─── Render units (overlay-group aware) ─────────────────────────────────────
+
+/** Group a flat track list into render units, mirroring the on-screen layout:
+ *  standalone tracks render one row each; overlay-group members render together
+ *  in one row at the position of the first member. */
+function buildExportUnits(tracks) {
+  const seen = new Set()
+  const units = []
+  for (const t of tracks) {
+    if (t.overlayGroup) {
+      if (seen.has(t.overlayGroup)) continue
+      seen.add(t.overlayGroup)
+      const members = tracks.filter(m => m.overlayGroup === t.overlayGroup)
+      units.push({ type: 'overlay', members })
+    } else {
+      units.push({ type: 'single', track: t })
+    }
+  }
+  return units
+}
+
+function unitHeight(u) {
+  return u.type === 'overlay' ? u.members[0].height : u.track.height
+}
+
 // ─── SVG Builder ────────────────────────────────────────────────────────────
 
 function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, allTracks) {
@@ -140,53 +167,85 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
     yOff += rulerH
   }
 
-  for (const [i, track] of tracks.entries()) {
-    const data = getLiveTrackData(track.id)
-    const trackName = esc(track.name).replace(/\s+/g, '_')
-    // Per-track clip sized to THIS track's box. A single shared clip rect of
+  const units = buildExportUnits(tracks)
+  for (const [i, unit] of units.entries()) {
+    const uH = unitHeight(unit)
+    // Per-unit clip sized to THIS row's box. A single shared clip rect of
     // height=totalH (referenced from each translated group under the default
-    // userSpaceOnUse) spans root-y [yOff, yOff+totalH], so lower tracks' clip
+    // userSpaceOnUse) spans root-y [yOff, yOff+totalH], so lower rows' clip
     // masks extend far below the document. Illustrator imports each clip-path as
     // a real mask object and unions their bounds into the artwork bbox, inflating
     // the artboard to ~2x the height — the "large empty space" below the image.
-    // A rect of height=track.height confines each clip to its own row, so the
-    // imported bounds collapse back to the document rectangle (the viewBox).
+    // A rect of height=uH confines each clip to its own row, so the imported
+    // bounds collapse back to the document rectangle (the viewBox).
     const clipId = `trackClip-${i}`
-    svg += `<clipPath id="${clipId}"><rect width="${trackW}" height="${track.height}"/></clipPath>\n`
-    svg += `<g transform="translate(${labelW},${yOff})" clip-path="url(#${clipId})" id="track-${trackName}">\n`
-    // Background (separate element)
-    svg += `<rect width="${trackW}" height="${track.height}" fill="${theme.canvasBg}" class="track-bg"/>\n`
-    // Track content in grouped layers
-    if (track.track_type === 'coverage' || track.track_type === 'reads') {
-      if (track.track_type === 'reads' && data?.reads != null && !data?.bins?.length) {
-        // Zoomed-in read pileup — impractical to vectorize faithfully, so embed
-        // the live canvas as a raster image so the SVG matches the screen
-        // instead of showing a blank track.
-        const img = trackCanvasDataURL(track.id)
-        if (img) svg += `<image x="0" y="0" width="${trackW}" height="${track.height}" preserveAspectRatio="none" href="${img}" xlink:href="${img}"/>\n`
-      } else {
-        const parts = svgCoverageParts(data, region, track, trackW, track.height, theme, allTracks)
-        if (parts.bars) svg += `<g class="track-bars">\n${parts.bars}</g>\n`
-        if (parts.outline) svg += `<g class="track-outline">\n${parts.outline}</g>\n`
-        if (parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
+    const groupName = unit.type === 'overlay'
+      ? `overlay-${i}` : esc(unit.track.name).replace(/\s+/g, '_')
+    svg += `<clipPath id="${clipId}"><rect width="${trackW}" height="${uH}"/></clipPath>\n`
+    svg += `<g transform="translate(${labelW},${yOff})" clip-path="url(#${clipId})" id="track-${groupName}">\n`
+    svg += `<rect width="${trackW}" height="${uH}" fill="${theme.canvasBg}" class="track-bg"/>\n`
+
+    if (unit.type === 'overlay') {
+      // Layered, transparent members sharing one axis. Each member's bars/outline
+      // are wrapped in a group with its overlay opacity so they blend exactly like
+      // the on-screen layers; only the base (first VISIBLE) member draws the scale
+      // labels. Mirror the on-screen rules: skip hidden members; all layers use
+      // the group host's scale/log settings and a group-wide negative layout.
+      const groupHost = unit.members[0]
+      const vis = unit.members.filter(m => m.visible !== false)
+      const groupHasNeg = unit.members.some(m => (getLiveTrackData(m.id)?.min_value || 0) < 0)
+      vis.forEach((m, mi) => {
+        const sm = { ...m, logScale: groupHost.logScale, scaleMax: groupHost.scaleMax, scaleMin: groupHost.scaleMin }
+        const data = getLiveTrackData(m.id)
+        const parts = svgCoverageParts(data, region, sm, trackW, uH, theme, allTracks, groupHasNeg)
+        const op = m.overlayOpacity ?? 0.6
+        if (parts.bars) svg += `<g class="track-bars" opacity="${op}">\n${parts.bars}</g>\n`
+        if (parts.outline) svg += `<g class="track-outline" opacity="${op}">\n${parts.outline}</g>\n`
+        if (mi === 0 && parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
+      })
+      if (vis[0]) svg += svgRegionHighlights(vis[0], region, trackW, uH)
+    } else {
+      const track = unit.track
+      const data = getLiveTrackData(track.id)
+      if (track.track_type === 'coverage' || track.track_type === 'reads') {
+        if (track.track_type === 'reads' && data?.reads != null && !data?.bins?.length) {
+          // Zoomed-in read pileup — impractical to vectorize faithfully, so embed
+          // the live canvas as a raster image so the SVG matches the screen.
+          const img = trackCanvasDataURL(track.id)
+          if (img) svg += `<image x="0" y="0" width="${trackW}" height="${uH}" preserveAspectRatio="none" href="${img}" xlink:href="${img}"/>\n`
+        } else {
+          const parts = svgCoverageParts(data, region, track, trackW, uH, theme, allTracks)
+          if (parts.bars) svg += `<g class="track-bars">\n${parts.bars}</g>\n`
+          if (parts.outline) svg += `<g class="track-outline">\n${parts.outline}</g>\n`
+          if (parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
+        }
+      } else if (track.track_type === 'annotations' || track.track_type === 'genome_annotations') {
+        svg += `<g class="track-features">\n${svgAnnotations(data, region, track, trackW, uH, theme)}</g>\n`
+      } else if (track.track_type === 'variants') {
+        svg += `<g class="track-variants">\n${svgVariants(data, region, track, trackW, uH, theme)}</g>\n`
       }
-    } else if (track.track_type === 'annotations' || track.track_type === 'genome_annotations') {
-      svg += `<g class="track-features">\n${svgAnnotations(data, region, track, trackW, track.height, theme)}</g>\n`
-    } else if (track.track_type === 'variants') {
-      svg += `<g class="track-variants">\n${svgVariants(data, region, track, trackW, track.height, theme)}</g>\n`
+      svg += svgRegionHighlights(track, region, trackW, uH)
     }
-    // Persistent region highlight overlays (RegionColorEditor) — drawn over
-    // the content within the clipped track group, matching SelectionOverlay.
-    svg += svgRegionHighlights(track, region, trackW, track.height)
     svg += `</g>\n`
+
     // Draw labels ON TOP so they are never obscured
     if (includeLabels) {
-      svg += `<rect x="0" y="${yOff}" width="${labelW}" height="${track.height}" fill="${theme.panelBg}"/>\n`
-      svg += `<line x1="${labelW}" y1="${yOff}" x2="${labelW}" y2="${yOff + track.height}" stroke="${theme.border}"/>\n`
-      svg += `<text x="10" y="${yOff + track.height / 2 + 4}" fill="${theme.trackName}" font-size="11" font-weight="600">${esc(track.name)}</text>\n`
+      svg += `<rect x="0" y="${yOff}" width="${labelW}" height="${uH}" fill="${theme.panelBg}"/>\n`
+      svg += `<line x1="${labelW}" y1="${yOff}" x2="${labelW}" y2="${yOff + uH}" stroke="${theme.border}"/>\n`
+      if (unit.type === 'overlay') {
+        // Legend: one colored line per member (clipped to the row height).
+        unit.members.forEach((m, mi) => {
+          const ly = yOff + 14 + mi * 13
+          if (ly > yOff + uH - 3) return
+          svg += `<rect x="8" y="${ly - 7}" width="8" height="8" rx="1" fill="${m.color}"/>\n`
+          svg += `<text x="20" y="${ly}" fill="${theme.trackName}" font-size="10">${esc(m.name)}</text>\n`
+        })
+      } else {
+        svg += `<text x="10" y="${yOff + uH / 2 + 4}" fill="${theme.trackName}" font-size="11" font-weight="600">${esc(unit.track.name)}</text>\n`
+      }
     }
-    svg += `<line x1="0" y1="${yOff + track.height}" x2="${w}" y2="${yOff + track.height}" stroke="${theme.border}"/>\n`
-    yOff += track.height
+    svg += `<line x1="0" y1="${yOff + uH}" x2="${w}" y2="${yOff + uH}" stroke="${theme.border}"/>\n`
+    yOff += uH
   }
 
   svg += `</svg>`
@@ -278,17 +337,19 @@ function svgLogScale(val, max) {
   return Math.log2(val + 1) / Math.log2(max + 1)
 }
 
-/** Returns { bars, outline, labels } as separate SVG strings for grouping. */
-function svgCoverageParts(data, region, track, w, h, theme, allTracks) {
+/** Returns { bars, outline, labels } as separate SVG strings for grouping.
+ *  forceHasNeg (optional): override the positive/negative layout decision — used
+ *  for overlay members so the whole group shares one coordinate system. */
+function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasNeg) {
   if (!data?.bins?.length) return { bars: '', outline: '', labels: '' }
   let bars = '', outline = '', labels = ''
   // Match CoverageTrack: the forward/reverse split is decided from the fetched
   // range (stable), but the auto-scale magnitude follows the "fit to visible
   // region" / "link scales" toggles so the export matches what's on screen.
-  const hasNeg = (data.min_value || 0) < 0
+  const hasNeg = forceHasNeg != null ? forceHasNeg : (data.min_value || 0) < 0
   let maxVal = data.max_value || 0
   let minVal = data.min_value || 0
-  if (track.autoScaleVisible || track.linkScale) {
+  if (track.autoScaleVisible || track.linkScale || track.overlayGroup) {
     const a = computeAutoScale(track, region, allTracks)
     maxVal = a.max
     minVal = a.min
@@ -510,25 +571,47 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
     yOff += rulerH
   }
 
-  for (const track of tracks) {
+  const units = buildExportUnits(tracks)
+  for (const unit of units) {
+    const uH = unitHeight(unit)
     if (includeLabels) {
-      ctx.fillStyle = theme.panelBg; ctx.fillRect(0, yOff, labelW, track.height)
-      ctx.fillStyle = theme.trackName; ctx.font = '11px Arial, Helvetica, sans-serif'
-      ctx.fillText(track.name, 10, yOff + track.height / 2 + 4)
+      ctx.fillStyle = theme.panelBg; ctx.fillRect(0, yOff, labelW, uH)
       ctx.strokeStyle = theme.border; ctx.beginPath()
-      ctx.moveTo(labelW, yOff); ctx.lineTo(labelW, yOff + track.height); ctx.stroke()
+      ctx.moveTo(labelW, yOff); ctx.lineTo(labelW, yOff + uH); ctx.stroke()
+      if (unit.type === 'overlay') {
+        // Legend: one colored swatch + name per member.
+        ctx.font = '10px Arial, Helvetica, sans-serif'
+        unit.members.forEach((m, mi) => {
+          const ly = yOff + 14 + mi * 13
+          if (ly > yOff + uH - 3) return
+          ctx.fillStyle = m.color; ctx.fillRect(8, ly - 7, 8, 8)
+          ctx.fillStyle = theme.trackName; ctx.fillText(m.name, 20, ly)
+        })
+      } else {
+        ctx.fillStyle = theme.trackName; ctx.font = '11px Arial, Helvetica, sans-serif'
+        ctx.fillText(unit.track.name, 10, yOff + uH / 2 + 4)
+      }
     }
-    const host = document.querySelector(`[data-export-track-id="${cssEscape(track.id)}"]`)
-    const srcCanvas = host ? host.querySelector('canvas') : null
-    if (srcCanvas) {
-      try {
-        ctx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, labelW, yOff, trackW, track.height)
-      } catch {}
+    // Composite the live canvas(es) for this row. Overlay members are drawn in
+    // order (base first); each member canvas already carries its baked-in alpha
+    // and transparency, so stacking them reproduces the on-screen blend.
+    const layers = unit.type === 'overlay'
+      ? unit.members.filter(m => m.visible !== false)
+      : [unit.track]
+    for (const m of layers) {
+      const host = document.querySelector(`[data-export-track-id="${cssEscape(m.id)}"]`)
+      const srcCanvas = host ? host.querySelector('canvas') : null
+      if (srcCanvas) {
+        try {
+          ctx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, labelW, yOff, trackW, uH)
+        } catch {}
+      }
     }
     // Persistent region highlight overlays live in a separate DOM layer
     // (SelectionOverlay), so the track canvas above doesn't include them —
     // paint them on here so the raster export matches the screen.
-    const hl = (track.regionOverlays || []).filter(o => o.highlightColor && o.chrom === region.chrom)
+    const hlTrack = unit.type === 'overlay' ? unit.members[0] : unit.track
+    const hl = (hlTrack.regionOverlays || []).filter(o => o.highlightColor && o.chrom === region.chrom)
     if (hl.length) {
       const regionLen = region.end - region.start
       if (regionLen > 0) {
@@ -540,14 +623,14 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
           ctx.save()
           ctx.globalAlpha = o.highlightOpacity || 0.35
           ctx.fillStyle = o.highlightColor
-          ctx.fillRect(x0, yOff, ow, track.height)
+          ctx.fillRect(x0, yOff, ow, uH)
           ctx.restore()
         }
       }
     }
     ctx.strokeStyle = theme.border; ctx.beginPath()
-    ctx.moveTo(0, yOff + track.height); ctx.lineTo(fullW, yOff + track.height); ctx.stroke()
-    yOff += track.height
+    ctx.moveTo(0, yOff + uH); ctx.lineTo(fullW, yOff + uH); ctx.stroke()
+    yOff += uH
   }
   return canvas
 }

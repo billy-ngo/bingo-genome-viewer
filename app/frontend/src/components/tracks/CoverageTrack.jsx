@@ -8,7 +8,7 @@ import React, { useRef, useEffect } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTracks } from '../../store/TrackContext'
-import { useTrackData, computeAutoScale } from '../../hooks/useTrackData'
+import { useTrackData, computeAutoScale, getLiveTrackData, useLiveDataVersion } from '../../hooks/useTrackData'
 
 const log2 = Math.log2
 
@@ -42,12 +42,27 @@ function getRegionBarColor(filteredOverlays, pos) {
   return null
 }
 
-export default function CoverageTrack({ track, width, height, onWarning }) {
+export default function CoverageTrack({
+  track, width, height, onWarning, overlayRole, barAlpha = 1,
+  // When set (by OverlayTrackPanel), every member of the group uses these shared
+  // scale settings (the host's) so all layers — and the single label drawn by
+  // the base — agree, regardless of each member's own scaleMax/logScale.
+  overlayScaleMax, overlayScaleMin, overlayLogScale,
+}) {
   const canvasRef = useRef(null)
   const { region } = useBrowser()
   const { theme } = useTheme()
   const { tracks } = useTracks()
   const { data, loading, error } = useTrackData(track, region, width)
+  // 'overlay' = a non-base layer in an overlay group: it must stay transparent
+  // (no opaque background, no duplicate scale labels) so the layers below show
+  // through. 'base' = the bottom layer of a group; it owns the background and
+  // the shared scale labels. undefined = a normal standalone track.
+  const isOverlayLayer = overlayRole === 'overlay'
+  const inOverlay = overlayRole === 'overlay' || overlayRole === 'base'
+  // Tracks that derive their axis from siblings (overlay groups, linked scales)
+  // must re-draw when any sibling's data loads — see useLiveDataVersion.
+  const liveVersion = useLiveDataVersion(!!(track.overlayGroup || track.linkScale))
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -58,12 +73,16 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const ctx = canvas.getContext('2d')
     ctx.scale(dpr, dpr)
     ctx.clearRect(0, 0, width, height)
-    ctx.fillStyle = theme.canvasBg
-    ctx.fillRect(0, 0, width, height)
+    if (!isOverlayLayer) {
+      ctx.fillStyle = theme.canvasBg
+      ctx.fillRect(0, 0, width, height)
+    }
 
     if (loading && !data?.bins?.length) {
-      ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
-      ctx.fillText('Loading\u2026', 8, height / 2 + 4)
+      if (!isOverlayLayer) {
+        ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
+        ctx.fillText('Loading\u2026', 8, height / 2 + 4)
+      }
       if (onWarning) onWarning(null)
       return
     }
@@ -71,8 +90,10 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     // splash \u2014 the user keeps their context and the failure surfaces as a
     // non-blocking warning badge instead.
     if (error && !data?.bins?.length) {
-      ctx.fillStyle = '#ef9a9a'; ctx.font = '11px Arial, Helvetica, sans-serif'
-      ctx.fillText(typeof error === 'string' ? error : JSON.stringify(error), 8, height / 2 + 4)
+      if (!isOverlayLayer) {
+        ctx.fillStyle = '#ef9a9a'; ctx.font = '11px Arial, Helvetica, sans-serif'
+        ctx.fillText(typeof error === 'string' ? error : JSON.stringify(error), 8, height / 2 + 4)
+      }
       if (onWarning) onWarning(null)
       return
     }
@@ -83,13 +104,21 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
 
     // hasNegative (split forward/reverse rendering) is decided from the
     // fetched-range data so it stays stable across pans; only the scale
-    // magnitude is made dynamic below.
-    const hasNegative = (data.min_value || 0) < 0
+    // magnitude is made dynamic below. For an overlay member it must be a
+    // GROUP-WIDE decision (any member with negatives ⇒ all layers use the
+    // split layout) so the same value maps to the same pixel height on every
+    // layer; otherwise a positive-only layer and a negative layer would use
+    // different coordinate systems and stop being comparable.
+    const hasNegative = track.overlayGroup
+      ? tracks.some(t => t.overlayGroup === track.overlayGroup && ((getLiveTrackData(t.id)?.min_value || 0) < 0))
+      : (data.min_value || 0) < 0
     // Auto-scale source: visible region and/or a linked group when those
     // toggles are on; otherwise the fetched-range max/min (zoom-only autoscale).
     let maxVal = data.max_value || 0
     let minVal = data.min_value || 0
-    if (track.autoScaleVisible || track.linkScale) {
+    // Overlay members always resolve to the shared group axis (so the layered
+    // profiles are comparable), even when neither autoScale toggle is set.
+    if (track.autoScaleVisible || track.linkScale || track.overlayGroup) {
       const a = computeAutoScale(track, region, tracks)
       maxVal = a.max
       minVal = a.min
@@ -97,9 +126,15 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
     const regionStart = region.start
     const regionLen = region.end - region.start
     const color = track.color || '#78909c'
-    const userScaleMax = track.scaleMax != null ? track.scaleMax : null
-    const userScaleMin = track.scaleMin != null ? track.scaleMin : null
-    const useLog = track.logScale === true
+    // In an overlay group every layer (and the base's single label) uses the
+    // shared fixed-scale / log settings passed down from the host.
+    const userScaleMax = inOverlay
+      ? (overlayScaleMax != null ? overlayScaleMax : null)
+      : (track.scaleMax != null ? track.scaleMax : null)
+    const userScaleMin = inOverlay
+      ? (overlayScaleMin != null ? overlayScaleMin : null)
+      : (track.scaleMin != null ? track.scaleMin : null)
+    const useLog = inOverlay ? overlayLogScale === true : track.logScale === true
     const barAuto = track.barAutoWidth !== false
     const barFixedPx = track.barWidth || 2
     const showOutline = track.showOutline === true
@@ -131,9 +166,13 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       const posMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
       const negMax = userScaleMin != null ? userScaleMin : (Math.abs(minVal) || 1)
 
-      ctx.strokeStyle = theme.centerLine; ctx.lineWidth = 1
-      ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(width, midY); ctx.stroke()
+      // Center line is structural — only the base/standalone layer draws it.
+      if (!isOverlayLayer) {
+        ctx.strokeStyle = theme.centerLine; ctx.lineWidth = 1
+        ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(width, midY); ctx.stroke()
+      }
 
+      ctx.globalAlpha = barAlpha
       if (showBars) {
         for (const bin of data.bins) {
           const binMid = (bin.start + bin.end) / 2
@@ -166,13 +205,17 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
         drawSmoothLine(ctx, xs, fwdSmooth.map(r => midY - r * topH), fwdStroke, outlineSmooth > 0)
         drawSmoothLine(ctx, xs, revSmooth.map(r => midY + r * botH), revStroke, outlineSmooth > 0)
       }
+      ctx.globalAlpha = 1
 
-      const scaleLabel = useLog ? ' log\u2082' : ''
-      drawScaleLabel(ctx, `+${posMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
-      drawScaleLabel(ctx, `\u2212${negMax.toFixed(1)}${scaleLabel}`, 2, height - 12, theme)
-      drawScaleLabel(ctx, '0', 2, midY - 6, theme, true)
+      if (!isOverlayLayer) {
+        const scaleLabel = useLog ? ' log\u2082' : ''
+        drawScaleLabel(ctx, `+${posMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
+        drawScaleLabel(ctx, `\u2212${negMax.toFixed(1)}${scaleLabel}`, 2, height - 12, theme)
+        drawScaleLabel(ctx, '0', 2, midY - 6, theme, true)
+      }
     } else {
       const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
+      ctx.globalAlpha = barAlpha
       if (showBars) {
         for (const bin of data.bins) {
           const binMid = (bin.start + bin.end) / 2
@@ -193,10 +236,13 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
         const ys = smoothed.map(r => height - r * (height - 14) - 2)
         drawSmoothLine(ctx, xs, ys, outlineColor || theme.textPrimary || '#fff', outlineSmooth > 0)
       }
+      ctx.globalAlpha = 1
 
-      const scaleLabel = useLog ? ' log\u2082' : ''
-      drawScaleLabel(ctx, `${effectiveMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
-      drawScaleLabel(ctx, '0', 2, height - 12, theme, true)
+      if (!isOverlayLayer) {
+        const scaleLabel = useLog ? ' log\u2082' : ''
+        drawScaleLabel(ctx, `${effectiveMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
+        drawScaleLabel(ctx, '0', 2, height - 12, theme, true)
+      }
     }
 
     // Detect clipping warnings (and surface a refresh-failure as a warning
@@ -215,7 +261,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       }
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.regionOverlays, track.autoScaleVisible, track.linkScale, tracks, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }

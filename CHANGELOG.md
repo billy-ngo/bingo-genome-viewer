@@ -6,6 +6,23 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.12.0] — 2026-06-29
+
+### Added
+- **Overlay coverage tracks.** Two or more coverage tracks (BigWig, WIG,
+  bedGraph) can now be stacked into a single shared row for direct comparison.
+  Select them in Track Settings and click **"Overlay these N tracks"** (and
+  **"Separate overlay"** to undo). In the merged row's label area, a legend gives
+  each track:
+  - a **color** swatch,
+  - a **transparency** slider (per-track opacity), and
+  - **▲ / ▼ hierarchy** controls (which track draws on top), plus show/hide and
+    remove-from-overlay.
+
+  All overlaid tracks automatically share one Y axis so the profiles are
+  directly comparable, and the group drags, resizes, and exports (SVG and PNG)
+  as a single row. Overlay groups are saved with your session.
+
 ## [2.11.3] — 2026-06-29
 
 ### Fixed

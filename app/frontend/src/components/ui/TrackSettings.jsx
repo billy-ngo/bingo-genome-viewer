@@ -28,7 +28,7 @@ const ORDERED_COLORS = [
 
 export default function TrackSettings({ onClose }) {
   const { theme } = useTheme()
-  const { tracks, updateTrack, updateMultipleTracks, removeTrack } = useTracks()
+  const { tracks, updateTrack, updateMultipleTracks, removeTrack, createOverlayGroup, dissolveOverlayGroup } = useTracks()
   const [selected, setSelected] = useState(new Set())
 
   function toggle(id) {
@@ -44,6 +44,15 @@ export default function TrackSettings({ onClose }) {
   const hasVariants = selectedTracks.some(t => t.track_type === 'variants')
   const hasBars = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads' || t.track_type === 'variants')
   const hasCoverageBars = selectedTracks.some(t => t.track_type === 'coverage' || t.track_type === 'reads')
+
+  // Overlay groups (coverage tracks only). When ≥2 coverage tracks are selected
+  // they can be merged into one overlaid row; when the selection is exactly one
+  // existing group, offer to separate it.
+  const coverageSelected = selectedTracks.filter(t => t.track_type === 'coverage')
+  const coverageIds = coverageSelected.map(t => t.id)
+  const sharedOverlayGroup = coverageSelected.length >= 2 &&
+    coverageSelected.every(t => t.overlayGroup && t.overlayGroup === coverageSelected[0].overlayGroup)
+      ? coverageSelected[0].overlayGroup : null
 
   const commonHeight = selectedTracks.length > 0 && selectedTracks.every(t => t.height === selectedTracks[0].height) ? selectedTracks[0].height : ''
   const commonAutoHeight = selectedTracks.length > 0 && selectedTracks.every(t => (t.autoHeight !== false) === (selectedTracks[0].autoHeight !== false)) ? (selectedTracks[0].autoHeight !== false) : null
@@ -294,6 +303,33 @@ export default function TrackSettings({ onClose }) {
                     style={{ cursor: 'pointer' }} />
                   log{'\u2082'}
                 </label>
+              </div>
+            )}
+
+            {/* Overlay coverage tracks into one shared, transparent row */}
+            {coverageSelected.length >= 2 && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel}>Overlay</span>
+                {sharedOverlayGroup ? (
+                  <button style={S.smallBtn} onClick={() => dissolveOverlayGroup(sharedOverlayGroup)}>
+                    Separate overlay
+                  </button>
+                ) : (
+                  <button style={S.smallBtn} onClick={() => createOverlayGroup(coverageIds)}>
+                    Overlay these {coverageSelected.length} tracks
+                  </button>
+                )}
+                <span style={{ fontSize: 10, color: t.textTertiary }}>
+                  {sharedOverlayGroup ? 'Currently overlaid' : 'Stack on one axis'}
+                </span>
+              </div>
+            )}
+            {coverageSelected.length >= 2 && !sharedOverlayGroup && (
+              <div style={{ ...S.subRow, borderLeft: 'none', marginLeft: 0, paddingLeft: 90 }}>
+                <span style={{ fontSize: 10, color: t.textTertiary, lineHeight: 1.4 }}>
+                  Tune each track's color, transparency and stacking order in the
+                  overlay row's legend on the left.
+                </span>
               </div>
             )}
 

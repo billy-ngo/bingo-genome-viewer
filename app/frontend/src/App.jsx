@@ -19,10 +19,11 @@ import HelpTour from './components/ui/HelpTour'
 import NavigationBar from './components/NavigationBar'
 import RulerTrack from './components/RulerTrack'
 import TrackPanel from './components/TrackPanel'
+import OverlayTrackPanel from './components/OverlayTrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.11.1'
+const APP_VERSION = '2.12.0'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -575,27 +576,58 @@ function BrowserApp() {
               </div>
               <RulerTrack width={containerWidth - labelWidth} />
             </div>
-            {tracks.filter(isTrackActive).map(track => (
-              <TrackPanel
-                key={track.id}
-                track={track}
-                containerWidth={containerWidth}
-                labelWidth={labelWidth}
-                onLabelResizeStart={onLabelResizeStart}
-                isDragging={dragTrackId === track.id}
-                isDropTarget={dropTrackId === track.id}
-                onDragStart={() => setDragTrackId(track.id)}
-                onDragOver={() => setDropTrackId(track.id)}
-                onDrop={() => {
-                  if (dragTrackId && dragTrackId !== track.id) {
-                    reorderTracks(dragTrackId, track.id)
-                  }
-                  setDragTrackId(null)
-                  setDropTrackId(null)
-                }}
-                onDragEnd={() => { setDragTrackId(null); setDropTrackId(null) }}
-              />
-            ))}
+            {(() => {
+              // Build render units: standalone tracks render one row each;
+              // overlay groups render a single combined row at the position of
+              // their first member (members are kept contiguous in the array).
+              const activeIds = new Set(tracks.filter(isTrackActive).map(t => t.id))
+              const seen = new Set()
+              const units = []
+              for (const t of tracks) {
+                if (t.overlayGroup) {
+                  if (seen.has(t.overlayGroup)) continue
+                  seen.add(t.overlayGroup)
+                  const groupMembers = tracks.filter(m => m.overlayGroup === t.overlayGroup)
+                  // Show the group only if at least one member is active on this chrom
+                  if (!groupMembers.some(m => activeIds.has(m.id))) continue
+                  units.push({ type: 'overlay', key: t.overlayGroup, groupId: t.overlayGroup, members: groupMembers })
+                } else {
+                  if (!activeIds.has(t.id)) continue
+                  units.push({ type: 'single', key: t.id, track: t })
+                }
+              }
+              const dragProps = (anchorId) => ({
+                isDragging: dragTrackId === anchorId,
+                isDropTarget: dropTrackId === anchorId,
+                onDragStart: () => setDragTrackId(anchorId),
+                onDragOver: () => setDropTrackId(anchorId),
+                onDrop: () => {
+                  if (dragTrackId && dragTrackId !== anchorId) reorderTracks(dragTrackId, anchorId)
+                  setDragTrackId(null); setDropTrackId(null)
+                },
+                onDragEnd: () => { setDragTrackId(null); setDropTrackId(null) },
+              })
+              return units.map(u => u.type === 'overlay' ? (
+                <OverlayTrackPanel
+                  key={u.key}
+                  groupId={u.groupId}
+                  members={u.members}
+                  containerWidth={containerWidth}
+                  labelWidth={labelWidth}
+                  onLabelResizeStart={onLabelResizeStart}
+                  {...dragProps(u.members[0].id)}
+                />
+              ) : (
+                <TrackPanel
+                  key={u.key}
+                  track={u.track}
+                  containerWidth={containerWidth}
+                  labelWidth={labelWidth}
+                  onLabelResizeStart={onLabelResizeStart}
+                  {...dragProps(u.track.id)}
+                />
+              ))
+            })()}
             {tracks.length === 0 && (
               <div style={{ padding: 24, color: theme.textMuted, fontSize: 13 }}>
                 Add tracks above — BAM, VCF, BigWig, BED, GTF, GFF, WIG...

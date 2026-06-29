@@ -22,6 +22,14 @@ export const DEFAULT_ANNOTATION_COLORS = {
   repeat: '#8d6e63', default: '#80cbc4',
 }
 
+/** Generate a unique overlay-group id. */
+function makeGroupId() {
+  const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10)
+  return `ovl-${rand}`
+}
+
 /** Decode literal \\uXXXX escape sequences that can appear in filenames */
 export function cleanName(s) {
   if (!s) return s
@@ -82,6 +90,8 @@ export function TrackProvider({ children }) {
         showFwdStrand: true, // show forward-strand reads (BAM)
         showRevStrand: true, // show reverse-strand reads (BAM)
         regionOverlays: [], // [{ chrom, start, end, color, opacity }]
+        overlayGroup: null,   // id of the overlay group this coverage track belongs to (null = standalone)
+        overlayOpacity: 0.6,  // per-track alpha when drawn in an overlay group (0..1)
         targetChromosomes: info.target_chromosomes || null,
         ...(isAnnotation ? {
           annotationColors: null,
@@ -123,7 +133,20 @@ export function TrackProvider({ children }) {
     // restart, a 5xx, or a network drop) left the track in tracks[] with
     // visible:true — a phantom row that then ghosted into the SVG/PNG
     // export and enlarged it by its full height.
-    setTracks(prev => prev.filter(t => t.id !== id))
+    setTracks(prev => {
+      const removed = prev.find(t => t.id === id)
+      let next = prev.filter(t => t.id !== id)
+      // If the removed track was in an overlay group now left with <2 members,
+      // dissolve the remnant so it renders as a normal (opaque) standalone track
+      // rather than a stranded one-track "overlay".
+      if (removed?.overlayGroup) {
+        const gid = removed.overlayGroup
+        if (next.filter(t => t.overlayGroup === gid).length < 2) {
+          next = next.map(t => t.overlayGroup === gid ? { ...t, overlayGroup: null } : t)
+        }
+      }
+      return next
+    })
     clearTrackData(id)
     try {
       await tracksApi.remove(id)
@@ -153,14 +176,138 @@ export function TrackProvider({ children }) {
     setTracks(prev => prev.map(t => ids.includes(t.id) ? { ...t, ...updates } : t))
   }, [])
 
+  // Group-aware reorder. When the dragged track belongs to an overlay group,
+  // the WHOLE contiguous group block moves together so the group stays intact
+  // (overlay members are always kept contiguous in the array). Otherwise this
+  // behaves like a single-element move.
   const reorderTracks = useCallback((fromId, toId) => {
     setTracks(prev => {
+      const fromT = prev.find(t => t.id === fromId)
+      const toT = prev.find(t => t.id === toId)
+      if (!fromT || !toT) return prev
+      const blockIds = fromT.overlayGroup
+        ? prev.filter(t => t.overlayGroup === fromT.overlayGroup).map(t => t.id)
+        : [fromId]
+      const blockSet = new Set(blockIds)
+      if (blockSet.has(toId)) return prev   // dropping onto itself / its own group
+      const block = prev.filter(t => blockSet.has(t.id))
+      const rest = prev.filter(t => !blockSet.has(t.id))
+      // Snap the drop to the target's GROUP boundary: if the target is part of an
+      // overlay group, insert before the group's first member (never mid-group,
+      // which would split it). Otherwise insert before the target track.
+      const insertAt = toT.overlayGroup
+        ? rest.findIndex(t => t.overlayGroup === toT.overlayGroup)
+        : rest.findIndex(t => t.id === toId)
+      if (insertAt === -1) return prev
+      return [...rest.slice(0, insertAt), ...block, ...rest.slice(insertAt)]
+    })
+  }, [])
+
+  // ── Overlay groups ────────────────────────────────────────────────
+  // Coverage tracks can be merged into an "overlay group": one shared row in
+  // which each member is drawn on its own transparent layer (per-member
+  // opacity = transparency, array order = stacking hierarchy). Members are
+  // kept contiguous in the track array so the group renders and reorders as a
+  // single block.
+
+  /** Merge the given (coverage) track ids into a new overlay group. Members
+   *  are moved into one contiguous block at the position of the topmost one. */
+  const createOverlayGroup = useCallback((ids) => {
+    setTracks(prev => {
+      const idSet = new Set(ids)
+      const memberIds = prev
+        .filter(t => idSet.has(t.id) && t.track_type === 'coverage')
+        .map(t => t.id)
+      if (memberIds.length < 2) return prev
+      const groupId = makeGroupId()
+      const memberSet = new Set(memberIds)
+      // Old groups some members are leaving — dissolve any left too small.
+      const oldGroups = new Set(prev.filter(t => memberSet.has(t.id) && t.overlayGroup).map(t => t.overlayGroup))
+      let stamped = prev.map(t => memberSet.has(t.id)
+        ? { ...t, overlayGroup: groupId, overlayOpacity: t.overlayOpacity ?? 0.6 }
+        : t)
+      for (const g of oldGroups) {
+        if (stamped.filter(t => t.overlayGroup === g).length < 2) {
+          stamped = stamped.map(t => t.overlayGroup === g ? { ...t, overlayGroup: null } : t)
+        }
+      }
+      // Pull members out and re-insert them as a contiguous block where the
+      // first member currently sits (preserving the members' relative order).
+      const firstIdx = stamped.findIndex(t => memberSet.has(t.id))
+      const before = stamped.slice(0, firstIdx).filter(t => !memberSet.has(t.id)).length
+      const members = stamped.filter(t => memberSet.has(t.id))
+      const rest = stamped.filter(t => !memberSet.has(t.id))
+      return [...rest.slice(0, before), ...members, ...rest.slice(before)]
+    })
+  }, [])
+
+  /** Add coverage track(s) to an existing overlay group, placing them at the
+   *  end of the group's contiguous block. */
+  const addToOverlayGroup = useCallback((groupId, ids) => {
+    setTracks(prev => {
+      if (!prev.some(t => t.overlayGroup === groupId)) return prev
+      const idSet = new Set(ids)
+      const newIds = prev
+        .filter(t => idSet.has(t.id) && t.track_type === 'coverage' && t.overlayGroup !== groupId)
+        .map(t => t.id)
+      if (!newIds.length) return prev
+      const newSet = new Set(newIds)
+      const stamped = prev.map(t => newSet.has(t.id)
+        ? { ...t, overlayGroup: groupId, overlayOpacity: t.overlayOpacity ?? 0.6 }
+        : t)
+      // Rebuild so the whole group is contiguous: existing members first (in
+      // their order), then the newly added ones, anchored at the group start.
+      const inGroup = t => t.overlayGroup === groupId
+      const firstIdx = stamped.findIndex(inGroup)
+      const before = stamped.slice(0, firstIdx).filter(t => !inGroup(t)).length
+      const groupMembers = stamped.filter(inGroup)
+      const rest = stamped.filter(t => !inGroup(t))
+      return [...rest.slice(0, before), ...groupMembers, ...rest.slice(before)]
+    })
+  }, [])
+
+  /** Dissolve an overlay group entirely — every member becomes standalone. */
+  const dissolveOverlayGroup = useCallback((groupId) => {
+    setTracks(prev => prev.map(t => t.overlayGroup === groupId ? { ...t, overlayGroup: null } : t))
+  }, [])
+
+  /** Remove one track from its overlay group. If that leaves a single member,
+   *  the group is dissolved (a one-track overlay is just a normal track). */
+  const removeFromOverlayGroup = useCallback((trackId) => {
+    setTracks(prev => {
+      const t = prev.find(x => x.id === trackId)
+      if (!t || !t.overlayGroup) return prev
+      const gid = t.overlayGroup
+      const survivors = prev.filter(x => x.overlayGroup === gid && x.id !== trackId)
+      // Fewer than 2 left → dissolve the whole group (positions unchanged).
+      if (survivors.length < 2) {
+        return prev.map(x => x.overlayGroup === gid ? { ...x, overlayGroup: null } : x)
+      }
+      // Group survives: pull the removed track OUT of the group's span and drop
+      // it right after the group's last member so the survivors stay contiguous.
+      const removed = { ...t, overlayGroup: null }
+      const without = prev.filter(x => x.id !== trackId)
+      let lastIdx = -1
+      without.forEach((x, i) => { if (x.overlayGroup === gid) lastIdx = i })
+      return [...without.slice(0, lastIdx + 1), removed, ...without.slice(lastIdx + 1)]
+    })
+  }, [])
+
+  /** Move a member up (dir -1) or down (dir +1) within its overlay group,
+   *  changing the draw order / stacking hierarchy. */
+  const reorderOverlayMember = useCallback((trackId, dir) => {
+    setTracks(prev => {
+      const t = prev.find(x => x.id === trackId)
+      if (!t || !t.overlayGroup) return prev
+      const gid = t.overlayGroup
+      const groupIdxs = prev.reduce((acc, x, i) => { if (x.overlayGroup === gid) acc.push(i); return acc }, [])
+      const selfIdx = prev.findIndex(x => x.id === trackId)
+      const pos = groupIdxs.indexOf(selfIdx)
+      const swapPos = pos + dir
+      if (swapPos < 0 || swapPos >= groupIdxs.length) return prev
+      const a = groupIdxs[pos], b = groupIdxs[swapPos]
       const next = [...prev]
-      const fromIdx = next.findIndex(t => t.id === fromId)
-      const toIdx = next.findIndex(t => t.id === toId)
-      if (fromIdx === -1 || toIdx === -1) return prev
-      const [moved] = next.splice(fromIdx, 1)
-      next.splice(toIdx, 0, moved)
+      ;[next[a], next[b]] = [next[b], next[a]]
       return next
     })
   }, [])
@@ -203,6 +350,8 @@ export function TrackProvider({ children }) {
     <TrackContext.Provider value={{
       tracks, setTracks, addTrack, uploadTrack, commitTrack, discardTrack,
       removeTrack, updateTrack, updateMultipleTracks, reorderTracks,
+      createOverlayGroup, addToOverlayGroup, dissolveOverlayGroup,
+      removeFromOverlayGroup, reorderOverlayMember,
       addGenomeAnnotationTrack, restoreAnnotationTracks, error, setError,
     }}>
       {children}
