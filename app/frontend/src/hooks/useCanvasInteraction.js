@@ -2,7 +2,10 @@
  * useCanvasInteraction.js — Click-drag panning, scroll-wheel zooming,
  * and right-click-drag region selection.
  *
- * Left-click drag: pan the viewport.
+ * Left-click drag: a 2-D "grab" — horizontal movement pans the genomic
+ *   viewport; vertical movement scrolls the track list (when there are more
+ *   tracks than fit on screen). Dragging up reveals tracks below; dragging
+ *   down reveals tracks above.
  * Right-click drag: select a genomic region (stored in BrowserContext).
  *   After such a drag, the trailing `contextmenu` event (which the browser
  *   fires on mouseup of a right-button) is suppressed in the capture phase
@@ -16,6 +19,21 @@ import { useEffect, useRef } from 'react'
 import { useBrowser } from '../store/BrowserContext'
 
 const DRAG_MOVE_THRESHOLD_PX = 3  // movement >= this counts as a "drag", not a click
+
+/** Walk up the DOM to the nearest ancestor that actually scrolls vertically
+ *  (the track list). Returns null when nothing overflows, so a vertical drag
+ *  is a no-op until there are more tracks than fit on screen. */
+function findScrollParent(el) {
+  let node = el && el.parentElement
+  while (node) {
+    const oy = getComputedStyle(node).overflowY
+    if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight + 1) {
+      return node
+    }
+    node = node.parentElement
+  }
+  return null
+}
 
 export function useCanvasInteraction(containerRef) {
   const { region, zoom, navigateTo, setSelection, clearSelection } = useBrowser()
@@ -55,13 +73,26 @@ export function useCanvasInteraction(containerRef) {
         return
       }
 
-      // Left-click: begin pan
+      // Left-click: begin a 2-D grab (horizontal pan + vertical track scroll)
       if (e.button === 0) {
+        // Don't hijack a press on a track's own scrollbar (e.g. the ReadTrack
+        // pileup scrollbar marks its width via data-scrollbar). That control
+        // handles the press itself.
+        const tgt = e.target
+        const sbw = tgt && tgt.dataset ? parseInt(tgt.dataset.scrollbar, 10) || 0 : 0
+        if (sbw > 0) {
+          const r2 = tgt.getBoundingClientRect()
+          if (e.clientX >= r2.right - sbw - 2) return
+        }
         clearSelection()
+        const scrollParent = findScrollParent(canvas)
         dragRef.current = {
           x: e.clientX,
+          y: e.clientY,
           startRegion: { ...r },
           containerWidth: canvas.offsetWidth || canvas.clientWidth || 1,
+          scrollParent,
+          startScrollTop: scrollParent ? scrollParent.scrollTop : 0,
         }
       }
     }
@@ -93,9 +124,19 @@ export function useCanvasInteraction(containerRef) {
 
       // Pan drag
       if (!dragRef.current) return
-      const dx = e.clientX - dragRef.current.x
-      const { chrom, start, end } = dragRef.current.startRegion
-      const bpPerPixel = (end - start) / dragRef.current.containerWidth
+      const d = dragRef.current
+
+      // Vertical: scroll the track list. "Grab" model — dragging up moves the
+      // content up (scrollTop increases), revealing tracks below.
+      if (d.scrollParent) {
+        const dy = e.clientY - d.y
+        d.scrollParent.scrollTop = d.startScrollTop - dy
+      }
+
+      // Horizontal: pan the genomic viewport.
+      const dx = e.clientX - d.x
+      const { chrom, start, end } = d.startRegion
+      const bpPerPixel = (end - start) / d.containerWidth
       const bpDelta = -dx * bpPerPixel
       navigateTo(chrom, start + bpDelta, end + bpDelta)
     }

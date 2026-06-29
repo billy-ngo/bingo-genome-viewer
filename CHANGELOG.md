@@ -6,6 +6,16 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.10.3] — 2026-06-27
+
+### Added
+- Left-click drag is now a 2-D "grab": horizontal movement pans the genomic
+  view (as before) and vertical movement scrolls the track list when there are
+  more tracks than fit on screen. Dragging up reveals tracks below; dragging
+  down reveals tracks above. Vertical drag is a no-op when everything already
+  fits. A drag that starts on a read track's own pileup scrollbar is left to
+  that scrollbar, so the two don't fight.
+
 ## [2.10.2] — 2026-06-27
 
 ### Fixed

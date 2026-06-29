@@ -133,6 +133,10 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     ctx.scale(dpr, dpr)
     ctx.clearRect(0, 0, width, height)
     ctx.fillStyle = theme.canvasBg; ctx.fillRect(0, 0, width, height)
+    // Reset the scrollbar-zone hint each draw; set below when a scrollbar is
+    // shown. The global drag-to-scroll handler reads this to avoid hijacking
+    // a press that lands on the read pileup's own scrollbar.
+    canvas.dataset.scrollbar = '0'
 
     if (loading && !data) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
@@ -227,6 +231,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     reportAuto(2 + totalRows * (rh + rg) + 4)
     const visibleRows = Math.floor(height / (rh + rg))
     const needsScroll = totalRows > visibleRows
+    canvas.dataset.scrollbar = needsScroll ? String(SCROLLBAR_WIDTH) : '0'
     const trackW = needsScroll ? width - SCROLLBAR_WIDTH - 2 : width
     const safeScrollRow = Math.min(scrollRow, Math.max(0, totalRows - visibleRows + 1))
 
