@@ -65,6 +65,8 @@ export function TrackProvider({ children }) {
         useArrows: true,
         scaleMax: null,
         scaleMin: null,
+        autoScaleVisible: false,  // auto-fit Y scale to the visible region (pan-responsive)
+        linkScale: false,         // share the auto Y scale across linked coverage/read tracks
         logScale: false,
         barAutoWidth: true,
         barWidth: 2,

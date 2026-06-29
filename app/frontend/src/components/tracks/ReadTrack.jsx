@@ -8,7 +8,8 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
-import { useTrackData } from '../../hooks/useTrackData'
+import { useTracks } from '../../store/TrackContext'
+import { useTrackData, computeAutoScale } from '../../hooks/useTrackData'
 import { genomeApi } from '../../api/client'
 
 const READ_DETAIL_THRESHOLD = 50_000
@@ -49,6 +50,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
   const canvasRef = useRef(null)
   const { region } = useBrowser()
   const { theme } = useTheme()
+  const { tracks } = useTracks()
   const { data, loading } = useTrackData(track, region, width)
   const [refSeq, setRefSeq] = useState(null)
   const refFetchRef = useRef(null)
@@ -154,7 +156,11 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
 
     // ── Coverage mode (zoomed out) ──────────────────────────────
     if (data.bins) {
-      const actualMax = data.max_value || 1
+      let actualMax = data.max_value || 1
+      if (track.autoScaleVisible || track.linkScale) {
+        const a = computeAutoScale(track, region, tracks)
+        actualMax = a.max || 1
+      }
       const maxVal = track.scaleMax != null ? track.scaleMax : actualMax
       const color = track.color || '#78909c'
       const barAuto = track.barAutoWidth !== false
@@ -339,7 +345,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars,
       track.showNucleotides, track.useArrows, track.logScale,
       track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize,
-      track.showFwdStrand, track.showRevStrand, theme])
+      track.showFwdStrand, track.showRevStrand, track.autoScaleVisible, track.linkScale, tracks, theme])
 
   // Scrollbar drag handler
   const onMouseDown = useCallback((e) => {

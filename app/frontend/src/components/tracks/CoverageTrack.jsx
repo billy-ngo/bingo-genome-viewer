@@ -7,7 +7,8 @@
 import React, { useRef, useEffect } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
-import { useTrackData } from '../../hooks/useTrackData'
+import { useTracks } from '../../store/TrackContext'
+import { useTrackData, computeAutoScale } from '../../hooks/useTrackData'
 
 const log2 = Math.log2
 
@@ -45,6 +46,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
   const canvasRef = useRef(null)
   const { region } = useBrowser()
   const { theme } = useTheme()
+  const { tracks } = useTracks()
   const { data, loading, error } = useTrackData(track, region, width)
 
   useEffect(() => {
@@ -79,9 +81,19 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       return
     }
 
-    const maxVal = data.max_value || 0
-    const minVal = data.min_value || 0
-    const hasNegative = minVal < 0
+    // hasNegative (split forward/reverse rendering) is decided from the
+    // fetched-range data so it stays stable across pans; only the scale
+    // magnitude is made dynamic below.
+    const hasNegative = (data.min_value || 0) < 0
+    // Auto-scale source: visible region and/or a linked group when those
+    // toggles are on; otherwise the fetched-range max/min (zoom-only autoscale).
+    let maxVal = data.max_value || 0
+    let minVal = data.min_value || 0
+    if (track.autoScaleVisible || track.linkScale) {
+      const a = computeAutoScale(track, region, tracks)
+      maxVal = a.max
+      minVal = a.min
+    }
     const regionStart = region.start
     const regionLen = region.end - region.start
     const color = track.color || '#78909c'
@@ -203,7 +215,7 @@ export default function CoverageTrack({ track, width, height, onWarning }) {
       }
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.regionOverlays, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.regionOverlays, track.autoScaleVisible, track.linkScale, tracks, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }

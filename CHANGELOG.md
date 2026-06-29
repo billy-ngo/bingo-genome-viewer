@@ -6,6 +6,22 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.11.0] — 2026-06-29
+
+### Added
+- **"Fit to visible region" Y-scale toggle** (Track Settings, coverage/read
+  tracks, under Y Scale → Auto). When on, a track's Y axis auto-fits to just
+  the data currently in view and re-fits every time you pan left/right — not
+  only when you zoom. Off (the default) keeps the existing behavior of scaling
+  to the fetched region.
+- **Linked auto-scales are now dynamic.** "Link scales across selected tracks"
+  is now a persistent toggle (rather than a one-time snapshot): linked
+  coverage/read tracks continuously share one Y axis, and when combined with
+  "Fit to visible region" they share a scale that re-fits the visible region as
+  you pan. Both settings are saved with your session. (To set a fixed shared
+  scale instead, turn Auto off and enter a Y max — it applies to all selected
+  tracks.)
+
 ## [2.10.3] — 2026-06-27
 
 ### Added

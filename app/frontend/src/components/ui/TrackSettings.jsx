@@ -8,7 +8,6 @@ import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useTracks, DEFAULT_ANNOTATION_COLORS } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
-import { getLiveTrackData } from '../../hooks/useTrackData'
 import DraggablePanel from './DraggablePanel'
 
 // Ordered by hue: reds → oranges → yellows → greens → cyans → blues → purples → grays
@@ -55,6 +54,8 @@ export default function TrackSettings({ onClose }) {
   const commonScaleMax = selectedTracks.length > 0 && selectedTracks.every(t => t.scaleMax === selectedTracks[0].scaleMax) ? selectedTracks[0].scaleMax : undefined
   const commonScaleMin = selectedTracks.length > 0 && selectedTracks.every(t => t.scaleMin === selectedTracks[0].scaleMin) ? selectedTracks[0].scaleMin : undefined
   const isAutoScale = (commonScaleMax === null || commonScaleMax === undefined) && (commonScaleMin === null || commonScaleMin === undefined)
+  const commonAutoScaleVisible = selectedTracks.length > 0 && selectedTracks.every(t => (t.autoScaleVisible === true) === (selectedTracks[0].autoScaleVisible === true)) ? (selectedTracks[0].autoScaleVisible === true) : null
+  const commonLinkScale = selectedTracks.length > 0 && selectedTracks.every(t => (t.linkScale === true) === (selectedTracks[0].linkScale === true)) ? (selectedTracks[0].linkScale === true) : null
   const commonLogScale = selectedTracks.length > 0 && selectedTracks.every(t => t.logScale === selectedTracks[0].logScale) ? selectedTracks[0].logScale : null
   const commonBarAutoWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barAutoWidth === selectedTracks[0].barAutoWidth) ? selectedTracks[0].barAutoWidth : null
   const commonBarWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barWidth === selectedTracks[0].barWidth) ? selectedTracks[0].barWidth : undefined
@@ -242,29 +243,27 @@ export default function TrackSettings({ onClose }) {
                 </label>
               </div>
             )}
+            {/* Auto-scale to the visible region — re-fits the Y axis on every
+                pan (in addition to the default rescale on zoom). */}
+            {hasCoverage && isAutoScale && (
+              <div style={S.subRow}>
+                <label style={S.cbLabel}>
+                  <input type="checkbox" checked={commonAutoScaleVisible === true}
+                    ref={el => { if (el) el.indeterminate = commonAutoScaleVisible === null }}
+                    onChange={e => applyToSelected({ autoScaleVisible: e.target.checked })}
+                    style={{ cursor: 'pointer' }} />
+                  Fit to visible region (rescales as you pan)
+                </label>
+              </div>
+            )}
+            {/* Link the auto scale across selected coverage/read tracks so they
+                share one (zoom- and pan-responsive) Y axis. */}
             {hasCoverage && isAutoScale && selectedTracks.filter(t => t.track_type === 'coverage' || t.track_type === 'reads').length > 1 && (
               <div style={S.subRow}>
                 <label style={S.cbLabel}>
-                  <input type="checkbox"
-                    onChange={e => {
-                      if (e.target.checked) {
-                        let globalMax = 0
-                        let globalMin = 0
-                        for (const tr of selectedTracks) {
-                          if (tr.track_type !== 'coverage' && tr.track_type !== 'reads') continue
-                          const d = getLiveTrackData(tr.id)
-                          if (d?.max_value) globalMax = Math.max(globalMax, d.max_value)
-                          if (d?.min_value) globalMin = Math.min(globalMin, d.min_value)
-                        }
-                        if (globalMax > 0) {
-                          const updates = { scaleMax: Math.ceil(globalMax) }
-                          if (globalMin < 0) updates.scaleMin = Math.ceil(Math.abs(globalMin))
-                          applyToSelected(updates)
-                        }
-                      } else {
-                        applyToSelected({ scaleMax: null, scaleMin: null })
-                      }
-                    }}
+                  <input type="checkbox" checked={commonLinkScale === true}
+                    ref={el => { if (el) el.indeterminate = commonLinkScale === null }}
+                    onChange={e => applyToSelected({ linkScale: e.target.checked })}
                     style={{ cursor: 'pointer' }} />
                   Link scales across selected tracks
                 </label>

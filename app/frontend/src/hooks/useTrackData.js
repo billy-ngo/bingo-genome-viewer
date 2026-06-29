@@ -81,6 +81,44 @@ export function getCachedDataForTrack(trackId, chrom) {
     || null
 }
 
+/** Compute the auto Y-scale (max/min) for a coverage/read track, honoring the
+ *  per-track toggles:
+ *   - autoScaleVisible: scale to only the bins inside the visible region
+ *     [region.start, region.end] so the axis re-fits on every pan; otherwise
+ *     use the track's fetched-range max_value/min_value (the existing
+ *     zoom-only autoscale).
+ *   - linkScale: take the max/min across ALL linked coverage/read tracks so a
+ *     linked group shares one axis (and, with autoScaleVisible, a shared axis
+ *     that re-fits the visible region as you pan).
+ *  Returns { max, min } in data units. */
+export function computeAutoScale(track, region, tracks) {
+  const visible = track.autoScaleVisible === true && region
+  const group = (track.linkScale === true && Array.isArray(tracks))
+    ? tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') && t.linkScale === true)
+    : [track]
+  const members = group.length ? group : [track]
+  let maxV = 0, minV = 0
+  for (const t of members) {
+    const d = liveData.get(t.id)
+    if (!d) continue
+    if (visible && d.bins?.length) {
+      for (const b of d.bins) {
+        if (b.end <= region.start || b.start >= region.end) continue
+        const fwd = b.forward != null ? b.forward : b.value
+        const rev = b.reverse != null ? b.reverse : 0
+        if (fwd > maxV) maxV = fwd
+        if (b.value > maxV) maxV = b.value
+        if (rev < minV) minV = rev
+        if (b.value < minV) minV = b.value
+      }
+    } else {
+      if (d.max_value != null && d.max_value > maxV) maxV = d.max_value
+      if (d.min_value != null && d.min_value < minV) minV = d.min_value
+    }
+  }
+  return { max: maxV, min: minV }
+}
+
 /** Classify a fetch error as transient (worth retrying) or permanent. */
 function isTransientError(err) {
   if (!err) return false
