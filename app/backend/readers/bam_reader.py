@@ -160,13 +160,26 @@ class BamReader:
     def chromosomes(self) -> list[dict]:
         """Reference contigs as [{name, length}].
 
-        Reads from bamnostic's authoritative binary reference block via the
-        pysam-compatible ``references``/``lengths`` tuples (always present,
-        regardless of whether the BAM carries an @SQ SAM *text* header). The
-        previous implementation used ``header.get('SQ')`` which raises
-        ``AttributeError`` on bamnostic's ``BAMheader`` object (it is not a
-        dict) — i.e. it broke for *every* BAM. Falls back to the raw refs
-        map, then to a dict-style header, for resilience across versions.
+        The BAM header is immutable once opened, so the contig list is computed
+        once and cached — it is read on every ``_resolve_chrom`` (i.e. every
+        coverage/read fetch), and rebuilding it per request was wasted work on
+        many-contig BAMs.
+        """
+        cached = getattr(self, "_chrom_cache", None)
+        if cached is not None:
+            return cached
+        result = self._read_chromosomes()
+        self._chrom_cache = result
+        return result
+
+    def _read_chromosomes(self) -> list[dict]:
+        """Compute the contig list from bamnostic's authoritative binary
+        reference block via the pysam-compatible ``references``/``lengths``
+        tuples (always present, regardless of whether the BAM carries an @SQ SAM
+        *text* header). The previous implementation used ``header.get('SQ')``
+        which raises ``AttributeError`` on bamnostic's ``BAMheader`` object (it
+        is not a dict) — i.e. it broke for *every* BAM. Falls back to the raw
+        refs map, then to a dict-style header, for resilience across versions.
         """
         aln = self._aln
         refs = getattr(aln, "references", None)

@@ -6,6 +6,35 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.12.1] — 2026-06-29
+
+### Fixed
+- **Coverage binning is now consistent and correct across formats.** BedGraph
+  and WIG coverage is weighted by base-pair overlap (matching the BigWig
+  reader), so the same signal rendered as `.bedgraph`, `.wig`, or `.bw` now
+  produces the same bin heights instead of subtly different ones.
+- **WIG `span` is honored.** A `span=N` entry now spreads its value across every
+  base pair (and bin) it covers, rather than being credited to a single point.
+- **Out-of-order WIG files no longer render wrong coverage.** The "already
+  sorted?" shortcut only compared the first and last position, so a file with
+  any interior disorder was left unsorted and could drop or misplace data. All
+  parallel arrays are now sorted together with a real monotonicity check.
+- **Forward/reverse (3-column) WIG now renders the reverse strand below the
+  axis** as intended, instead of summing both strands into one positive bar.
+- **Chromosome-name matching no longer mangles contig names.** Matching stripped
+  *every* occurrence of "chr" (so `scaffold_chr2` broke); it now strips only a
+  leading `chr` prefix, matching the BAM reader.
+
+### Changed
+- Requires **Python 3.10+** (the package metadata previously claimed 3.9, but the
+  code has always used 3.10-only syntax and could not import on 3.9).
+- Uploaded files are saved under unique names, so two same-named uploads (e.g.
+  two `reads.bam`) no longer overwrite each other.
+- Dropping a genome-format file and choosing "Add as Track" now runs the same
+  genome-compatibility check as every other load path.
+- Minor internal cleanups: BAM contig list cached (was recomputed per request),
+  a single tab-close beacon, and corrected/accurate code comments and README.
+
 ## [2.12.0] — 2026-06-29
 
 ### Added

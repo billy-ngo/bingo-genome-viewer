@@ -11,6 +11,12 @@ from pathlib import Path
 MAX_VARIANTS = 10_000
 
 
+def _strip_chr(name: str) -> str:
+    """Strip only a *leading* 'chr' prefix (case-insensitive). str.replace('chr','')
+    would delete every occurrence and mangle names like 'scaffold_chr2'."""
+    return name[3:] if name[:3].lower() == "chr" else name
+
+
 class VcfReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
@@ -123,7 +129,7 @@ class VcfReader:
         if len(self._by_chrom) == 1:
             return next(iter(self._by_chrom))
         for key in self._by_chrom:
-            if key.replace("chr", "") == chrom.replace("chr", ""):
+            if _strip_chr(key) == _strip_chr(chrom):
                 return key
             if key.lower() == chrom.lower():
                 return key

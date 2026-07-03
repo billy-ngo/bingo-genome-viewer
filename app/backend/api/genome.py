@@ -11,6 +11,7 @@ Endpoints:
 import re
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -28,9 +29,17 @@ def _clean_name(raw: str) -> str:
     return _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), raw)
 
 
+def _unique_dest(filename: str) -> Path:
+    """A collision-proof, path-safe destination in the upload dir: the cleaned
+    basename prefixed with a short unique token, so two same-named genome
+    uploads don't overwrite each other and directory components are stripped."""
+    base = Path(_clean_name(filename or "genome")).name or "genome"
+    return _upload_dir / f"{uuid.uuid4().hex[:8]}_{base}"
+
+
 @router.post("/load")
 async def load_genome(file: UploadFile = File(...)):
-    dest = _upload_dir / _clean_name(file.filename)
+    dest = _unique_dest(file.filename)
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
@@ -53,7 +62,7 @@ async def add_chromosomes(file: UploadFile = File(...)):
     """Merge chromosomes from an additional genome file into the current genome."""
     if app_state.genome is None:
         raise HTTPException(status_code=400, detail="No genome loaded")
-    dest = _upload_dir / _clean_name(file.filename)
+    dest = _unique_dest(file.filename)
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)

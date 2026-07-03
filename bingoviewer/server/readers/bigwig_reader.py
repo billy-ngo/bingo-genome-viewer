@@ -25,6 +25,37 @@ def _open_text(file_path: str):
     return open(file_path, "r", encoding="utf-8", errors="replace")
 
 
+def _strip_chr(name: str) -> str:
+    """Strip only a *leading* 'chr' prefix (case-insensitive) for chromosome-name
+    matching. Using str.replace('chr','') would delete every occurrence and
+    mangle names like 'scaffold_chr2' or collapse distinct contigs — so we only
+    remove the prefix, mirroring the BAM reader's _norm_chrom."""
+    return name[3:] if name[:3].lower() == "chr" else name
+
+
+def _bin_interval(totals, counts, s, e, val, region_start, bin_size, n_bins):
+    """Accumulate ``val`` over the half-open interval ``[s, e)`` into the bin
+    arrays, weighting each bin by its base-pair overlap so a bin reports the
+    true base-pair mean. Shared by the BedGraph and WIG readers so they bin
+    identically to the BigWig reader's ``add_range`` (a value in one format
+    lands in the same bins as the same value in another)."""
+    if e <= s:
+        return
+    bi_first = int((s - region_start) / bin_size)
+    bi_last = int((e - 1 - region_start) / bin_size)
+    if bi_first < 0:
+        bi_first = 0
+    if bi_last > n_bins - 1:
+        bi_last = n_bins - 1
+    for bi in range(bi_first, bi_last + 1):
+        bin_lo = region_start + bi * bin_size
+        bin_hi = region_start + (bi + 1) * bin_size
+        ov = (e if e < bin_hi else bin_hi) - (s if s > bin_lo else bin_lo)
+        if ov > 0:
+            totals[bi] += val * ov
+            counts[bi] += ov
+
+
 # ── BigWig constants ──────────────────────────────────────────────────────────
 
 BIGWIG_MAGIC    = 0x888FFC26
@@ -65,7 +96,7 @@ class BigWigReader:
         if len(self._chrom_to_id) == 1:
             return next(iter(self._chrom_to_id))
         for key in self._chrom_to_id:
-            if key.replace("chr", "") == chrom.replace("chr", ""):
+            if _strip_chr(key) == _strip_chr(chrom):
                 return key
             if key.lower() == chrom.lower():
                 return key
@@ -287,7 +318,7 @@ class BedGraphReader:
         if len(self._data) == 1:
             return next(iter(self._data))
         for key in self._data:
-            if key.replace("chr", "") == chrom.replace("chr", ""):
+            if _strip_chr(key) == _strip_chr(chrom):
                 return key
             if key.lower() == chrom.lower():
                 return key
@@ -338,11 +369,12 @@ class BedGraphReader:
                 break
             if e <= start:
                 continue
-            bi_s = int((max(s, start) - start) / bin_size)
-            bi_e = min(int((min(e, end) - 1 - start) / bin_size) + 1, n_bins)
-            for bi in range(bi_s, bi_e):
-                totals[bi] += v
-                counts[bi] += 1
+            # Weight by base-pair overlap (matches the BigWig/WIG readers) so a
+            # bin reports the true bp mean rather than an unweighted average of
+            # every interval that happens to touch it.
+            cs = s if s > start else start
+            ce = e if e < end else end
+            _bin_interval(totals, counts, cs, ce, v, start, bin_size, n_bins)
         return [{"start": int(start + i * bin_size), "end": int(start + (i + 1) * bin_size),
                  "value": totals[i] / counts[i] if counts[i] else 0.0} for i in range(n_bins)]
 
@@ -377,7 +409,7 @@ class WigReader:
             return next(iter(self._positions))
         # Try common prefix/suffix variations (chr1 vs 1, Chr1 vs chr1)
         for key in self._positions:
-            if key.replace("chr", "") == chrom.replace("chr", ""):
+            if _strip_chr(key) == _strip_chr(chrom):
                 return key
             if key.lower() == chrom.lower():
                 return key
@@ -393,6 +425,7 @@ class WigReader:
         positions: dict[str, list] = {}
         values: dict[str, list] = {}
         rev_vals: dict[str, list] = {}
+        spans: dict[str, list] = {}   # per-entry span (width) so binning honors span=N
         chroms: dict[str, int] = {}
         header_seen = False
 
@@ -420,6 +453,7 @@ class WigReader:
                             p0 = pos - 1
                             positions[chrom].append(p0)
                             values[chrom].append(v)
+                            spans.setdefault(chrom, []).append(span)
                             if len(parts) >= 2:
                                 has_fwd_rev = True
                                 rev_vals.setdefault(chrom, []).append(float(parts[1]))
@@ -433,12 +467,14 @@ class WigReader:
                             positions[chrom].append(p0)
                             values[chrom].append(fwd)
                             rev_vals.setdefault(chrom, []).append(rev)
+                            spans.setdefault(chrom, []).append(span)
                             chroms[chrom] = max(chroms.get(chrom, 0), p0 + span)
                         elif len(parts) >= 2:
                             p0 = int(parts[0]) - 1
                             v = float(parts[1])
                             positions[chrom].append(p0)
                             values[chrom].append(v)
+                            spans.setdefault(chrom, []).append(span)
                             chroms[chrom] = max(chroms.get(chrom, 0), p0 + span)
                         else:
                             # Single column — treat as fixedStep value
@@ -446,6 +482,7 @@ class WigReader:
                             p0 = pos - 1
                             positions[chrom].append(p0)
                             values[chrom].append(v)
+                            spans.setdefault(chrom, []).append(1)
                             chroms[chrom] = max(chroms.get(chrom, 0), p0 + 1)
                             pos += 1
                     except (ValueError, IndexError):
@@ -496,6 +533,7 @@ class WigReader:
                             v = float(parts[3])
                             positions.setdefault(c, []).append(s)
                             values.setdefault(c, []).append(v)
+                            spans.setdefault(c, []).append(max(1, e - s))
                             chroms[c] = max(chroms.get(c, 0), e)
                         except (ValueError, IndexError):
                             pass
@@ -503,29 +541,46 @@ class WigReader:
         self._chroms = chroms
         self._has_fwd_rev = has_fwd_rev
         self._rev_values: dict[str, list] = {}
+        self._spans: dict[str, list] = {}
+        self._max_span = 1
 
-        # Positions are already sorted in WIG files — skip sort if so
+        def _is_sorted(seq):
+            return all(seq[i] <= seq[i + 1] for i in range(len(seq) - 1))
+
+        # Sort positions/values/reverse/spans TOGETHER so a WIG whose positions
+        # aren't monotonically increasing can neither desync the parallel arrays
+        # nor return wrong bins. The previous guard compared only first vs last
+        # element, so any interior disorder ([1, 5, 3, 9]) slipped through
+        # unsorted and produced silently-wrong coverage via bisect.
         for ch in positions:
             pos_list = positions[ch]
             val_list = values[ch]
-            if len(pos_list) >= 2 and pos_list[-1] < pos_list[0]:
-                # Unsorted — sort by position
-                paired = sorted(zip(pos_list, val_list))
-                self._positions[ch] = [p for p, _ in paired]
-                self._values[ch] = [v for _, v in paired]
+            span_list = spans.get(ch) or [1] * len(pos_list)
+            rv = rev_vals.get(ch)
+            if len(pos_list) >= 2 and not _is_sorted(pos_list):
+                if rv is not None and len(rv) == len(pos_list):
+                    paired = sorted(zip(pos_list, val_list, rv, span_list))
+                    self._positions[ch] = [p for p, _, _, _ in paired]
+                    self._values[ch] = [v for _, v, _, _ in paired]
+                    self._rev_values[ch] = [r for _, _, r, _ in paired]
+                    self._spans[ch] = [s for _, _, _, s in paired]
+                else:
+                    paired = sorted(zip(pos_list, val_list, span_list))
+                    self._positions[ch] = [p for p, _, _ in paired]
+                    self._values[ch] = [v for _, v, _ in paired]
+                    self._spans[ch] = [s for _, _, s in paired]
+                    if rv is not None:
+                        self._rev_values[ch] = rv
             else:
                 self._positions[ch] = pos_list
                 self._values[ch] = val_list
-
-        if has_fwd_rev:
-            for ch in rev_vals:
-                pos_list = positions.get(ch, [])
-                rv = rev_vals[ch]
-                if len(pos_list) >= 2 and pos_list[-1] < pos_list[0]:
-                    paired = sorted(zip(pos_list, rv))
-                    self._rev_values[ch] = [v for _, v in paired]
-                else:
+                self._spans[ch] = span_list
+                if rv is not None:
                     self._rev_values[ch] = rv
+            if span_list:
+                m = max(span_list)
+                if m > self._max_span:
+                    self._max_span = m
 
     def close(self): pass
 
@@ -546,34 +601,51 @@ class WigReader:
         bin_size = region_len / n_bins
         pos_totals = [0.0] * n_bins
         neg_totals = [0.0] * n_bins
-        counts = [0] * n_bins
+        counts = [0.0] * n_bins
+        max_bin = n_bins - 1
+        spans = self._spans.get(chrom, [])
+        has_rev = bool(self._has_fwd_rev and rev_values)
 
-        lo = bisect.bisect_left(positions, start)
+        # Start early enough to catch entries that begin left of the region but
+        # whose span reaches into it. Each entry covers [p, p+span); its value is
+        # spread across the bins it overlaps, weighted by base-pair overlap, so
+        # span=N and sub-bin/edge entries bin correctly. (span=1 reduces exactly
+        # to the previous one-point-per-bin behavior.)
+        lo = bisect.bisect_left(positions, start - self._max_span)
+        if lo < 0:
+            lo = 0
 
-        if self._has_fwd_rev and rev_values:
-            # 3-column format: forward values in `values`, reverse in `rev_values`
-            for i in range(lo, len(positions)):
-                p = positions[i]
-                if p >= end:
-                    break
-                bi = min(int((p - start) / bin_size), n_bins - 1)
-                counts[bi] += 1
-                pos_totals[bi] += values[i]
-                if i < len(rev_values):
-                    neg_totals[bi] += rev_values[i]
-        else:
-            # Standard format: single value, split by sign
-            for i in range(lo, len(positions)):
-                p = positions[i]
-                if p >= end:
-                    break
-                v = values[i]
-                bi = min(int((p - start) / bin_size), n_bins - 1)
-                counts[bi] += 1
-                if v >= 0:
-                    pos_totals[bi] += v
+        for i in range(lo, len(positions)):
+            p = positions[i]
+            if p >= end:
+                break
+            span = spans[i] if i < len(spans) else 1
+            s = p if p > start else start
+            e = (p + span) if (p + span) < end else end
+            if s >= e:
+                continue
+            bi_first = int((s - start) / bin_size)
+            bi_last = int((e - 1 - start) / bin_size)
+            if bi_first < 0:
+                bi_first = 0
+            if bi_last > max_bin:
+                bi_last = max_bin
+            fwd = values[i]
+            rev = rev_values[i] if (has_rev and i < len(rev_values)) else 0.0
+            for bi in range(bi_first, bi_last + 1):
+                bin_lo = start + bi * bin_size
+                bin_hi = start + (bi + 1) * bin_size
+                ov = (e if e < bin_hi else bin_hi) - (s if s > bin_lo else bin_lo)
+                if ov <= 0:
+                    continue
+                counts[bi] += ov
+                if has_rev:
+                    pos_totals[bi] += fwd * ov
+                    neg_totals[bi] -= rev * ov     # reverse strand renders below the axis
+                elif fwd >= 0:
+                    pos_totals[bi] += fwd * ov
                 else:
-                    neg_totals[bi] += v
+                    neg_totals[bi] += fwd * ov
 
         return [
             {

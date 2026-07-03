@@ -7,6 +7,12 @@ from pathlib import Path
 import re
 
 
+def _strip_chr(name: str) -> str:
+    """Strip only a *leading* 'chr' prefix (case-insensitive). str.replace('chr','')
+    would delete every occurrence and mangle names like 'scaffold_chr2'."""
+    return name[3:] if name[:3].lower() == "chr" else name
+
+
 class BedReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
@@ -64,7 +70,7 @@ class BedReader:
         if len(self._features) == 1:
             return next(iter(self._features))
         for key in self._features:
-            if key.replace("chr", "") == chrom.replace("chr", ""):
+            if _strip_chr(key) == _strip_chr(chrom):
                 return key
             if key.lower() == chrom.lower():
                 return key
@@ -183,7 +189,7 @@ class GtfReader:
         if len(self._genes) == 1:
             return next(iter(self._genes))
         for key in self._genes:
-            if key.replace("chr", "") == chrom.replace("chr", ""):
+            if _strip_chr(key) == _strip_chr(chrom):
                 return key
             if key.lower() == chrom.lower():
                 return key
@@ -281,7 +287,7 @@ class Gff3Reader:
         if len(self._top_level) == 1:
             return next(iter(self._top_level))
         for key in self._top_level:
-            if key.replace("chr", "") == chrom.replace("chr", ""):
+            if _strip_chr(key) == _strip_chr(chrom):
                 return key
             if key.lower() == chrom.lower():
                 return key

@@ -282,7 +282,8 @@ export function useTrackData(track, region, canvasWidth) {
     const fetchStart = Math.max(0, Math.floor(start - viewLen * os))
     const fetchEnd = Math.ceil(end + viewLen * os)
     const ratio = (fetchEnd - fetchStart) / viewLen
-    // Cap bins: match backend le=5000 limit, but at least 500 for quality
+    // Cap bins at 5000 (a deliberate client-side limit — plenty for any screen
+    // width; the backend itself accepts up to 10000), but at least 500 for quality.
     const bins = Math.max(500, Math.min(Math.floor(canvasWidth * ratio), 5000))
 
     const cacheKey = `${track.id}|${type}|${chrom}|${fetchStart}|${fetchEnd}|${bins}`

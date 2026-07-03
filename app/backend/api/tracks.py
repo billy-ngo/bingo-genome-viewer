@@ -11,6 +11,7 @@ Endpoints:
 import re
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -30,9 +31,18 @@ def _clean_name(raw: str) -> str:
     return _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), raw)
 
 
+def _unique_dest(filename: str) -> Path:
+    """A collision-proof, path-safe destination in the upload dir: the cleaned
+    basename prefixed with a short unique token. Two uploads named 'reads.bam'
+    no longer overwrite each other (the first reader may still hold the handle),
+    and any directory components a crafted filename might carry are stripped."""
+    base = Path(_clean_name(filename or "upload")).name or "upload"
+    return _upload_dir / f"{uuid.uuid4().hex[:8]}_{base}"
+
+
 def _save_upload(file: UploadFile) -> Path:
     """Save an uploaded file to the shared upload directory."""
-    dest = _upload_dir / _clean_name(file.filename)
+    dest = _unique_dest(file.filename)
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     return dest
@@ -44,8 +54,8 @@ async def load_track(
     name: str = Form(""),
     index: Optional[UploadFile] = File(None),
 ):
-    clean_filename = _clean_name(file.filename)
-    dest = _upload_dir / clean_filename
+    clean_filename = _clean_name(file.filename)   # original name — used for display
+    dest = _unique_dest(file.filename)             # unique on-disk path — avoids collisions
     saved_paths = [dest]  # for cleanup on failure
     try:
         with dest.open("wb") as f:

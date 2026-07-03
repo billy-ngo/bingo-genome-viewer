@@ -23,7 +23,7 @@ import OverlayTrackPanel from './components/OverlayTrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.12.0'
+const APP_VERSION = '2.12.1'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
@@ -128,7 +128,9 @@ function BrowserApp() {
     // Notify the server eagerly when the tab is going away so it can
     // drop us from its active set without waiting for a heartbeat to
     // time out. sendBeacon survives the unload; a fetch with keepalive
-    // is the spec-equivalent fallback path.
+    // is the spec-equivalent fallback path. We fire on `pagehide` only
+    // (the reliable teardown event) — `beforeunload` would send a
+    // duplicate beacon and is owned by ExitGuard for its unsaved-work prompt.
     const notifyClose = () => {
       const url = `/api/tab-closing?tab=${encodeURIComponent(tabId)}`
       try {
@@ -140,18 +142,19 @@ function BrowserApp() {
       try { fetch(url, { method: 'POST', keepalive: true }) } catch { /* ignore */ }
     }
     window.addEventListener('pagehide', notifyClose)
-    window.addEventListener('beforeunload', notifyClose)
 
     return () => {
       clearInterval(id)
       document.removeEventListener('visibilitychange', onVisibility)
       window.removeEventListener('pagehide', notifyClose)
-      window.removeEventListener('beforeunload', notifyClose)
     }
   }, [])
 
   // Restore hidden genome annotation tracks when the user switches chromosomes.
-  const prevChromRef = useRef(region?.chrom)
+  // Start at null so the very first observed chromosome always triggers a
+  // restore (initialising to region?.chrom could skip it if a region is
+  // already set on mount, e.g. certain session-restore orderings).
+  const prevChromRef = useRef(null)
   useEffect(() => {
     if (region?.chrom && region.chrom !== prevChromRef.current) {
       prevChromRef.current = region.chrom
@@ -315,7 +318,7 @@ function BrowserApp() {
       setDropStatus({ error: err.message || 'Drop failed' })
       setTimeout(() => setDropStatus(null), 5000)
     }
-  }, [genome, setGenome, navigateTo, addTrack, addGenomeAnnotationTrack])
+  }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack])
 
   const onDropPromptChromosome = useCallback(async () => {
     if (!dropPrompt) return
@@ -361,13 +364,23 @@ function BrowserApp() {
     try {
       setDropStatus({ msg: `Loading ${files.length} track${files.length > 1 ? 's' : ''}...` })
       const errors = []
+      const incompatible = []
+      // Mirror the primary drop path: check genome compatibility before
+      // committing, so an incompatible track routes to the confirmation dialog
+      // here too (previously this path committed unconditionally).
       for (const file of files) {
-        try { await addTrack(file, undefined) }
-        catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
+        try {
+          const info = await uploadTrack(file, undefined)
+          if (isTrackMismatch(info)) incompatible.push(info)
+          else commitTrack(info)
+        } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
       }
       if (errors.length) {
         setDropStatus({ error: errors.join('; ') })
         setTimeout(() => setDropStatus(null), 5000)
+      } else if (incompatible.length) {
+        setDropTrackMismatch({ tracks: incompatible })
+        setDropStatus(null)
       } else {
         setDropStatus({ msg: `Added ${files.length} track${files.length > 1 ? 's' : ''}` })
         setTimeout(() => setDropStatus(null), 3000)
@@ -376,7 +389,7 @@ function BrowserApp() {
       setDropStatus({ error: err.message || 'Failed to load tracks' })
       setTimeout(() => setDropStatus(null), 5000)
     }
-  }, [dropPrompt, addTrack])
+  }, [dropPrompt, uploadTrack, commitTrack])
 
   const onDropMismatchSkip = useCallback(async () => {
     if (!dropTrackMismatch) return
