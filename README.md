@@ -26,6 +26,9 @@ or compiled C dependencies.
 - **Session export / restore.** Workspace state — viewport, track order,
   colours, scale, feature-type filters, strand visibility — round-trips
   through a single JSON file or auto-restores from `localStorage`.
+- **Overlay coverage tracks.** Stack two or more BigWig/WIG/bedGraph tracks in
+  a single row on a shared Y axis, with per-track transparency and stacking
+  order, for direct signal comparison.
 - **SVG and PNG export** with grouped vector layers suitable for figure
   preparation.
 - **Five built-in themes** (Dark, Light, Colorblind Friendly, Soft, High
@@ -86,15 +89,19 @@ a Node stage and copies the bundle into a slim Python runtime.
 ```
 bingo                    Launch on default port 8000 and open the browser
 bingo --port 9000        Use a different port
+bingo --host 0.0.0.0     Bind to a different host (default: 127.0.0.1)
 bingo --no-browser       Start the server without launching a browser
 bingo --install          Create a desktop shortcut for the current user
 bingo --update           Check PyPI and install a newer version if available
 bingo --no-update        Skip the automatic update check at launch
+bingo --close-window     Close the launching terminal when the server exits
+                         (Windows cmd / PowerShell only)
 bingo --version          Print the installed version and exit
 ```
 
-The server auto-shuts down 30 seconds after the last browser tab closes.
-You can also stop it with `Ctrl+C`.
+The server auto-shuts down shortly after the last browser tab closes
+(typically within ~20 seconds; longer if the closing browser can't send its
+shutdown beacon). You can also stop it with `Ctrl+C`.
 
 ## Using the viewer
 
@@ -112,15 +119,19 @@ You can also stop it with `Ctrl+C`.
 4. **Zoom to a feature.** Double-click any annotation to centre it in the
    view with ~15 % flanking context.
 5. **Tune tracks.** Open **Track Settings** to adjust height, colour,
-   linear/log Y-axis, fixed Y range, bar width, peak outline tracing,
-   strand visibility (BAM), strand colours, arrow style, nucleotide
-   display, and per-feature-type visibility (GenBank/GFF). Multi-select
-   to apply changes to several tracks at once; mixed values render as
-   indeterminate checkboxes.
-6. **Reorder.** Drag the grip handle on a track label.
-7. **Export.** Save the current view as **SVG** (grouped layers, ready
+   linear/log Y-axis, fixed Y range, auto-fit-to-visible-region scaling,
+   bar width, peak outline tracing, strand visibility (BAM), strand colours,
+   arrow style, nucleotide display, and per-feature-type visibility
+   (GenBank/GFF). Multi-select to apply changes to several tracks at once;
+   mixed values render as indeterminate checkboxes.
+6. **Overlay coverage tracks.** Multi-select two or more coverage tracks in
+   Track Settings and click **Overlay** to stack them in one shared-axis row.
+   The merged row's legend controls each track's colour, transparency, and
+   draw order; **Separate overlay** undoes it.
+7. **Reorder.** Drag the grip handle on a track label.
+8. **Export.** Save the current view as **SVG** (grouped layers, ready
    for vector editing) or **PNG**.
-8. **Save / restore session.** Export the workspace to JSON, or rely on
+9. **Save / restore session.** Export the workspace to JSON, or rely on
    the autosave to `localStorage` for an exit-and-resume workflow.
 
 ## Performance characteristics
@@ -138,8 +149,10 @@ and BAMs loaded simultaneously. Indicative timings on a recent laptop:
 | Coverage query (full chromosome, 1000 bins, 11 MB WIG) | ~140 ms |
 | Annotation query (full chromosome GFF3) | <1 ms |
 
-These numbers reflect cold reads with no caching. Subsequent in-region
-queries are served from an LRU cache and return in microseconds.
+These numbers reflect cold reads. The frontend keeps an in-memory overscan
+cache of fetched regions, so panning within — or returning to — an
+already-loaded area is served instantly without a new backend request; the
+backend parses on demand and does not itself cache.
 
 ## Troubleshooting
 
@@ -152,7 +165,7 @@ queries are served from an LRU cache and return in microseconds.
 | pip install still fails | Try `python -m pip install --user BiNgoViewer`, or create a clean venv: `python -m venv .venv && .venv/bin/pip install BiNgoViewer` (Windows: `.venv\Scripts\pip`). |
 | Port 8000 in use | `bingo --port 9000` (any free port). |
 | Browser doesn't open | Visit <http://localhost:8000> manually; the server will keep running. |
-| Server won't stop | It auto-exits ~30 s after the last tab closes; `Ctrl+C` from the launching terminal also works. |
+| Server won't stop | It auto-exits shortly (~20 s) after the last tab closes; `Ctrl+C` from the launching terminal also works. |
 | BAM rejected | Ensure a `.bai` index sits alongside the BAM (named `reads.bam.bai` or `reads.bai`). CRAM is not supported. |
 | Cloud-synced file errors | OneDrive / Dropbox files marked "online only" cannot be read. Pin them locally before loading. |
 
@@ -197,7 +210,7 @@ workflow.
 
 If you use this software in published research, please cite:
 
-> Ngo, B. M. (2026). *BiNgo Genome Viewer* (v2.9) [Software].
+> Ngo, B. M. (2026). *BiNgo Genome Viewer* (v2.12) [Software].
 > <https://github.com/billy-ngo/bingo-genome-viewer>
 
 ## Acknowledgements
