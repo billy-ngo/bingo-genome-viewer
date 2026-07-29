@@ -166,7 +166,10 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       const barAuto = track.barAutoWidth !== false
       const barFixedPx = track.barWidth || 2
       const pxPerNt = width / regionLen
-      if (track.showBars !== false) {
+      const fillArea = track.fillArea === true
+      // Smooth fill replaces the bars with a single-colour area under the
+      // (smoothed) outline curve, so suppress the bars while it's on.
+      if (track.showBars !== false && !fillArea) {
         ctx.fillStyle = color
         for (const bin of data.bins) {
           const binW = ((bin.end - bin.start) / regionLen) * width
@@ -179,19 +182,24 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
           ctx.fillRect(x, height - barH - 2, w, barH)
         }
       }
-      if (track.showOutline && data.bins.length > 0) {
+      // Smooth fill and/or peak outline share the same smoothed Y values so the
+      // filled area and the stroke on top of it line up exactly.
+      if ((fillArea || track.showOutline) && data.bins.length > 0) {
         const sm = track.outlineSmooth || 0
         const rawRatios = data.bins.map(b => useLog ? log2Scale(b.value, maxVal) : Math.min(1, b.value / maxVal))
         const smoothed = smoothVals(rawRatios, sm)
         const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
         const ys = smoothed.map(r => height - r * (height - 14) - 2)
-        const strokeColor = track.outlineColor || theme.textPrimary || '#fff'
-        ctx.beginPath(); ctx.moveTo(xs[0], ys[0])
-        if (sm > 0) {
-          for (let i = 0; i < xs.length - 1; i++) ctx.quadraticCurveTo(xs[i], ys[i], (xs[i]+xs[i+1])/2, (ys[i]+ys[i+1])/2)
-          ctx.lineTo(xs[xs.length-1], ys[ys.length-1])
-        } else { for (let i = 0; i < xs.length; i++) ctx.lineTo(xs[i], ys[i]) }
-        ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5; ctx.stroke()
+        if (fillArea) drawFilledArea(ctx, xs, ys, height - 2, color, sm > 0)
+        if (track.showOutline) {
+          const strokeColor = track.outlineColor || theme.textPrimary || '#fff'
+          ctx.beginPath(); ctx.moveTo(xs[0], ys[0])
+          if (sm > 0) {
+            for (let i = 0; i < xs.length - 1; i++) ctx.quadraticCurveTo(xs[i], ys[i], (xs[i]+xs[i+1])/2, (ys[i]+ys[i+1])/2)
+            ctx.lineTo(xs[xs.length-1], ys[ys.length-1])
+          } else { for (let i = 0; i < xs.length; i++) ctx.lineTo(xs[i], ys[i]) }
+          ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5; ctx.stroke()
+        }
       }
 
       const scaleLabel = useLog ? ' log\u2082' : ''
@@ -342,7 +350,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       }
     }
   }, [data, visibleReads, loading, width, height, region, refSeq, scrollRow, track.color, track.scaleMax, track.scaleMin,
-      track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars,
+      track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea,
       track.showNucleotides, track.useArrows, track.logScale,
       track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize,
       track.showFwdStrand, track.showRevStrand, track.autoScaleVisible, track.linkScale, tracks, theme])
@@ -439,6 +447,27 @@ function drawReadArrow(ctx, style, strand, rx, ry, rw, rh, size, readColor, bgCo
       ctx.fillRect(rx, ry, size * 2, rh)
     }
   }
+}
+
+/** Fill the area between a (smooth or step) curve and a baseline with a flat
+ *  colour, tracing the same top edge the outline stroke uses. */
+function drawFilledArea(ctx, xs, ys, baseY, color, smooth) {
+  if (xs.length < 2) return
+  ctx.beginPath()
+  ctx.moveTo(xs[0], baseY)
+  ctx.lineTo(xs[0], ys[0])
+  if (smooth) {
+    for (let i = 0; i < xs.length - 1; i++) {
+      ctx.quadraticCurveTo(xs[i], ys[i], (xs[i] + xs[i + 1]) / 2, (ys[i] + ys[i + 1]) / 2)
+    }
+    ctx.lineTo(xs[xs.length - 1], ys[ys.length - 1])
+  } else {
+    for (let i = 1; i < xs.length; i++) ctx.lineTo(xs[i], ys[i])
+  }
+  ctx.lineTo(xs[xs.length - 1], baseY)
+  ctx.closePath()
+  ctx.fillStyle = color
+  ctx.fill()
 }
 
 function smoothVals(values, radius) {

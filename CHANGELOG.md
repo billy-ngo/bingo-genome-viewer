@@ -6,6 +6,19 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.13.0] — 2026-07-28
+
+### Added
+- **Smooth fill for coverage tracks.** When the peak outline is enabled, a new
+  **Smooth fill** option (Track Settings → Peak outline) fills the area under the
+  smoothed outline curve with a single flat colour instead of drawing bars — an
+  area-chart style view of the signal. It honours the **Smoothness** setting, so
+  the fill follows the same smoothed curve as the outline stroke drawn on top,
+  and it replaces the bars while active. Works for BigWig/WIG/bedGraph coverage
+  tracks and the zoomed-out coverage view of read (BAM) tracks, including
+  forward/reverse split tracks, overlay groups, and SVG/PNG export. The setting
+  round-trips through session save/restore.
+
 ## [2.12.1] — 2026-06-29
 
 ### Fixed

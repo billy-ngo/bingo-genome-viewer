@@ -141,6 +141,10 @@ export default function CoverageTrack({
     const outlineColor = track.outlineColor || null
     const outlineSmooth = track.outlineSmooth || 0
     const showBars = track.showBars !== false
+    const fillArea = track.fillArea === true
+    // Smooth fill draws a single-colour area under the (smoothed) peak-outline
+    // curve in place of the discrete bars, so suppress the bars while it's on.
+    const drawBars = showBars && !fillArea
     // Pre-filter overlays for current chromosome (avoids per-bin filtering)
     const regionOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
     const fwdColor = color
@@ -173,7 +177,7 @@ export default function CoverageTrack({
       }
 
       ctx.globalAlpha = barAlpha
-      if (showBars) {
+      if (drawBars) {
         for (const bin of data.bins) {
           const binMid = (bin.start + bin.end) / 2
           const override = getRegionBarColor(regionOverlays, binMid)
@@ -193,17 +197,26 @@ export default function CoverageTrack({
         }
       }
 
-      if (showOutline && data.bins.length > 0) {
+      // Peak-outline curve and/or smooth fill share the same smoothed Y values so
+      // the filled area and the stroke on top of it line up exactly.
+      if ((fillArea || showOutline) && data.bins.length > 0) {
         const fwdStroke = outlineColor || theme.textPrimary || '#fff'
         const revStroke = outlineColor || theme.textPrimary || '#fff'
-        // Compute smoothed Y values
         const fwdRaw = data.bins.map(b => { const v = b.forward != null ? b.forward : Math.max(0, b.value); return v > 0 ? (useLog ? logScale(v, posMax) : v / posMax) : 0 })
         const revRaw = data.bins.map(b => { const v = b.reverse != null ? b.reverse : Math.min(0, b.value); return v < 0 ? (useLog ? logScale(Math.abs(v), negMax) : Math.abs(v) / negMax) : 0 })
         const fwdSmooth = smoothValues(fwdRaw, outlineSmooth)
         const revSmooth = smoothValues(revRaw, outlineSmooth)
         const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
-        drawSmoothLine(ctx, xs, fwdSmooth.map(r => midY - r * topH), fwdStroke, outlineSmooth > 0)
-        drawSmoothLine(ctx, xs, revSmooth.map(r => midY + r * botH), revStroke, outlineSmooth > 0)
+        const fwdYs = fwdSmooth.map(r => midY - r * topH)
+        const revYs = revSmooth.map(r => midY + r * botH)
+        if (fillArea) {
+          drawFilledArea(ctx, xs, fwdYs, midY, fwdColor, outlineSmooth > 0)
+          drawFilledArea(ctx, xs, revYs, midY, revColor, outlineSmooth > 0)
+        }
+        if (showOutline) {
+          drawSmoothLine(ctx, xs, fwdYs, fwdStroke, outlineSmooth > 0)
+          drawSmoothLine(ctx, xs, revYs, revStroke, outlineSmooth > 0)
+        }
       }
       ctx.globalAlpha = 1
 
@@ -216,7 +229,7 @@ export default function CoverageTrack({
     } else {
       const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
       ctx.globalAlpha = barAlpha
-      if (showBars) {
+      if (drawBars) {
         for (const bin of data.bins) {
           const binMid = (bin.start + bin.end) / 2
           const override = getRegionBarColor(regionOverlays, binMid)
@@ -229,12 +242,13 @@ export default function CoverageTrack({
           ctx.fillRect(x, height - barH - 2, w, barH)
         }
       }
-      if (showOutline && data.bins.length > 0) {
+      if ((fillArea || showOutline) && data.bins.length > 0) {
         const rawRatios = data.bins.map(b => useLog ? logScale(b.value, effectiveMax) : b.value / effectiveMax)
         const smoothed = smoothValues(rawRatios, outlineSmooth)
         const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
         const ys = smoothed.map(r => height - r * (height - 14) - 2)
-        drawSmoothLine(ctx, xs, ys, outlineColor || theme.textPrimary || '#fff', outlineSmooth > 0)
+        if (fillArea) drawFilledArea(ctx, xs, ys, height - 2, color, outlineSmooth > 0)
+        if (showOutline) drawSmoothLine(ctx, xs, ys, outlineColor || theme.textPrimary || '#fff', outlineSmooth > 0)
       }
       ctx.globalAlpha = 1
 
@@ -261,9 +275,33 @@ export default function CoverageTrack({
       }
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
+}
+
+/** Fill the area between a (smooth or step) curve and a baseline with a flat
+ *  colour. Traces the same top edge as drawSmoothLine so a stroke drawn after
+ *  sits exactly on the fill's upper boundary. */
+function drawFilledArea(ctx, xs, ys, baseY, color, smooth) {
+  if (xs.length < 2) return
+  ctx.beginPath()
+  ctx.moveTo(xs[0], baseY)
+  ctx.lineTo(xs[0], ys[0])
+  if (smooth) {
+    for (let i = 0; i < xs.length - 1; i++) {
+      const mx = (xs[i] + xs[i + 1]) / 2
+      const my = (ys[i] + ys[i + 1]) / 2
+      ctx.quadraticCurveTo(xs[i], ys[i], mx, my)
+    }
+    ctx.lineTo(xs[xs.length - 1], ys[ys.length - 1])
+  } else {
+    for (let i = 1; i < xs.length; i++) ctx.lineTo(xs[i], ys[i])
+  }
+  ctx.lineTo(xs[xs.length - 1], baseY)
+  ctx.closePath()
+  ctx.fillStyle = color
+  ctx.fill()
 }
 
 /** Draw a smooth or step line through an array of (x, y) points. */

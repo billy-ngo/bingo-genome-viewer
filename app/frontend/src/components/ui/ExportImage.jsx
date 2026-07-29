@@ -199,6 +199,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
         const data = getLiveTrackData(m.id)
         const parts = svgCoverageParts(data, region, sm, trackW, uH, theme, allTracks, groupHasNeg)
         const op = m.overlayOpacity ?? 0.6
+        if (parts.fill) svg += `<g class="track-fill" opacity="${op}">\n${parts.fill}</g>\n`
         if (parts.bars) svg += `<g class="track-bars" opacity="${op}">\n${parts.bars}</g>\n`
         if (parts.outline) svg += `<g class="track-outline" opacity="${op}">\n${parts.outline}</g>\n`
         if (mi === 0 && parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
@@ -215,6 +216,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
           if (img) svg += `<image x="0" y="0" width="${trackW}" height="${uH}" preserveAspectRatio="none" href="${img}" xlink:href="${img}"/>\n`
         } else {
           const parts = svgCoverageParts(data, region, track, trackW, uH, theme, allTracks)
+          if (parts.fill) svg += `<g class="track-fill">\n${parts.fill}</g>\n`
           if (parts.bars) svg += `<g class="track-bars">\n${parts.bars}</g>\n`
           if (parts.outline) svg += `<g class="track-outline">\n${parts.outline}</g>\n`
           if (parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
@@ -332,6 +334,25 @@ function svgOutlinePath(xs, ys, stroke, smooth) {
   return `<polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="1.5"/>\n`
 }
 
+/** Filled area between a (smooth or step) curve and a baseline — the SVG twin of
+ *  drawFilledArea in CoverageTrack, tracing the same top edge as svgOutlinePath. */
+function svgFillPath(xs, ys, baseY, fill, smooth) {
+  if (xs.length < 2) return ''
+  let d = `M${xs[0]},${baseY} L${xs[0]},${ys[0]}`
+  if (smooth) {
+    for (let i = 0; i < xs.length - 1; i++) {
+      const mx = (xs[i] + xs[i + 1]) / 2
+      const my = (ys[i] + ys[i + 1]) / 2
+      d += ` Q${xs[i]},${ys[i]} ${mx},${my}`
+    }
+    d += ` L${xs[xs.length - 1]},${ys[ys.length - 1]}`
+  } else {
+    for (let i = 1; i < xs.length; i++) d += ` L${xs[i]},${ys[i]}`
+  }
+  d += ` L${xs[xs.length - 1]},${baseY} Z`
+  return `<path d="${d}" fill="${fill}" stroke="none"/>\n`
+}
+
 function svgLogScale(val, max) {
   if (val <= 0 || max <= 0) return 0
   return Math.log2(val + 1) / Math.log2(max + 1)
@@ -341,8 +362,8 @@ function svgLogScale(val, max) {
  *  forceHasNeg (optional): override the positive/negative layout decision — used
  *  for overlay members so the whole group shares one coordinate system. */
 function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasNeg) {
-  if (!data?.bins?.length) return { bars: '', outline: '', labels: '' }
-  let bars = '', outline = '', labels = ''
+  if (!data?.bins?.length) return { bars: '', fill: '', outline: '', labels: '' }
+  let bars = '', fill = '', outline = '', labels = ''
   // Match CoverageTrack: the forward/reverse split is decided from the fetched
   // range (stable), but the auto-scale magnitude follows the "fit to visible
   // region" / "link scales" toggles so the export matches what's on screen.
@@ -366,7 +387,8 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
   const barFixedPx = track.barWidth || 2
   const pxPerNt = w / regionLen
 
-  const showBars = track.showBars !== false
+  const fillArea = track.fillArea === true
+  const showBars = (track.showBars !== false) && !fillArea
   const showOutline = track.showOutline === true
   const outColor = track.outlineColor || null
   const outSmooth = track.outlineSmooth || 0
@@ -405,14 +427,22 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
         if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; bars += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${ov || adjustColorSvg(color, -40)}"/>\n` }
       }
     }
-    if (showOutline && visibleBins.length > 0) {
+    if ((fillArea || showOutline) && visibleBins.length > 0) {
       const fwdRaw = visibleBins.map(b => { const v = b.forward != null ? b.forward : Math.max(0, b.value); return v > 0 ? (useLog ? svgLogScale(v, posMax) : v / posMax) : 0 })
       const revRaw = visibleBins.map(b => { const v = b.reverse != null ? b.reverse : Math.min(0, b.value); return v < 0 ? (useLog ? svgLogScale(Math.abs(v), negMax) : Math.abs(v) / negMax) : 0 })
       const fwdS = svgSmoothValues(fwdRaw, outSmooth)
       const revS = svgSmoothValues(revRaw, outSmooth)
       const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
-      outline += svgOutlinePath(xs, fwdS.map(r => midY - r * topH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
-      outline += svgOutlinePath(xs, revS.map(r => midY + r * botH), outColor || theme.textPrimary || '#fff', outSmooth > 0)
+      const fwdYs = fwdS.map(r => midY - r * topH)
+      const revYs = revS.map(r => midY + r * botH)
+      if (fillArea) {
+        fill += svgFillPath(xs, fwdYs, midY, color, outSmooth > 0)
+        fill += svgFillPath(xs, revYs, midY, adjustColorSvg(color, -40), outSmooth > 0)
+      }
+      if (showOutline) {
+        outline += svgOutlinePath(xs, fwdYs, outColor || theme.textPrimary || '#fff', outSmooth > 0)
+        outline += svgOutlinePath(xs, revYs, outColor || theme.textPrimary || '#fff', outSmooth > 0)
+      }
     }
     const lbl = useLog ? ' log\u2082' : ''
     labels += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${posMax.toFixed(1)}${lbl}</text>\n`
@@ -429,17 +459,18 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
         bars += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${ov || color}"/>\n`
       }
     }
-    if (showOutline && visibleBins.length > 0) {
+    if ((fillArea || showOutline) && visibleBins.length > 0) {
       const rawR = visibleBins.map(b => useLog ? svgLogScale(b.value, effMax) : b.value / effMax)
       const smoothed = svgSmoothValues(rawR, outSmooth)
       const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
       const ys = smoothed.map(r => h - r * (h - 14) - 2)
-      outline += svgOutlinePath(xs, ys, outColor || theme.textPrimary || '#fff', outSmooth > 0)
+      if (fillArea) fill += svgFillPath(xs, ys, h - 2, color, outSmooth > 0)
+      if (showOutline) outline += svgOutlinePath(xs, ys, outColor || theme.textPrimary || '#fff', outSmooth > 0)
     }
     const lbl = useLog ? ' log\u2082' : ''
     labels += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${effMax.toFixed(1)}${lbl}</text>\n`
   }
-  return { bars, outline, labels }
+  return { bars, fill, outline, labels }
 }
 
 function svgAnnotations(data, region, track, w, h, theme) {

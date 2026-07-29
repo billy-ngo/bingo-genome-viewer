@@ -82,6 +82,8 @@ export function TrackProvider({ children }) {
         outlineColor: null,
         outlineSmooth: 0,
         showBars: true,
+        fillArea: false,    // fill the area under the smoothed peak outline instead of drawing bars
+
         showNucleotides: true,
         fwdColor: null,     // forward strand color (null = default #90a4ae)
         revColor: null,     // reverse strand color (null = default #f06292)

@@ -73,6 +73,7 @@ export default function TrackSettings({ onClose }) {
   const commonOutlineColor = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineColor === selectedTracks[0].outlineColor) ? selectedTracks[0].outlineColor : undefined
   const commonOutlineSmooth = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineSmooth === selectedTracks[0].outlineSmooth) ? selectedTracks[0].outlineSmooth : undefined
   const commonShowBars = selectedTracks.length > 0 && selectedTracks.every(t => t.showBars === selectedTracks[0].showBars) ? selectedTracks[0].showBars : null
+  const commonFillArea = selectedTracks.length > 0 && selectedTracks.every(t => (t.fillArea === true) === (selectedTracks[0].fillArea === true)) ? (selectedTracks[0].fillArea === true) : null
   const commonShowNucleotides = selectedTracks.length > 0 && selectedTracks.every(t => t.showNucleotides === selectedTracks[0].showNucleotides) ? selectedTracks[0].showNucleotides : null
   const commonFwdColor = selectedTracks.length > 0 && selectedTracks.every(t => (t.fwdColor || '#90a4ae') === (selectedTracks[0].fwdColor || '#90a4ae')) ? (selectedTracks[0].fwdColor || '#90a4ae') : undefined
   const commonRevColor = selectedTracks.length > 0 && selectedTracks.every(t => (t.revColor || '#f06292') === (selectedTracks[0].revColor || '#f06292')) ? (selectedTracks[0].revColor || '#f06292') : undefined
@@ -236,6 +237,20 @@ export default function TrackSettings({ onClose }) {
                       onChange={e => applyToSelected({ outlineSmooth: parseInt(e.target.value) })}
                       style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
                     <span style={{ fontSize: 11, color: t.textTertiary, width: 24, textAlign: 'right' }}>{commonOutlineSmooth ?? 0}</span>
+                  </div>
+                )}
+                {/* Smooth fill: fill the area under the (smoothed) outline curve
+                    with a single colour in place of the bars. */}
+                {commonShowOutline === true && (
+                  <div style={S.subRow}>
+                    <span style={S.subLabel}>Smooth fill</span>
+                    <label style={S.cbLabel}>
+                      <input type="checkbox" checked={commonFillArea === true}
+                        ref={el => { if (el) el.indeterminate = commonFillArea === null }}
+                        onChange={e => applyToSelected({ fillArea: e.target.checked })}
+                        style={{ cursor: 'pointer' }} />
+                      Fill under curve (instead of bars)
+                    </label>
                   </div>
                 )}
               </>

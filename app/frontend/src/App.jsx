@@ -23,7 +23,7 @@ import OverlayTrackPanel from './components/OverlayTrackPanel'
 import ExitGuard from './components/ui/ExitGuard'
 import RegionColorEditor from './components/ui/RegionColorEditor'
 
-const APP_VERSION = '2.12.1'
+const APP_VERSION = '2.13.0'
 
 let _logoId = 0
 function BingoLogo({ size = 32 }) {
