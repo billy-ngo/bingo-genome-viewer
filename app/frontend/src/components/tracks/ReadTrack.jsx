@@ -11,8 +11,8 @@ import { useTheme } from '../../store/ThemeContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTrackData, computeAutoScale, useLiveDataVersion } from '../../hooks/useTrackData'
 import { useReferenceSequence } from '../../hooks/useReferenceSequence'
-import { binHigh, binExtremes, windowingOf, formatValue } from '../../utils/coverageStats'
-import { axisRatio, drawPending, LOG_LABEL, smoothValues } from './CoverageTrack'
+import { binHigh, binExtremes, windowingOf, formatValue, coverageStyle, coverageAxis } from '../../utils/coverageStats'
+import { axisRatio, drawPending, LOG_LABEL } from './CoverageTrack'
 
 const READ_DETAIL_THRESHOLD = 50_000
 const NUCL_PX_THRESHOLD = 6
@@ -76,6 +76,23 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     return repackRows(filtered)
   }, [data?.reads, showFwd, showRev])
 
+  // Read-view row geometry, shared by the draw, the Shift+wheel handler and
+  // the scrollbar so they agree on how far the pileup scrolls. Bases (and the
+  // taller rows they need) are drawn only when they fit, not merely because a
+  // reference sequence is loaded: it is fetched for every view up to 2 kb.
+  const pxPerBp = region ? width / (region.end - region.start) : 0
+  const showBases = useMemo(
+    () => showNucleotides && pxPerBp >= NUCL_PX_THRESHOLD && refSeq != null,
+    [showNucleotides, pxPerBp, refSeq])
+  const rows = useMemo(() => {
+    const rh = showBases ? NUCL_READ_HEIGHT : READ_HEIGHT
+    let maxRow = -1
+    for (const r of visibleReads || []) if (r.row > maxRow) maxRow = r.row
+    const totalRows = maxRow + 1
+    const visibleRows = Math.floor(height / (rh + ROW_GAP))
+    return { rh, totalRows, visibleRows, maxScroll: Math.max(0, totalRows - visibleRows + 1) }
+  }, [showBases, visibleReads, height])
+
   // Reset scroll when region changes significantly
   const prevRegionRef = useRef(null)
   useEffect(() => {
@@ -95,15 +112,13 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     if (!visibleReads?.length) return
     if (!e.shiftKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
     if (!e.shiftKey) return  // Plain wheel → zoom (handled by useCanvasInteraction)
-    const rh = (showNucleotides && refSeq) ? NUCL_READ_HEIGHT : READ_HEIGHT
-    const maxRow = Math.max(0, ...visibleReads.map(r => r.row))
-    const visibleRows = Math.floor(height / (rh + ROW_GAP))
-    const maxScroll = Math.max(0, maxRow - visibleRows + 2)
+    const { maxScroll } = rows
     if (maxScroll <= 0) return
     e.preventDefault()
     e.stopPropagation()
-    setScrollRow(prev => Math.max(0, Math.min(maxScroll, prev + Math.sign(e.deltaY) * 3)))
-  }, [visibleReads, height, showNucleotides, refSeq])
+    // Step from the row drawn now (the draw clamps scrollRow to maxScroll).
+    setScrollRow(prev => Math.max(0, Math.min(maxScroll, Math.min(prev, maxScroll) + Math.sign(e.deltaY) * 3)))
+  }, [visibleReads, rows])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -144,27 +159,19 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       const barAuto = track.barAutoWidth !== false
       const barFixedPx = track.barWidth || 2
       const pxPerNt = width / regionLen
-      const fillArea = track.fillArea === true
       // Smooth fill replaces the bars with a single-colour area under the
-      // (smoothed) outline curve, so suppress the bars while it's on.
-      const drawBars = track.showBars !== false && !fillArea
-      const wantCurve = fillArea || track.showOutline
-      const sm = track.outlineSmooth || 0
-      const curve = wantCurve ? smoothValues(data.bins.map(b => (b.pending ? 0 : hi(b))), sm) : null
-      let actualMax = computeAutoScale(track, region, tracks).max || 1
-      let smoothedAxis = false
-      if (!drawBars && wantCurve && sm > 0 && !track.linkScale) {
-        // The smoothed curve is the whole track: fit the axis to it (see CoverageTrack).
-        const visibleOnly = track.autoScaleVisible !== false
-        let m = 0
-        data.bins.forEach((b, i) => {
-          if (visibleOnly && (b.end <= region.start || b.start >= region.end)) return
-          if (curve[i] > m) m = curve[i]
-        })
-        actualMax = m || 1
-        smoothedAxis = true
-      }
-      const maxVal = track.scaleMax != null ? track.scaleMax : actualMax
+      // (smoothed) outline curve, so the bars are off while it's on.
+      const { bars: drawBars, fill: fillArea, outline: showOutline, smooth: sm } = coverageStyle(track)
+      // The axis by CoverageTrack's rule (coverageAxis): the auto scale of the
+      // track's link group, or the smoothed curve when that is all that is
+      // drawn, unless a fixed scale is set. A read track never splits (+/−).
+      const axis = coverageAxis(track, data.bins, region, {
+        auto: computeAutoScale(track, region, tracks),
+        grouped: !!track.linkScale,
+        scaleMax: track.scaleMax != null ? track.scaleMax : null,
+      })
+      const maxVal = axis.max
+      const curve = axis.curveHi
       if (drawBars) {
         ctx.fillStyle = color
         for (const bin of data.bins) {
@@ -180,11 +187,11 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       }
       // Smooth fill and/or peak outline share the same smoothed values so the
       // filled area and the stroke on top of it line up exactly.
-      if (wantCurve && data.bins.length > 0) {
+      if (curve && data.bins.length > 0) {
         const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
         const ys = curve.map(v => height - axisRatio(v, maxVal, useLog) * (height - 14) - 2)
         if (fillArea) drawFilledArea(ctx, xs, ys, height - 2, color, sm > 0)
-        if (track.showOutline) {
+        if (showOutline) {
           const strokeColor = track.outlineColor || theme.textPrimary || '#fff'
           ctx.beginPath(); ctx.moveTo(xs[0], ys[0])
           if (sm > 0) {
@@ -196,7 +203,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       }
       drawPending(ctx, data.bins, regionStart, regionLen, width, height, theme)
 
-      const scaleLabel = (useLog ? LOG_LABEL : '') + (smoothedAxis && track.scaleMax == null ? ' smoothed' : '')
+      const scaleLabel = (useLog ? LOG_LABEL : '') + (axis.smoothed ? ' smoothed' : '')
       drawLabel(ctx, `${formatValue(maxVal)}${scaleLabel}`, 2, 2, theme)
       drawLabel(ctx, '0', 2, height - 12, theme, true)
       ctx.fillStyle = '#ffb74d'; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.textAlign = 'right'
@@ -234,22 +241,16 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     }
 
     const toX = (pos) => ((pos - regionStart) / regionLen) * width
-    const pxPerBp = width / regionLen
-    const showBases = showNucleotides && pxPerBp >= NUCL_PX_THRESHOLD && refSeq != null
-    const rh = showBases ? NUCL_READ_HEIGHT : READ_HEIGHT
+    const { rh, totalRows, visibleRows, maxScroll } = rows
     const rg = ROW_GAP
 
-    // Calculate total rows and visible rows for scrolling
-    const maxRow = Math.max(0, ...visibleReads.map(r => r.row))
-    const totalRows = maxRow + 1
     // Height needed to show every row (top pad + rows + bottom pad). The panel
     // clamps this to [default, 500]; deeper pileups keep the scrollbar.
     reportAuto(2 + totalRows * (rh + rg) + 4)
-    const visibleRows = Math.floor(height / (rh + rg))
     const needsScroll = totalRows > visibleRows
     canvas.dataset.scrollbar = needsScroll ? String(SCROLLBAR_WIDTH) : '0'
     const trackW = needsScroll ? width - SCROLLBAR_WIDTH - 2 : width
-    const safeScrollRow = Math.min(scrollRow, Math.max(0, totalRows - visibleRows + 1))
+    const safeScrollRow = Math.min(scrollRow, maxScroll)
 
     let hiddenReads = 0
     let drawnReads = 0
@@ -336,7 +337,8 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       // Thumb
       const thumbFrac = visibleRows / totalRows
       const thumbH = Math.max(20, thumbFrac * height)
-      const scrollFrac = totalRows > visibleRows ? safeScrollRow / (totalRows - visibleRows) : 0
+      // At the last scroll position the thumb sits at the bottom.
+      const scrollFrac = maxScroll > 0 ? safeScrollRow / maxScroll : 0
       const thumbY = scrollFrac * (height - thumbH)
       ctx.fillStyle = '#555'
       ctx.fillRect(sbX + 1, thumbY, SCROLLBAR_WIDTH - 2, thumbH)
@@ -357,7 +359,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       }
       onWarning(warnings.length ? warnings.join('\n') : null)
     }
-  }, [data, error, visibleReads, loading, width, height, region, refSeq, scrollRow, track.color, track.scaleMax, track.scaleMin,
+  }, [data, error, visibleReads, loading, width, height, region, refSeq, showBases, rows, scrollRow, track.color, track.scaleMax, track.scaleMin,
       track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea,
       track.windowing, track.showNucleotides, track.useArrows, track.logScale,
       track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize,
@@ -372,18 +374,15 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     const mx = (e.clientX - rect.left) * (width / rect.width)
     if (mx < width - SCROLLBAR_WIDTH) return // not on scrollbar
 
-    const rh = (showNucleotides && refSeq) ? NUCL_READ_HEIGHT : READ_HEIGHT
-    const maxRow = Math.max(0, ...visibleReads.map(r => r.row))
-    const totalRows = maxRow + 1
-    const visibleRows = Math.floor(height / (rh + ROW_GAP))
-    const maxScroll = Math.max(0, totalRows - visibleRows + 1)
+    const { maxScroll } = rows
     if (maxScroll <= 0) return
 
     // Stop propagation so the global useCanvasInteraction pan handler
     // doesn't also start a pan when the user grabs the scrollbar.
     e.preventDefault()
     e.stopPropagation()
-    scrollDragRef.current = { maxScroll, startY: e.clientY, startRow: scrollRow }
+    // Start from the row drawn now (the draw clamps scrollRow to maxScroll).
+    scrollDragRef.current = { maxScroll, startY: e.clientY, startRow: Math.min(scrollRow, maxScroll) }
 
     function onMove(ev) {
       if (!scrollDragRef.current) return
@@ -398,7 +397,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-  }, [visibleReads, width, height, scrollRow, showNucleotides, refSeq])
+  }, [visibleReads, width, height, scrollRow, rows])
 
   return (
     <canvas

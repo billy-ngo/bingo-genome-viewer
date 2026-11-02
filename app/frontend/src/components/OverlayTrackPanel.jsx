@@ -54,6 +54,10 @@ export default function OverlayTrackPanel({
   // answer with its own one — another replicon's signal at these coordinates).
   const onChrom = m => !m.targetChromosomes || !region?.chrom || m.targetChromosomes.includes(region.chrom)
   const visibleMembers = members.filter(m => m.visible !== false && onChrom(m))
+  // The selection tooltip describes a member that is drawn here (the base
+  // layer). The host may be hidden or have no data on this chromosome, and its
+  // numbers would then be another replicon's. No member drawn → no signal rows.
+  const tipMember = visibleMembers[0] || null
 
   useCanvasInteraction(containerRef)
 
@@ -215,9 +219,9 @@ export default function OverlayTrackPanel({
         <SelectionOverlay
           width={width}
           height={height}
-          trackData={getLiveTrackData(host.id)}
-          trackType={host.track_type}
-          trackId={host.id}
+          trackData={tipMember ? getLiveTrackData(tipMember.id) : null}
+          trackType={tipMember ? tipMember.track_type : null}
+          trackId={tipMember ? tipMember.id : null}
           regionOverlays={host.regionOverlays}
         />
       </div>

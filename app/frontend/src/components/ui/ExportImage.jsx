@@ -9,9 +9,9 @@ import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { getLiveTrackData, computeAutoScale, needsSplitLayout } from '../../hooks/useTrackData'
-import { binHigh, binLow, windowingOf, formatValue } from '../../utils/coverageStats'
+import { binHigh, binLow, windowingOf, formatValue, coverageStyle, coverageAxis } from '../../utils/coverageStats'
 import { rulerTicks } from '../../utils/ruler'
-import { axisRatio, smoothValues, LOG_LABEL } from '../tracks/CoverageTrack'
+import { axisRatio, LOG_LABEL, drawCenterLine, drawAxisLabels } from '../tracks/CoverageTrack'
 import NumberInput from './NumberInput'
 
 const FORMATS = ['svg', 'png', 'jpg']
@@ -50,7 +50,7 @@ export default function ExportImage({ onClose }) {
       const trackW = exportWidth - labelW
       const rulerH = includeRuler ? 30 : 0
       // Overlay groups occupy a single row (host height), not the sum of members.
-      const units = buildExportUnits(selectedTracks, tracks)
+      const units = buildExportUnits(selectedTracks, tracks, region.chrom)
       const totalH = rulerH + units.reduce((sum, u) => sum + unitHeight(u), 0)
 
       if (format === 'svg') {
@@ -132,13 +132,20 @@ export default function ExportImage({ onClose }) {
 
 // ─── Render units (overlay-group aware) ─────────────────────────────────────
 
-/** Group a flat track list into render units, mirroring the on-screen layout:
- *  standalone tracks render one row each; overlay-group members render together
- *  in one row at the position of the first member. An overlay unit lists ALL
- *  of its group's members in screen order (hidden ones included), so the host
- *  — whose height and scale settings the row uses — is the same as on screen;
- *  hidden members are skipped only when drawing layers. */
-function buildExportUnits(tracks, allTracks = tracks) {
+/** Group the selected tracks (`tracks`) into render units, mirroring the
+ *  on-screen layout: standalone tracks render one row each; overlay-group
+ *  members render together in one row at the position of the first member.
+ *  An overlay unit carries:
+ *   - members:  ALL of its group's members in screen order (hidden ones
+ *               included), so the host — whose height, scale settings and
+ *               region highlights the row uses — is the same as on screen;
+ *   - onScreen: the members drawn on screen — shown, and with data on this
+ *               chromosome (the same rule as OverlayTrackPanel); the first is
+ *               the base layer that carries the row's axis;
+ *   - layers:   those of them ticked under Include tracks — the only members
+ *               the export draws and lists in its legend. */
+function buildExportUnits(tracks, allTracks = tracks, chrom = null) {
+  const selected = new Set(tracks.map(t => t.id))
   const seen = new Set()
   const units = []
   for (const t of tracks) {
@@ -146,7 +153,9 @@ function buildExportUnits(tracks, allTracks = tracks) {
       if (seen.has(t.overlayGroup)) continue
       seen.add(t.overlayGroup)
       const members = allTracks.filter(m => m.overlayGroup === t.overlayGroup)
-      units.push({ type: 'overlay', members })
+      const onScreen = members.filter(m => m.visible !== false &&
+        (!m.targetChromosomes || !chrom || m.targetChromosomes.includes(chrom)))
+      units.push({ type: 'overlay', members, onScreen, layers: onScreen.filter(m => selected.has(m.id)) })
     } else {
       units.push({ type: 'single', track: t })
     }
@@ -158,11 +167,31 @@ function unitHeight(u) {
   return u.type === 'overlay' ? u.members[0].height : u.track.height
 }
 
-/** Overlay members drawn as layers: shown, and with data on this chromosome
- *  (the same rule as OverlayTrackPanel). */
-function drawnMembers(unit, chrom) {
-  return unit.members.filter(m => m.visible !== false &&
-    (!m.targetChromosomes || !chrom || m.targetChromosomes.includes(chrom)))
+/** The split (+/−) layout decision the screen makes for a track: CoverageTrack
+ *  takes it group-wide (needsSplitLayout), while a read track's coverage view
+ *  never splits (ReadTrack) — not even when linked to a signed track. */
+function splitLayout(track, region, allTracks) {
+  return track.track_type !== 'reads' && needsSplitLayout(track, region, allTracks)
+}
+
+/** The axis an overlay row shows on screen, where its base layer (the first
+ *  member drawn there) draws it: the group's shared auto scale and split
+ *  layout under the host's scale and log settings. Null while the base layer
+ *  has no data (the screen shows no labels then either). */
+function overlayRowAxis(unit, region, allTracks) {
+  const host = unit.members[0]
+  const base = unit.onScreen[0]
+  const data = base ? getLiveTrackData(base.id) : null
+  if (!data?.bins?.length || (data.chrom && data.chrom !== region.chrom)) return null
+  const split = splitLayout(base, region, allTracks)
+  const axis = coverageAxis(base, data.bins, region, {
+    auto: computeAutoScale(base, region, allTracks),
+    split,
+    grouped: true,
+    scaleMax: host.scaleMax != null ? host.scaleMax : null,
+    scaleMin: host.scaleMin != null ? host.scaleMin : null,
+  })
+  return { ...axis, split, note: host.logScale === true ? LOG_LABEL : '' }
 }
 
 // ─── SVG Builder ────────────────────────────────────────────────────────────
@@ -180,7 +209,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
     yOff += rulerH
   }
 
-  const units = buildExportUnits(tracks, allTracks)
+  const units = buildExportUnits(tracks, allTracks, region.chrom)
   for (const [i, unit] of units.entries()) {
     const uH = unitHeight(unit)
     // Per-unit clip sized to THIS row's box. A single shared clip rect of
@@ -201,14 +230,14 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
     if (unit.type === 'overlay') {
       // Layered, transparent members sharing one axis. Each member's bars/outline
       // are wrapped in a group with its overlay opacity so they blend exactly like
-      // the on-screen layers; only the base (first VISIBLE) member draws the scale
-      // labels. Mirror the on-screen rules: skip hidden members; all layers use
-      // the group host's scale/log settings and a group-wide negative layout.
+      // the on-screen layers. Mirror the on-screen rules: only members drawn there
+      // — and ticked under Include tracks — are drawn; all layers use the group
+      // host's scale/log settings and the group's split layout, decided like the
+      // screen from the members it draws; the first exported layer carries the
+      // scale labels, and the row shows the host's region highlights.
       const groupHost = unit.members[0]
-      const vis = drawnMembers(unit, region.chrom)
-      // Same rule as the screen: group-wide, from visible members on this chromosome.
-      const groupHasNeg = needsSplitLayout(groupHost, region, allTracks)
-      vis.forEach((m, mi) => {
+      const groupHasNeg = unit.onScreen.length > 0 && splitLayout(unit.onScreen[0], region, allTracks)
+      unit.layers.forEach((m, mi) => {
         const sm = { ...m, logScale: groupHost.logScale, scaleMax: groupHost.scaleMax, scaleMin: groupHost.scaleMin }
         const data = getLiveTrackData(m.id)
         const parts = svgCoverageParts(data, region, sm, trackW, uH, theme, allTracks, groupHasNeg)
@@ -218,7 +247,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
         if (parts.outline) svg += `<g class="track-outline" opacity="${op}">\n${parts.outline}</g>\n`
         if (mi === 0 && parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
       })
-      if (vis[0]) svg += svgRegionHighlights(vis[0], region, trackW, uH)
+      svg += svgRegionHighlights(groupHost, region, trackW, uH)
     } else {
       const track = unit.track
       const data = getLiveTrackData(track.id)
@@ -249,8 +278,8 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
       svg += `<rect x="0" y="${yOff}" width="${labelW}" height="${uH}" fill="${theme.panelBg}"/>\n`
       svg += `<line x1="${labelW}" y1="${yOff}" x2="${labelW}" y2="${yOff + uH}" stroke="${theme.border}"/>\n`
       if (unit.type === 'overlay') {
-        // Legend: one colored line per member (clipped to the row height).
-        unit.members.forEach((m, mi) => {
+        // Legend: one colored line per exported member (clipped to the row height).
+        unit.layers.forEach((m, mi) => {
           const ly = yOff + 14 + mi * 13
           if (ly > yOff + uH - 3) return
           svg += `<rect x="8" y="${ly - 7}" width="8" height="8" rx="1" fill="${m.color}"/>\n`
@@ -347,8 +376,9 @@ function svgFillPath(xs, ys, baseY, fill, smooth) {
 }
 
 /** Returns { bars, fill, outline, labels } as separate SVG strings for grouping
- *  — the SVG twin of CoverageTrack's drawing: same windowing statistic, auto
- *  axis, clamping, smoothing and labels, so the export matches the screen.
+ *  — the SVG twin of CoverageTrack's drawing (and of ReadTrack's coverage
+ *  view): same windowing statistic, split layout, axis (coverageAxis),
+ *  clamping, smoothing and labels, so the export matches the screen.
  *  forceHasNeg (optional): override the split-layout decision — used for
  *  overlay members so the whole group shares one coordinate system. */
 function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasNeg) {
@@ -357,15 +387,10 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
   const windowing = windowingOf(track)
   const hiOf = (b) => binHigh(b, windowing)
   const loOf = (b) => binLow(b, windowing)
-  const hasNeg = forceHasNeg != null ? forceHasNeg : needsSplitLayout(track, region, allTracks)
-  const auto = computeAutoScale(track, region, allTracks)
-  let maxVal = auto.max
-  let minVal = auto.min
+  const hasNeg = forceHasNeg != null ? forceHasNeg : splitLayout(track, region, allTracks)
   const rStart = region.start, rEnd = region.end
   const regionLen = rEnd - rStart
   const color = track.color || '#78909c'
-  const userScaleMax = track.scaleMax
-  const userScaleMin = track.scaleMin
   const useLog = track.logScale === true
   const bins = data.bins
   const visIdx = []
@@ -376,29 +401,19 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
   const barFixedPx = track.barWidth || 2
   const pxPerNt = w / regionLen
 
-  const fillArea = track.fillArea === true
-  const showBars = (track.showBars !== false) && !fillArea
-  const showOutline = track.showOutline === true
+  const { bars: showBars, fill: fillArea, outline: showOutline, smooth: outSmooth } = coverageStyle(track)
   const outColor = track.outlineColor || null
-  const outSmooth = track.outlineSmooth || 0
-  const wantCurve = fillArea || showOutline
-  // Smooth over ALL fetched bins (as the screen does), then keep the visible ones.
-  const curveHiAll = wantCurve ? smoothValues(bins.map(b => (b.pending ? 0 : hiOf(b))), outSmooth) : null
-  const curveLoAll = wantCurve && hasNeg ? smoothValues(bins.map(b => (b.pending ? 0 : -loOf(b))), outSmooth) : null
-  let smoothedAxis = false
-  if (!showBars && wantCurve && outSmooth > 0 && !track.overlayGroup && !track.linkScale) {
-    const visibleOnly = track.autoScaleVisible !== false
-    let m = 0, n = 0
-    bins.forEach((b, i) => {
-      if (visibleOnly && (b.end <= rStart || b.start >= rEnd)) return
-      if (curveHiAll[i] > m) m = curveHiAll[i]
-      if (curveLoAll && curveLoAll[i] > n) n = curveLoAll[i]
-    })
-    maxVal = m
-    minVal = -n
-    smoothedAxis = true
-  }
-  const lbl = (useLog ? LOG_LABEL : '') + (smoothedAxis && userScaleMax == null ? ' smoothed' : '')
+  // The screen's axis. Its curve is smoothed over ALL fetched bins (as the
+  // screen does); the visible points are picked out below.
+  const axis = coverageAxis(track, bins, region, {
+    auto: computeAutoScale(track, region, allTracks),
+    split: hasNeg,
+    grouped: !!(track.overlayGroup || track.linkScale),
+    scaleMax: track.scaleMax != null ? track.scaleMax : null,
+    scaleMin: track.scaleMin != null ? track.scaleMin : null,
+  })
+  const { curveHi: curveHiAll, curveLo: curveLoAll } = axis
+  const lbl = (useLog ? LOG_LABEL : '') + (axis.smoothed ? ' smoothed' : '')
   const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
 
   // Region bar-recolor overlays (RegionColorEditor) — matches CoverageTrack.
@@ -421,8 +436,8 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
     const midY = Math.round(h / 2)
     const topH = midY - 6
     const botH = h - midY - 6
-    const posMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
-    const negMax = userScaleMin != null ? userScaleMin : (Math.abs(minVal) || 1)
+    const posMax = axis.max
+    const negMax = axis.min
     bars += `<line x1="0" y1="${midY}" x2="${w}" y2="${midY}" stroke="${theme.centerLine}" stroke-width="1"/>\n`
     if (showBars) {
       for (const bin of visibleBins) {
@@ -436,7 +451,7 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
         if (rev < 0) { const bh = axisRatio(-rev, negMax, useLog) * botH; bars += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${ov || adjustColorSvg(color, -40)}"/>\n` }
       }
     }
-    if (wantCurve && visibleBins.length > 0) {
+    if (curveHiAll && visibleBins.length > 0) {
       const fwdYs = visIdx.map(i => midY - axisRatio(curveHiAll[i], posMax, useLog) * topH)
       const revYs = visIdx.map(i => midY + axisRatio(curveLoAll[i], negMax, useLog) * botH)
       if (fillArea) {
@@ -452,7 +467,7 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
     labels += `<text x="2" y="${midY + 4}" fill="${theme.textTertiary}" font-size="10" font-family="Arial, Helvetica, sans-serif">0</text>\n`
     labels += `<text x="2" y="${h - 2}" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">−${esc(formatValue(negMax))}${esc(lbl)}</text>\n`
   } else {
-    const effMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
+    const effMax = axis.max
     if (showBars) {
       for (const bin of visibleBins) {
         if (bin.pending) continue
@@ -465,7 +480,7 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
         bars += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${ov || color}"/>\n`
       }
     }
-    if (wantCurve && visibleBins.length > 0) {
+    if (curveHiAll && visibleBins.length > 0) {
       const ys = visIdx.map(i => h - axisRatio(curveHiAll[i], effMax, useLog) * (h - 14) - 2)
       if (fillArea) fill += svgFillPath(xs, ys, h - 2, color, outSmooth > 0)
       if (showOutline) outline += svgOutlinePath(xs, ys, outColor || theme.textPrimary || '#fff', outSmooth > 0)
@@ -605,7 +620,7 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
     yOff += rulerH
   }
 
-  const units = buildExportUnits(tracks, allTracks)
+  const units = buildExportUnits(tracks, allTracks, region.chrom)
   for (const unit of units) {
     const uH = unitHeight(unit)
     if (includeLabels) {
@@ -613,9 +628,9 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
       ctx.strokeStyle = theme.border; ctx.beginPath()
       ctx.moveTo(labelW, yOff); ctx.lineTo(labelW, yOff + uH); ctx.stroke()
       if (unit.type === 'overlay') {
-        // Legend: one colored swatch + name per member.
+        // Legend: one colored swatch + name per exported member.
         ctx.font = '10px Arial, Helvetica, sans-serif'
-        unit.members.forEach((m, mi) => {
+        unit.layers.forEach((m, mi) => {
           const ly = yOff + 14 + mi * 13
           if (ly > yOff + uH - 3) return
           ctx.fillStyle = m.color; ctx.fillRect(8, ly - 7, 8, 8)
@@ -628,10 +643,16 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
     }
     // Composite the live canvas(es) for this row. Overlay members are drawn in
     // order (base first); each member canvas already carries its baked-in alpha
-    // and transparency, so stacking them reproduces the on-screen blend.
-    const layers = unit.type === 'overlay'
-      ? drawnMembers(unit, region.chrom)
-      : [unit.track]
+    // and transparency, so stacking them reproduces the on-screen blend. Only
+    // members ticked under Include tracks are composited. The screen's base
+    // layer also carries the row's centre line and scale labels: when it is
+    // left out, they are drawn here instead, so the row keeps its axis.
+    const layers = unit.type === 'overlay' ? unit.layers : [unit.track]
+    const rowAxis = unit.type === 'overlay' && unit.onScreen.length > 0 && !unit.layers.includes(unit.onScreen[0])
+      ? overlayRowAxis(unit, region, allTracks) : null
+    if (rowAxis?.split) {
+      ctx.save(); ctx.translate(labelW, yOff); drawCenterLine(ctx, trackW, uH, theme); ctx.restore()
+    }
     for (const m of layers) {
       const host = document.querySelector(`[data-export-track-id="${cssEscape(m.id)}"]`)
       const srcCanvas = host ? host.querySelector('canvas') : null
@@ -640,6 +661,11 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
           ctx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, labelW, yOff, trackW, uH)
         } catch {}
       }
+    }
+    if (rowAxis) {
+      ctx.save(); ctx.translate(labelW, yOff)
+      drawAxisLabels(ctx, rowAxis, rowAxis.split, rowAxis.note, uH, theme)
+      ctx.restore()
     }
     // Persistent region highlight overlays live in a separate DOM layer
     // (SelectionOverlay), so the track canvas above doesn't include them —

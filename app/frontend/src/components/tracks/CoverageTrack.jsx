@@ -7,30 +7,17 @@
  * Each bin is summarised by the track's windowing function — Max (default,
  * peak-preserving) or Mean — and the auto Y axis is computed from exactly that
  * statistic, so the scale always describes what is drawn: zooming out can no
- * longer shrink a peak below the axis it was measured against.
+ * longer shrink a peak below the axis it was measured against. The axis comes
+ * from coverageAxis, the rule the SVG export and Track Settings share.
  */
 import React, { useRef, useEffect } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTrackData, computeAutoScale, needsSplitLayout, useLiveDataVersion } from '../../hooks/useTrackData'
-import { binHigh, binLow, binExtremes, windowingOf, formatValue } from '../../utils/coverageStats'
+import { binHigh, binLow, binExtremes, windowingOf, formatValue, coverageStyle, coverageAxis } from '../../utils/coverageStats'
 
 export const LOG_LABEL = ' log₂(x+1)'
-
-/** Smooth an array of values using a moving average window. */
-export function smoothValues(values, radius) {
-  if (radius <= 0 || values.length === 0) return values
-  const out = new Array(values.length)
-  for (let i = 0; i < values.length; i++) {
-    let sum = 0, count = 0
-    const lo = Math.max(0, i - radius)
-    const hi = Math.min(values.length - 1, i + radius)
-    for (let j = lo; j <= hi; j++) { sum += values[j]; count++ }
-    out[i] = sum / count
-  }
-  return out
-}
 
 function logScale(val, max) {
   // Maps val ∈ [0, max] → [0, 1] on a log₂(x+1) scale
@@ -122,9 +109,6 @@ export default function CoverageTrack({
     // Split layout (forward up / reverse down): decided chromosome-wide (and
     // group-wide for overlays and linked tracks) so it doesn't flip as you pan.
     const hasNegative = needsSplitLayout(track, region, tracks)
-    // Auto scale from the drawn statistic: the visible region (default) or the
-    // fetched range, the track's link/overlay group sharing one axis.
-    const auto = computeAutoScale(track, region, tracks)
     const regionStart = region.start
     const regionLen = region.end - region.start
     const color = track.color || '#78909c'
@@ -139,15 +123,22 @@ export default function CoverageTrack({
     const useLog = inOverlay ? overlayLogScale === true : track.logScale === true
     const barAuto = track.barAutoWidth !== false
     const barFixedPx = track.barWidth || 2
-    const showOutline = track.showOutline === true
     const outlineColor = track.outlineColor || null
-    const outlineSmooth = track.outlineSmooth || 0
-    const showBars = track.showBars !== false
-    const fillArea = track.fillArea === true
     // Smooth fill draws a single-colour area under the (smoothed) peak-outline
-    // curve in place of the discrete bars, so suppress the bars while it's on.
-    const drawBars = showBars && !fillArea
-    const wantCurve = fillArea || showOutline
+    // curve in place of the discrete bars, so the bars are off while it's on.
+    const { bars: drawBars, fill: fillArea, outline: showOutline, curve: wantCurve, smooth: outlineSmooth } = coverageStyle(track)
+    // The axis (coverageAxis): the auto scale of the drawn statistic over the
+    // visible region (default) or the fetched range, the track's link/overlay
+    // group sharing one axis — or, with the bars hidden, the smoothed curve —
+    // unless a fixed scale is set.
+    const axis = coverageAxis(track, bins, region, {
+      auto: computeAutoScale(track, region, tracks),
+      split: hasNegative,
+      grouped: inOverlay || !!track.linkScale,
+      scaleMax: userScaleMax,
+      scaleMin: userScaleMin,
+    })
+    const axisNote = (useLog ? LOG_LABEL : '') + (axis.smoothed ? ' smoothed' : '')
     // Pre-filter overlays for current chromosome (avoids per-bin filtering)
     const regionOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
     const fwdColor = color
@@ -167,41 +158,18 @@ export default function CoverageTrack({
 
     // Curve (peak outline / smooth fill): the drawn statistic, smoothed.
     const xs = bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
-    const curveHi = wantCurve ? smoothValues(bins.map(b => (b.pending ? 0 : hi(b))), outlineSmooth) : null
-    const curveLo = wantCurve && hasNegative ? smoothValues(bins.map(b => (b.pending ? 0 : -lo(b))), outlineSmooth) : null
-    // With the bars hidden the smoothed curve IS the track, and it can never
-    // reach a raw maximum (smoothing spreads a peak over neighbouring bins), so
-    // fit the axis to the curve and say so — standalone auto-scaled tracks only.
-    let maxVal = auto.max
-    let minVal = auto.min
-    let smoothedAxis = false
-    if (!drawBars && wantCurve && outlineSmooth > 0 && !inOverlay && !track.linkScale) {
-      const visibleOnly = track.autoScaleVisible !== false
-      let m = 0, n = 0
-      for (let i = 0; i < bins.length; i++) {
-        if (visibleOnly && (bins[i].end <= region.start || bins[i].start >= region.end)) continue
-        if (curveHi[i] > m) m = curveHi[i]
-        if (curveLo && curveLo[i] > n) n = curveLo[i]
-      }
-      maxVal = m
-      minVal = -n
-      smoothedAxis = true
-    }
-    const axisNote = (useLog ? LOG_LABEL : '') + (smoothedAxis && userScaleMax == null ? ' smoothed' : '')
+    const { curveHi, curveLo } = axis
 
     if (hasNegative) {
       const margin = 12
       const midY = Math.round(height / 2)
       const topH = midY - margin / 2
       const botH = height - midY - margin / 2
-      const posMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
-      const negMax = userScaleMin != null ? userScaleMin : (Math.abs(minVal) || 1)
+      const posMax = axis.max
+      const negMax = axis.min
 
       // Center line is structural — only the base/standalone layer draws it.
-      if (!isOverlayLayer) {
-        ctx.strokeStyle = theme.centerLine; ctx.lineWidth = 1
-        ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(width, midY); ctx.stroke()
-      }
+      if (!isOverlayLayer) drawCenterLine(ctx, width, height, theme)
 
       ctx.globalAlpha = barAlpha
       if (drawBars) {
@@ -243,14 +211,8 @@ export default function CoverageTrack({
       }
       ctx.globalAlpha = 1
       if (!isOverlayLayer) drawPending(ctx, bins, regionStart, regionLen, width, height, theme)
-
-      if (!isOverlayLayer) {
-        drawScaleLabel(ctx, `+${formatValue(posMax)}${axisNote}`, 2, 2, theme)
-        drawScaleLabel(ctx, `−${formatValue(negMax)}${axisNote}`, 2, height - 12, theme)
-        drawScaleLabel(ctx, '0', 2, midY - 6, theme, true)
-      }
     } else {
-      const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
+      const effectiveMax = axis.max
       ctx.globalAlpha = barAlpha
       if (drawBars) {
         for (const bin of bins) {
@@ -274,12 +236,9 @@ export default function CoverageTrack({
       }
       ctx.globalAlpha = 1
       if (!isOverlayLayer) drawPending(ctx, bins, regionStart, regionLen, width, height, theme)
-
-      if (!isOverlayLayer) {
-        drawScaleLabel(ctx, `${formatValue(effectiveMax)}${axisNote}`, 2, 2, theme)
-        drawScaleLabel(ctx, '0', 2, height - 12, theme, true)
-      }
     }
+    // Scale labels are structural too — one set per row, from the base layer.
+    if (!isOverlayLayer) drawAxisLabels(ctx, axis, hasNegative, axisNote, height, theme)
 
     // Warnings: refresh failures, coverage still being computed, and values
     // clipped by a fixed scale (judged on what is visible, not the overscan).
@@ -326,6 +285,28 @@ export function drawPending(ctx, bins, regionStart, regionLen, width, height, th
       ctx.restore()
       runStart = null
     }
+  }
+}
+
+/** Centre line of the split (+/−) layout. Like the scale labels it belongs to
+ *  the row, so only the base/standalone layer draws it — and the PNG export,
+ *  for an overlay row whose base layer is left out. */
+export function drawCenterLine(ctx, width, height, theme) {
+  const midY = Math.round(height / 2)
+  ctx.strokeStyle = theme.centerLine; ctx.lineWidth = 1
+  ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(width, midY); ctx.stroke()
+}
+
+/** Scale labels of an axis from coverageAxis: +max, −min and 0 in the split
+ *  layout, max and 0 otherwise, each value followed by `note`. */
+export function drawAxisLabels(ctx, axis, split, note, height, theme) {
+  if (split) {
+    drawScaleLabel(ctx, `+${formatValue(axis.max)}${note}`, 2, 2, theme)
+    drawScaleLabel(ctx, `−${formatValue(axis.min)}${note}`, 2, height - 12, theme)
+    drawScaleLabel(ctx, '0', 2, Math.round(height / 2) - 6, theme, true)
+  } else {
+    drawScaleLabel(ctx, `${formatValue(axis.max)}${note}`, 2, 2, theme)
+    drawScaleLabel(ctx, '0', 2, height - 12, theme, true)
   }
 }
 

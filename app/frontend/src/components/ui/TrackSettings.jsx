@@ -10,8 +10,8 @@ import { createPortal } from 'react-dom'
 import { useTracks, DEFAULT_ANNOTATION_COLORS, makeGroupId } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useBrowser } from '../../store/BrowserContext'
-import { getLiveTrackData, useLiveDataVersion, computeAutoScale } from '../../hooks/useTrackData'
-import { formatBp } from '../../utils/coverageStats'
+import { getLiveTrackData, useLiveDataVersion, computeAutoScale, needsSplitLayout } from '../../hooks/useTrackData'
+import { formatBp, formatValue, coverageAxis } from '../../utils/coverageStats'
 import { MAX_BINS } from '../../utils/fetchPlan'
 import DraggablePanel from './DraggablePanel'
 import NumberInput from './NumberInput'
@@ -24,6 +24,19 @@ function ceilSig(v, digits = 3) {
   if (!(v > 0)) return 0
   const p = Math.pow(10, Math.floor(Math.log10(v)) - (digits - 1))
   return Number((Math.ceil(v / p - 1e-9) * p).toPrecision(digits + 1))
+}
+
+/** The fixed scale for an axis drawn at `v`: the shortest number >= v whose
+ *  axis label reads the same (5576.96 → 5577, 8.11523 → 8.1153, 30.9 → 30.9),
+ *  so fixing the scale changes neither the picture nor the label and never
+ *  clips the peak the axis was fitted to. */
+function scaleAt(v) {
+  const label = formatValue(v)
+  for (let digits = 1; digits <= 15; digits++) {
+    const c = ceilSig(v, digits)
+    if (c >= v && formatValue(c) === label) return c
+  }
+  return v
 }
 
 /** "now 864 bp" — the bin width currently drawn, from the tracks' live data. */
@@ -138,15 +151,31 @@ export default function TrackSettings({ onClose }) {
   function applyToCoverage(updates) { updateMultipleTracks(coverageLikeIds, updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
 
-  /** Turn Auto off at the axis each track shows now, so the picture doesn't
-   *  jump (the old fixed 100/100 start rarely suited the data). Linked and
-   *  overlaid tracks share their group's axis, so they get the same values. */
+  /** Turn Auto off at the axis each track draws now, so neither the picture
+   *  nor its labels change (the old fixed 100/100 start rarely suited the
+   *  data). The axis comes from the renderers' own rule (coverageAxis): linked
+   *  and overlaid tracks share their group's axis, so they get the same
+   *  values, and a track drawn only as a smoothed curve gets the curve's. */
   function fixScaleAtCurrent() {
+    const chrom = region?.chrom
+    const shown = m => m.visible !== false && (!m.targetChromosomes || !chrom || m.targetChromosomes.includes(chrom))
     for (const tr of coverageLike) {
-      const a = computeAutoScale(tr, region, tracks)
-      const known = !!getLiveTrackData(tr.id)?.bins?.length
-      const up = a.max > 0 ? ceilSig(a.max) : (known ? 1 : 100)
-      updateTrack(tr.id, { scaleMax: up, scaleMin: a.min < 0 ? ceilSig(-a.min) : up })
+      // An overlay row's axis is the one its base layer (first member drawn) shows.
+      const ref = (tr.overlayGroup && tracks.find(m => m.overlayGroup === tr.overlayGroup && shown(m))) || tr
+      const auto = computeAutoScale(ref, region, tracks)
+      const d = getLiveTrackData(ref.id)
+      const bins = region && d?.bins?.length && (!d.chrom || d.chrom === chrom) ? d.bins : null
+      let up = auto.max > 0 ? auto.max : 100   // nothing drawn yet, or individual reads
+      let down = null
+      if (bins) {
+        // A read track's coverage view never uses the split layout (ReadTrack).
+        const split = ref.track_type !== 'reads' && needsSplitLayout(ref, region, tracks)
+        const axis = coverageAxis(ref, bins, region, { auto, split, grouped: !!(ref.overlayGroup || ref.linkScale) })
+        up = axis.max
+        if (split) down = axis.min
+      }
+      if (down == null) down = auto.min < 0 ? -auto.min : up
+      updateTrack(tr.id, { scaleMax: scaleAt(up), scaleMin: scaleAt(down) })
     }
   }
 
