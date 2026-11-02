@@ -298,69 +298,113 @@ class BamReader:
         }}
 
     def _live_coverage(self, chrom, start, end, bins):
-        """Fallback pileup when the coverage index is unavailable: mean depth of
-        aligned bases per bin, bounded by MAX_COVERAGE_READS.
+        """Fallback pileup when the coverage index is unavailable: exact mean,
+        max and min depth of aligned bases per bin (the index's counting
+        rules), bounded by MAX_COVERAGE_READS.
 
-        Fixes over the original implementation: the range is clamped to the
-        contig (bamnostic raises for a start past the contig end), each read
-        is counted once — in the 50 kb chunk where it starts — instead of once
-        per chunk it overlaps, and bins beyond the read cap are flagged
-        ``pending`` rather than reported as zero. Returns (bins, truncated)."""
+        Reads are taken in file order from the BAI linear-index offset for
+        the range start, and how far a read reaches comes from its CIGAR.
+        (bamnostic's fetch() looks that offset up through the bins, which
+        finds nothing when the 16 kb window at the range start has no reads,
+        and judges overlap by the sequence length, which drops reads that
+        start left of the range and span more reference than their sequence:
+        long reads with large deletions or introns.) Aligned blocks become
+        depth-change events in a heap. No read starts left of the previous
+        one, so all depth left of the newest start is final and the sweep
+        folds it into the bins; memory follows the depth, not the length of
+        the range. Records out of coordinate order raise (a stale index), a
+        contig without index intervals has zero depth, and bins beyond the
+        read cap are flagged ``pending`` rather than reported as zero.
+        Returns (bins, truncated)."""
+        from heapq import heappop, heappush
+
         L = self._contig_length(chrom)
         region_len = end - start
         n_bins = min(bins, region_len)
         bin_size = region_len / n_bins
         edges = [start + int(i * bin_size) for i in range(n_bins)] + [end]
-        sums = [0] * n_bins
         lo, hi = max(0, start), min(end, L)
+        sums = [0] * n_bins
+        maxs = [0] * n_bins
+        mins = [1 << 62] * n_bins
         truncated = False
         complete_to = hi
+        events = []                 # heap: pos << 1 | 1 (depth +1 at pos) or pos << 1 (-1)
+        cur, depth, k = lo, 0, 0    # [lo, cur) is folded into the bins; depth is that at cur
 
-        def add(a, b):
-            k = min(n_bins - 1, max(0, int((a - start) / bin_size)))
-            while k > 0 and edges[k] > a:
-                k -= 1
-            while k < n_bins and edges[k] < b:
-                ov = min(b, edges[k + 1]) - max(a, edges[k])
-                if ov > 0:
-                    sums[k] += ov
-                k += 1
+        def fold(x):
+            """Fold the final depth over [cur, x) into the bins."""
+            nonlocal cur, depth, k
+            while cur < x:
+                while events and events[0] >> 1 <= cur:
+                    depth += 1 if heappop(events) & 1 else -1
+                nxt = events[0] >> 1 if events and events[0] >> 1 < x else x
+                while cur < nxt:            # depth is constant over [cur, nxt)
+                    b = edges[k + 1]
+                    if b <= cur:
+                        k += 1
+                        continue
+                    t = nxt if nxt < b else b
+                    sums[k] += depth * (t - cur)
+                    if depth > maxs[k]:
+                        maxs[k] = depth
+                    if depth < mins[k]:
+                        mins[k] = depth
+                    cur = t
 
         if hi > lo:
-            CHUNK = 50_000
+            try:
+                tid = self._aln.ref2tid[chrom]
+                intervals = self._aln._index.get_ref(tid).intervals
+            except KeyError:
+                return [], False   # contig absent from this BAM
+            except IndexError:
+                # bamnostic raises this for a contig without linear-index
+                # intervals, i.e. without reads: zero depth, not a corrupt file.
+                intervals = ()
+            except Exception as e:
+                raise RuntimeError(_fetch_error_msg(self.file_path)) from e
+            # Per 16 kb window, the linear index holds the offset of the first
+            # read reaching into it (an earlier one for a window without reads;
+            # 0 before the contig's first read in Picard indexes), so every
+            # read overlapping [lo, hi) is at or after this offset.
+            voffset = next((v for v in intervals[lo >> 14:] if v), None)
             total = 0
             try:
-                cs = lo
-                while cs < hi and not truncated:
-                    ce = min(cs + CHUNK, hi)
-                    fetch_from = max(0, cs - DEFAULT_READ_LOOKBACK) if cs == lo else cs
-                    for read in self._aln.fetch(chrom, fetch_from, ce):
+                if voffset is not None:
+                    self._aln.seek(voffset)
+                    for read in self._aln:
                         rs = read.reference_start
-                        if cs != lo and rs < cs:
-                            continue            # already counted in the chunk where it starts
-                        if read.flag & SKIP_FLAGS or not read.cigarstring:
+                        if read.reference_id != tid or rs >= hi:
+                            break
+                        if read.flag & SKIP_FLAGS or not read.cigartuples:
                             continue
+                        x = rs if rs > lo else lo
+                        if x < cur:
+                            raise ValueError("alignments are not in coordinate order")
+                        fold(x)
                         p = rs
-                        for ln, op in _parse_cigar(read.cigarstring):
-                            if op in "M=X":
-                                a, b = max(p, lo), min(p + ln, hi)
+                        for op, ln in read.cigartuples:
+                            if op == 0 or op == 7 or op == 8:      # M = X: aligned bases
+                                a, b = (p if p > lo else lo), (p + ln if p + ln < hi else hi)
                                 if b > a:
-                                    add(a, b)
+                                    heappush(events, a << 1 | 1)
+                                    heappush(events, b << 1)
                                 p += ln
-                            elif op in "DN":
+                            elif op == 2 or op == 3:                # D N: skip reference
                                 p += ln
+                        if p <= lo:
+                            continue                # ends before the range
                         total += 1
                         if total >= MAX_COVERAGE_READS:
                             truncated = True
-                            complete_to = max(lo, rs)
+                            complete_to = x
                             break
-                    cs = ce
-            except KeyError:
-                return [], False   # contig absent from this BAM
             except Exception as e:
                 # Corrupt index / BGZF decode failure mid-fetch: a clear message
                 # (HTTP 503) rather than a track that looks valid but is wrong.
                 raise RuntimeError(_fetch_error_msg(self.file_path)) from e
+            fold(complete_to)
 
         out = []
         for i in range(n_bins):
@@ -368,11 +412,11 @@ class BamReader:
             d = {"start": a, "end": b}
             ac, bc = max(a, 0), min(b, L)
             if bc <= ac:
-                d.update(value=0.0, cov=0)
+                d.update(value=0.0, max=0.0, min=0.0, cov=0)
             elif bc > complete_to:
-                d.update(value=0.0, cov=0, pending=True)
+                d.update(value=0.0, max=0.0, min=0.0, cov=0, pending=True)
             else:
-                d.update(value=sums[i] / (bc - ac), cov=bc - ac)
+                d.update(value=sums[i] / (bc - ac), max=float(maxs[i]), min=float(mins[i]), cov=bc - ac)
             out.append(d)
         return out, truncated
 
