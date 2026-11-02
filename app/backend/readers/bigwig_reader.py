@@ -36,6 +36,7 @@ def _strip_chr(name: str) -> str:
 
 
 _INF = float("inf")
+_finite = math.isfinite
 
 
 class _Bins:
@@ -44,9 +45,12 @@ class _Bins:
     Bin edges are the integer coordinates reported to the client, so every
     statistic describes exactly the bases its bar is drawn over. Each bin
     collects the base-pair-weighted sum and covered bp (→ mean) plus the
-    extremes of the underlying signal (→ peak-preserving max/min). Shared by
-    all three readers, so a value in one format lands in the same bins as the
-    same value in another."""
+    extremes of the underlying signal (→ peak-preserving max/min): "max" is
+    the largest positive-side value (>= 0) and "min" the smallest
+    negative-side value (<= 0), so a bin holding only negative values reports
+    max 0 and one holding only positive values min 0. Shared by all three
+    readers, so a value in one format lands in the same bins as the same
+    value in another."""
 
     __slots__ = ("start", "end", "n", "bs", "edges", "tot", "neg", "cnt", "mx", "mn", "signed")
 
@@ -59,8 +63,8 @@ class _Bins:
         self.tot = [0.0] * n      # bp-weighted sum of the positive side
         self.neg = [0.0] * n      # bp-weighted sum of the negative side
         self.cnt = [0] * n        # covered bp
-        self.mx = [-_INF] * n
-        self.mn = [_INF] * n
+        self.mx = [0.0] * n       # largest positive-side value (0: none)
+        self.mn = [0.0] * n       # smallest negative-side value (0: none)
         self.signed = False       # any negative value seen → report forward/reverse
 
     def first_bin(self, x: int) -> int:
@@ -78,7 +82,11 @@ class _Bins:
         return k
 
     def add(self, s: int, e: int, v: float):
-        """Add value ``v`` over [s, e) (already clipped to the query)."""
+        """Add value ``v`` over [s, e) (already clipped to the query). The
+        readers drop non-finite values before this; one that got here (NaN,
+        ±inf) is ignored too, since it would make the response invalid JSON."""
+        if not _finite(v):
+            return
         edges, cnt, mx, mn = self.edges, self.cnt, self.mx, self.mn
         side = self.tot
         if v < 0:
@@ -147,6 +155,7 @@ class BigWigReader:
         self._full_index_offset = 0
         self._parse_header()
         self._parse_chrom_tree()
+        self._has_neg = self._chrom_signs()
 
     def close(self):
         self._fh.close()
@@ -242,6 +251,7 @@ class BigWigReader:
         self._chrom_tree_offset = chrom_tree_offset
         self._full_index_offset = full_index_offset
         self._uncompress_buf_size = uncompress_buf_size
+        self._zoom_levels = zoom_levels
         # The writer's whole-file summary (validCount, min, max, sum, sumSq):
         # its minimum says whether the file holds negative values at all.
         self._file_min = None
@@ -251,7 +261,82 @@ class BigWigReader:
                 self._file_min = struct.unpack_from("<Qdddd", summary)[1]
 
     def has_negative(self, chrom: str):
-        return None if self._file_min is None else self._file_min < 0
+        """Whether ``chrom`` holds negative values: True/False, or None when
+        the file can't tell without reading its data (the client then decides
+        per fetched window). Settled at open, so this does no file I/O; the
+        API calls it outside the track lock."""
+        return self._has_neg.get(self._resolve_chrom(chrom), False)
+
+    def _chrom_signs(self) -> dict:
+        """chrom -> has_negative answer, computed once at open.
+
+        A file minimum >= 0 rules negatives out everywhere. Otherwise each
+        chromosome's minimum comes from the coarsest zoom level's summary
+        records, which the writer computed over all of the data: exact, and
+        only a few records per chromosome. Without (usable) zoom levels, only
+        a single-chromosome file can go by the file minimum."""
+        fmin = self._file_min
+        if fmin is not None and fmin >= 0:
+            return dict.fromkeys(self._chrom_to_id, False)
+        unknown = dict.fromkeys(self._chrom_to_id)    # None everywhere
+        try:
+            zoom = self._zoom_chrom_signs()
+        except Exception:
+            zoom = None                       # unreadable zoom data: as if absent
+        if zoom is not None:
+            # Zoom summaries that see no negative value anywhere contradict a
+            # negative file minimum: trust neither.
+            if fmin is not None and fmin < 0 and all(v is False for v in zoom.values()):
+                return unknown
+            return {c: zoom.get(cid, False) for c, cid in self._chrom_to_id.items()}
+        if len(self._chrom_to_id) == 1 and fmin is not None and _finite(fmin):
+            return dict.fromkeys(self._chrom_to_id, fmin < 0)
+        return unknown
+
+    def _zoom_chrom_signs(self):
+        """{chromId: True/False/None} from the coarsest zoom level, or None
+        when the file has none. Each summary record is (chromId, start, end,
+        validCount, minVal, maxVal, sum, sumSq); a chromosome without records
+        holds no data. A -inf or NaN minVal (values get_coverage drops) hides
+        whether finite negative values are there too, so it leaves the answer
+        open (None) unless another record shows one."""
+        if not self._zoom_levels:
+            return None
+        # (reductionLevel, reserved, dataOffset, indexOffset) per level; the
+        # largest reduction has the fewest records.
+        hdrs = self._read(64, 24 * self._zoom_levels)
+        index_offset = max(struct.iter_unpack("<LLQQ", hdrs))[3]
+        if struct.unpack_from("<L", self._read(index_offset, 4))[0] != RTREE_MAGIC:
+            raise ValueError("Bad zoom R-tree magic")
+        signs = {}
+        for offset, size in self._rtree_blocks(index_offset + 48):
+            raw = self._read(offset, size)
+            if self._uncompress_buf_size > 0:
+                raw = zlib.decompress(raw)
+            for chrom_id, _, _, valid, lo in struct.iter_unpack("<LLLLf12x", raw[:len(raw) // 32 * 32]):
+                if not valid or signs.get(chrom_id):
+                    continue
+                if _finite(lo):
+                    if lo < 0:
+                        signs[chrom_id] = True
+                    else:
+                        signs.setdefault(chrom_id, False)
+                elif lo != _INF:              # -inf or NaN
+                    signs[chrom_id] = None
+        return signs
+
+    def _rtree_blocks(self, offset: int) -> list:
+        """(dataOffset, dataSize) of every data block under the R-tree node at
+        ``offset``."""
+        is_leaf, _, count = struct.unpack_from("<BBH", self._read(offset, 4))
+        if is_leaf:
+            data = self._read(offset + 4, count * 32)
+            return [struct.unpack_from("<qq", data, i * 32 + 16) for i in range(count)]
+        data = self._read(offset + 4, count * 24)
+        blocks = []
+        for i in range(count):
+            blocks += self._rtree_blocks(struct.unpack_from("<q", data, i * 24 + 16)[0])
+        return blocks
 
     def _parse_chrom_tree(self):
         off = self._chrom_tree_offset
@@ -317,9 +402,11 @@ class BigWigReader:
 
         pos = 24
         add = acc.add
+        finite = _finite
 
         def add_range(s, e, v):
-            if s >= region_end or e <= region_start or v != v:   # skip NaN
+            # Skip NaN and ±inf (e.g. a log ratio's log(0)), like the WIG reader.
+            if s >= region_end or e <= region_start or not finite(v):
                 return
             cs = s if s > region_start else region_start
             ce = e if e < region_end else region_end
@@ -374,6 +461,7 @@ class BedGraphReader:
         return chrom
 
     def _load(self):
+        finite = _finite
         with _open_text(self.file_path) as f:
             for line in f:
                 line = line.strip()
@@ -385,6 +473,12 @@ class BedGraphReader:
                 try:
                     chrom, start, end, value = parts[0], int(parts[1]), int(parts[2]), float(parts[3])
                 except (ValueError, IndexError):
+                    continue
+                # Drop NaN and ±inf ("inf", or "1e400" overflowing), like the
+                # WIG reader: they can't be drawn, a -inf must not mark the
+                # chromosome as signed, and any one would make the response
+                # invalid JSON.
+                if not finite(value):
                     continue
                 self._data.setdefault(chrom, []).append((start, end, value))
                 self._chroms[chrom] = max(self._chroms.get(chrom, 0), end)
@@ -420,7 +514,7 @@ class BedGraphReader:
             s, e, v = entries[i]
             if s >= end:
                 break
-            if e <= start or v != v:     # outside, or NaN
+            if e <= start:
                 continue
             # Weight by base-pair overlap (matches the BigWig/WIG readers) so a
             # bin reports the true bp mean rather than an unweighted average of
@@ -438,8 +532,8 @@ class WigReader:
     Robust WIG reader that handles:
     - variableStep and fixedStep formats
     - Negative values (e.g. Tn-seq reverse-strand reads)
-    - Duplicate positions (same position, different strands) — merged into
-      one site, so its bases are counted once
+    - Duplicate records (same position and span, e.g. one per strand) —
+      merged into one site, so its bases are counted once
     - 1-based WIG coords → 0-based internal coords
 
     Every record is stored as aligned per-position arrays: the forward
@@ -449,13 +543,13 @@ class WigReader:
 
     def __init__(self, file_path: str):
         self.file_path = file_path
-        self._positions: dict[str, list] = {} # chrom -> [pos, pos, ...] sorted, distinct
+        self._positions: dict[str, list] = {} # chrom -> [pos, pos, ...] sorted (repeats only with different spans)
         self._spans: dict[str, list] = {}     # chrom -> [span, ...] matching
         self._fwd: dict[str, list] = {}       # chrom -> positive-side value per position (>= 0)
         self._rev: dict[str, list] = {}       # chrom -> negative-side value per position (<= 0)
         self._chroms: dict[str, int] = {}     # chrom -> max_position
         self._max_span = 1
-        self.merged_duplicates = 0            # records folded into an existing position
+        self.merged_duplicates = 0            # records folded into an existing site (same position and span)
         self._load()
 
     def _resolve_chrom(self, chrom: str) -> str:
@@ -619,21 +713,28 @@ class WigReader:
                 sp = [sp[i] for i in order]
                 fw = [fw[i] for i in order]
                 rv = [rv[i] for i in order]
-            # Merge records at the same position (e.g. a Tn-seq TA site listed
-            # once per strand: "803145 2123.18" and "803145 -8.23") into one
-            # site — sides summed — so its bases are counted once. Counting
-            # them per record halved both strands at every zoom.
+            # Merge records at the same position and span (e.g. a Tn-seq TA
+            # site listed once per strand: "803145 2123.18" and "803145
+            # -8.23") into one site — sides summed — so its bases are counted
+            # once. Counting them per record halved both strands at every
+            # zoom. Records of different spans stay separate entries: folding
+            # one into the other would spread its value over the wrong bases.
             if len(set(p)) != len(p):
                 P, S, F, R = [p[0]], [sp[0]], [fw[0]], [rv[0]]
+                run = 0                       # first entry at the current position
                 for i in range(1, len(p)):
                     if p[i] == P[-1]:
-                        F[-1] += fw[i]
-                        R[-1] += rv[i]
-                        if sp[i] > S[-1]:
-                            S[-1] = sp[i]
-                        self.merged_duplicates += 1
+                        j = len(P) - 1        # the same-span entry, usually the last
+                        while j >= run and S[j] != sp[i]:
+                            j -= 1
+                        if j >= run:
+                            F[j] += fw[i]
+                            R[j] += rv[i]
+                            self.merged_duplicates += 1
+                            continue
                     else:
-                        P.append(p[i]); S.append(sp[i]); F.append(fw[i]); R.append(rv[i])
+                        run = len(P)
+                    P.append(p[i]); S.append(sp[i]); F.append(fw[i]); R.append(rv[i])
                 p, sp, fw, rv = P, S, F, R
             self._positions[ch], self._spans[ch], self._fwd[ch], self._rev[ch] = p, sp, fw, rv
             if sp:
