@@ -20,9 +20,18 @@ import { formatValue } from '../../utils/coverageStats'
 
 const AUTO_SHOW_MS = 3500  // tooltip dwells this long after a new selection
 const STATS_RETRY_MS = 1500  // re-ask while a BAM's coverage is still being computed
+const STATS_SETTLE_MS = 250  // a selection being dragged out must hold still this long to be asked about
+
+// Mouse buttons held right now, noted at the window in the capture phase so
+// no handler can hide the event. While the right button is down, a right-drag
+// is still changing the selection on every mouse move.
+let heldButtons = 0
+const noteButtons = (e) => { heldButtons = e.buttons }
+window.addEventListener('mousedown', noteButtons, true)
+window.addEventListener('mouseup', noteButtons, true)
 
 export default function SelectionOverlay({ width, height, trackData, trackType, trackId, regionOverlays }) {
-  const { region, selection, clearSelection } = useBrowser()
+  const { region, selection, getSelection, clearSelection } = useBrowser()
   const { theme } = useTheme()
   const [hover, setHover] = useState(false)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
@@ -55,23 +64,50 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
 
   // Exact signal statistics of the selection (coverage/read tracks), fetched
   // from the backend while the tooltip is up — averaging the drawn bins gave
-  // numbers that changed with the zoom level.
+  // numbers that changed with the zoom level. A selection being dragged out
+  // changes on every mouse move, so it is asked about only once it has held
+  // still for STATS_SETTLE_MS or the right button is released: one request
+  // per track, not one per move (each is a full scan on the backend).
   const isSignal = trackType === 'coverage' || trackType === 'reads'
   const statsKey = isSignal && trackId && hasSelection && (hover || autoShow)
     ? `${trackId}|${selection.chrom}|${selection.start}|${selection.end}` : null
   const [sig, setSig] = useState(null)   // { key, row }
   useEffect(() => {
     if (!statsKey) return undefined
+    const { chrom, start, end } = selection
     const controller = new AbortController()
-    let timer = null
-    const ask = () => fetchSignalStats({ id: trackId }, selection.chrom, selection.start, selection.end, controller.signal)
+    let timer = null   // the settle wait, then the re-ask while incomplete
+    const ask = () => fetchSignalStats({ id: trackId }, chrom, start, end, { signal: controller.signal, slot: 'select' })
       .then(row => {
-        if (controller.signal.aborted) return
+        // undefined: a newer request for this selection slot superseded it
+        // and answers instead.
+        if (controller.signal.aborted || row === undefined) return
         setSig({ key: statsKey, row })
         if (row && !row.complete) timer = setTimeout(ask, STATS_RETRY_MS)
       })
-    ask()
-    return () => { controller.abort(); if (timer) clearTimeout(timer) }
+    const settled = () => {
+      window.removeEventListener('mouseup', onRelease, true)
+      clearTimeout(timer)
+      ask()
+    }
+    const onRelease = (e) => {
+      if (e.buttons & 2) return
+      // Only for the newest selection: the effect of a newer one may not have
+      // run yet, and it asks at once itself (the button is up by then).
+      const cur = getSelection()
+      if (cur && cur.chrom === chrom && cur.start === start && cur.end === end) settled()
+    }
+    if (heldButtons & 2) {
+      timer = setTimeout(settled, STATS_SETTLE_MS)
+      window.addEventListener('mouseup', onRelease, true)
+    } else {
+      ask()
+    }
+    return () => {
+      controller.abort()
+      clearTimeout(timer)
+      window.removeEventListener('mouseup', onRelease, true)
+    }
   }, [statsKey])
   const sigRow = sig && sig.key === statsKey ? sig.row : undefined   // undefined = loading
 
@@ -190,7 +226,7 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
 }
 
 /** Tooltip rows. `sig` is the exact /stats row for coverage/read tracks
- *  (undefined while loading, null if unavailable). */
+ *  (undefined while loading, null if the request failed). */
 function computeStats(selection, trackData, trackType, sig) {
   const stats = []
   if (!selection) return stats
@@ -207,6 +243,8 @@ function computeStats(selection, trackData, trackType, sig) {
       stats.push({ label: 'Signal', value: 'loading…' })
     } else if (sig && !sig.complete) {
       stats.push({ label: 'Signal', value: 'computing exact coverage…' })
+    } else if (sig && sig.truncated) {
+      stats.push({ label: 'Signal', value: 'unavailable (too many reads to count exactly)' })
     } else if (sig && sig.covered > 0) {
       if (sig.strand) {
         stats.push({ label: 'Sum', value: `+${formatValue(sig.fwdSum)} / −${formatValue(Math.abs(sig.revSum))}` })

@@ -8,23 +8,74 @@ import { tracksApi } from '../api/client'
 
 const cache = new Map()   // `${trackId}|${chrom}|${start}|${end}` -> row
 const CACHE_MAX = 200
+const SLOW_MS = 1000      // a scan running this long stops holding the queue
+
+const keyOf = (track, chrom, start, end) => `${track.id}|${chrom}|${start}|${end}`
+
+// The backend's /stats scans are CPU-bound and share one Python interpreter,
+// so asking for several tracks at once (the hover tooltip and every track's
+// selection tooltip do) only slows them — and every other request, such as
+// the reference bases and coverage — down. They run one at a time instead,
+// which finishes the set as fast. A scan still running after SLOW_MS (e.g. a
+// BAM counted live) lets the next one start; abandoned requests never go out.
+const queue = []   // { run, resolve, reject, signal } not started yet
+let fresh = 0      // requests started less than SLOW_MS ago and still running
+
+function pump() {
+  while (fresh === 0 && queue.length) {
+    const job = queue.shift()
+    fresh++
+    let counted = true
+    const release = () => { if (counted) { counted = false; fresh--; pump() } }
+    const timer = setTimeout(release, SLOW_MS)
+    Promise.resolve().then(job.run).then(job.resolve, job.reject)
+      .finally(() => { clearTimeout(timer); release() })
+  }
+}
+
+function enqueue(run, signal) {
+  return new Promise((resolve, reject) => {
+    const cancelled = () => Object.assign(new Error('canceled'), { name: 'CanceledError', code: 'ERR_CANCELED' })
+    if (signal?.aborted) { reject(cancelled()); return }
+    const job = { run, resolve, reject, signal }
+    queue.push(job)
+    signal?.addEventListener('abort', () => {
+      const i = queue.indexOf(job)
+      if (i >= 0) { queue.splice(i, 1); reject(cancelled()) }
+    }, { once: true })
+    pump()
+  })
+}
+
+/** The row already known for these coordinates (no request), or undefined. */
+export function cachedSignalStats(track, chrom, start, end) {
+  return cache.get(keyOf(track, chrom, start, end))
+}
 
 /** Resolves to { trackId, name, covered, mean, max, min, sum, fwdSum, revSum,
- *  strand, complete }, or null when the request fails. `covered` is the number
- *  of bases with data and `mean` the mean over those bases; `sum` counts both
- *  strands for strand data (e.g. Tn-seq insertions). Incomplete results (a BAM
- *  whose coverage is still being computed) are not cached. */
-export function fetchSignalStats(track, chrom, start, end, signal) {
-  const key = `${track.id}|${chrom}|${start}|${end}`
+ *  strand, complete, truncated, coverageState }, to null when the request
+ *  fails, or to undefined when a newer request of the same `opts.slot` for the
+ *  track superseded it (HTTP 409): its caller ignores that and waits for the
+ *  newer request's answer. `covered` is the number of bases with data and
+ *  `mean` the mean over those bases; `sum` counts both strands for strand data
+ *  (e.g. Tn-seq insertions).
+ *   - complete false: still being computed (a BAM whose coverage index is
+ *     building) — ask again later. Such rows are not cached.
+ *   - truncated true: no exact value can be had (a BAM without a coverage
+ *     index, with too many reads to count live); the numbers are null.
+ *  opts: { signal, slot } */
+export function fetchSignalStats(track, chrom, start, end, opts = {}) {
+  const key = keyOf(track, chrom, start, end)
   const hit = cache.get(key)
   if (hit) return Promise.resolve(hit)
-  return tracksApi.stats(track.id, chrom, start, end, { signal })
+  return enqueue(() => tracksApi.stats(track.id, chrom, start, end, { signal: opts.signal, slot: opts.slot }), opts.signal)
     .then(res => {
       const s = res.data
       if (!s) return null
+      const truncated = s.truncated === true
       // Strand-split figures only when there is a reverse (negative) side
       // here; an unsigned WIG also reports forward/reverse sums (reverse 0).
-      const strand = s.forward_sum != null && ((s.reverse_sum || 0) < 0 || (s.min ?? 0) < 0)
+      const strand = !truncated && s.forward_sum != null && ((s.reverse_sum || 0) < 0 || (s.min ?? 0) < 0)
       const row = {
         trackId: track.id, name: track.name, covered: s.covered_bp || 0,
         mean: s.mean, max: s.max, min: s.min,
@@ -32,6 +83,7 @@ export function fetchSignalStats(track, chrom, start, end, signal) {
         fwdSum: strand ? s.forward_sum : null,
         revSum: strand ? s.reverse_sum : null,
         strand, complete: s.complete !== false,
+        truncated, coverageState: s.coverage_state ?? null,
       }
       if (row.complete) {
         if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value)
@@ -39,5 +91,5 @@ export function fetchSignalStats(track, chrom, start, end, signal) {
       }
       return row
     })
-    .catch(() => null)
+    .catch(err => (err?.response?.status === 409 ? undefined : null))
 }

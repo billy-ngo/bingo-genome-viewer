@@ -18,8 +18,9 @@
  * Robustness against rapid zoom/pan:
  *  - Each new fetch aborts the previous one (signal is passed to axios so the
  *    underlying HTTP request is actually cancelled, not just the state update),
- *    and so does panning back into the already-fetched range, so a late
- *    response for an abandoned view can never overwrite the current one.
+ *    and panning back into the already-fetched range aborts a newer fetch for
+ *    the abandoned view, so a late response for it can never overwrite the
+ *    current one.
  *  - Transient network/server errors (status 0, 5xx) trigger up to 2 silent
  *    retries with exponential backoff before surfacing as `error`.
  *  - Within a chromosome, old data is never cleared on error — it stays on
@@ -27,7 +28,9 @@
  *    the previous chromosome's data is dropped immediately, so it can never
  *    be drawn (or scaled) at the new chromosome's coordinates.
  *  - Coverage that is still being computed (a BAM's background coverage
- *    index) is shown as far as it goes and re-requested until complete.
+ *    index) is shown as far as it goes and re-requested until complete: one
+ *    poll per track, which pans and resizes inside the fetched range leave
+ *    running (and restart if a since-abandoned fetch had stopped it).
  */
 import { useState, useEffect, useRef } from 'react'
 import { tracksApi } from '../api/client'
@@ -216,8 +219,10 @@ export function useTrackData(track, region, canvasWidth) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const abortRef = useRef(null)
-  const fetchedRef = useRef(null)   // { trackId, chrom, start, end, viewLen, binSize }
+  const abortRef = useRef(null)     // controller of the newest fetch, shared by its retries and polls
+  // The data on screen: { trackId, chrom, start, end, viewLen, binSize,
+  // complete, controller (of the fetch that produced it), req (its request) }
+  const fetchedRef = useRef(null)
   const debounceRef = useRef(null)
   const zoomDebounceRef = useRef(null)
   const hasDataRef = useRef(false)
@@ -267,13 +272,19 @@ export function useTrackData(track, region, canvasWidth) {
     if (withinOverscan) {
       const zoomRatio = viewLen / (f.viewLen || viewLen)
       if (zoomRatio > 0.8 && zoomRatio < 1.2) {
-        // Same zoom, within the fetched range — nothing to load. Anything still
-        // in flight (e.g. a pan that was abandoned by panning back) is for a
-        // view we no longer show: cancel it so it can't overwrite this data.
+        // Same zoom, within the fetched range — nothing to load. A newer fetch
+        // still pending (e.g. for a pan that was abandoned by panning back) is
+        // for a view we no longer show: cancel it so it can't overwrite this
+        // data. The fetch that produced the data on screen is left alone:
+        // while that data is incomplete it is polling for the rest.
         if (zoomDebounceRef.current) { clearTimeout(zoomDebounceRef.current); zoomDebounceRef.current = null }
         if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null }
-        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
-        if (abortRef.current) abortRef.current.abort()
+        if (abortRef.current && abortRef.current !== f.controller) {
+          if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
+          abortRef.current.abort()
+        }
+        // A fetch for another view stopped that poll when it started; resume it.
+        if (!f.complete && f.controller.signal.aborted) resumePoll(f)
         return
       }
       // Zoom changed but still within overscan — schedule a resolution refetch,
@@ -295,7 +306,12 @@ export function useTrackData(track, region, canvasWidth) {
     // Cancel any pending zoom refetch since we're doing a real one.
     if (zoomDebounceRef.current) { clearTimeout(zoomDebounceRef.current); zoomDebounceRef.current = null }
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
+    if (retryTimerRef.current) {
+      // Dropping a pending retry ends its fetch: abort it, so that a poll it
+      // belonged to reads as stopped (and resumes if the view comes back).
+      clearTimeout(retryTimerRef.current); retryTimerRef.current = null
+      if (abortRef.current) abortRef.current.abort()
+    }
 
     // If we have data already, debounce briefly (user is panning).
     // If no data at all, fetch immediately.
@@ -312,11 +328,11 @@ export function useTrackData(track, region, canvasWidth) {
 
   /** Fetch for the newest requested view (timers may fire after several moves). */
   function fetchLatest() {
-    const p = latestRef.current
-    if (p) doFetchForRegion(p.track, p.chrom, p.start, p.end, p.viewLen, p.type, p.canvasWidth, p.chromLength, p.binSize)
+    if (latestRef.current) doFetchForRegion(latestRef.current)
   }
 
-  function doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize) {
+  /** `req`: { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize } */
+  function doFetchForRegion(req) {
     // Cancel any previous in-flight request — passes signal to axios so the
     // underlying HTTP request is genuinely aborted, not merely suppressed.
     if (abortRef.current) abortRef.current.abort()
@@ -328,12 +344,33 @@ export function useTrackData(track, region, canvasWidth) {
     if (!hasDataRef.current) setLoading(true)
     setError(null)
 
-    attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, 0)
+    attemptFetchOnce(controller, req, 0)
   }
 
-  function attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, attempt) {
+  /** Ask again shortly for incomplete data (the backend is still building a
+   *  BAM's exact coverage). The track's only poll: arming replaces any other. */
+  function schedulePoll(controller, req) {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
+    pollTimerRef.current = setTimeout(() => {
+      pollTimerRef.current = null
+      if (abortRef.current === controller && !controller.signal.aborted) attemptFetchOnce(controller, req, 1)
+    }, INCOMPLETE_POLL_MS)
+  }
+
+  /** Poll again for the incomplete data on screen `f`, whose poll a fetch for
+   *  another view stopped (that fetch has been cancelled since). */
+  function resumePoll(f) {
+    if (abortRef.current) abortRef.current.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    fetchedRef.current = { ...f, controller }
+    schedulePoll(controller, f.req)
+  }
+
+  function attemptFetchOnce(controller, req, attempt) {
     // Bail if a newer fetch has superseded this one or the hook has unmounted.
     if (controller.signal.aborted) return
+    const { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize } = req
 
     const readMode = type === 'reads' && viewLen <= READ_DETAIL_THRESHOLD
     const useOverscan = !readMode
@@ -360,7 +397,7 @@ export function useTrackData(track, region, canvasWidth) {
         setLiveData(track.id, cached)
         setError(null)
         setLoading(false)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize }
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, complete: true, controller, req }
         hasDataRef.current = true
         return
       }
@@ -394,22 +431,15 @@ export function useTrackData(track, region, canvasWidth) {
         }
         const incomplete = result.complete === false
         if (!incomplete) cache.set(cacheKey, result)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize }
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, complete: !incomplete, controller, req }
         hasDataRef.current = true
         setData(result)
         setLiveData(track.id, result)
         setError(null)
         setLoading(false)
-        if (incomplete) {
-          // The backend is still building this BAM's exact coverage: show what
-          // is done and ask again shortly (only while this view is current).
-          pollTimerRef.current = setTimeout(() => {
-            pollTimerRef.current = null
-            if (abortRef.current === controller && !controller.signal.aborted) {
-              attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, 1)
-            }
-          }, INCOMPLETE_POLL_MS)
-        }
+        // The backend is still building this BAM's exact coverage: show what
+        // is done and ask again shortly (while this data stays on screen).
+        if (incomplete) schedulePoll(controller, req)
       })
       .catch(err => {
         // Aborted requests: silently drop. Use the captured controller so a
@@ -428,7 +458,8 @@ export function useTrackData(track, region, canvasWidth) {
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
           const delay = RETRY_BACKOFF_MS[attempt] || 1000
           retryTimerRef.current = setTimeout(() => {
-            attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, attempt + 1)
+            retryTimerRef.current = null
+            attemptFetchOnce(controller, req, attempt + 1)
           }, delay)
           return
         }

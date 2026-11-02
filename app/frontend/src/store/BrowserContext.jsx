@@ -1,7 +1,8 @@
 /**
  * BrowserContext.jsx — Global navigation state (genome, region, zoom/pan, selection).
  *
- * Provides: genome, region, selection, setGenome, navigateTo, zoom, pan, setSelection, clearSelection.
+ * Provides: genome, genomeLoadId, region, selection, setGenome, navigateTo, zoom, pan,
+ * setSelection, getSelection, clearSelection.
  * Uses a ref for immediate region reads to prevent stale-closure panning bugs.
  */
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react'
@@ -10,6 +11,10 @@ const BrowserContext = createContext(null)
 
 export function BrowserProvider({ children }) {
   const [genome, setGenomeState] = useState(null)     // { name, chromosomes, is_annotated }
+  // Bumped by every setGenome (genome load, added chromosomes, session
+  // restore). Two genomes can share contig names, so caches of genome-derived
+  // data (the reference bases) key on this rather than on coordinates alone.
+  const [genomeLoadId, setGenomeLoadId] = useState(0)
   const [region, setRegion] = useState(null)           // { chrom, start, end }
   const [selection, setSelectionState] = useState(null) // { chrom, start, end } or null
   const genomeRef = useRef(null)
@@ -19,6 +24,7 @@ export function BrowserProvider({ children }) {
   const setGenome = useCallback((g) => {
     genomeRef.current = g
     setGenomeState(g)
+    setGenomeLoadId(n => n + 1)
   }, [])
 
   const navigateTo = useCallback((chrom, start, end) => {
@@ -79,6 +85,10 @@ export function BrowserProvider({ children }) {
     setSelectionState(sel)
   }, [])
 
+  // The newest selection, before React has rendered it — lets event handlers
+  // tell whether the selection they were set up for is still the current one.
+  const getSelection = useCallback(() => selectionRef.current, [])
+
   const clearSelection = useCallback(() => {
     selectionRef.current = null
     setSelectionState(null)
@@ -86,8 +96,8 @@ export function BrowserProvider({ children }) {
 
   return (
     <BrowserContext.Provider value={{
-      genome, setGenome, region, navigateTo, zoom, pan,
-      selection, setSelection, clearSelection,
+      genome, genomeLoadId, setGenome, region, navigateTo, zoom, pan,
+      selection, setSelection, getSelection, clearSelection,
     }}>
       {children}
     </BrowserContext.Provider>

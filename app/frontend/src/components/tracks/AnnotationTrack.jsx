@@ -12,7 +12,7 @@ import { useTheme } from '../../store/ThemeContext'
 import { useTrackData } from '../../hooks/useTrackData'
 import { useReferenceSequence } from '../../hooks/useReferenceSequence'
 import { usePeaks } from '../../store/PeakContext'
-import { fetchSignalStats } from '../../utils/signalStats'
+import { fetchSignalStats, cachedSignalStats } from '../../utils/signalStats'
 import { formatValue } from '../../utils/coverageStats'
 
 const FEAT_HEIGHT = 16
@@ -21,6 +21,14 @@ const ROW_GAP = 4
 const ARROW_TIP = 8
 const NUCL_PX_THRESHOLD = 6  // min px/bp to show nucleotide letters
 const BASE_COLORS = { A: '#4caf50', T: '#f44336', C: '#2196f3', G: '#ff9800', N: '#9e9e9e' }
+const STATS_DWELL_MS = 150   // the pointer rests on a feature this long before its signal is asked for
+const STATS_RETRY_MS = 1500  // re-ask while a BAM's coverage is still being computed
+
+/** Coverage/read tracks shown on `chrom` — the tracks the hover tooltip reports. */
+function signalTracksOn(tracks, chrom) {
+  return tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') &&
+    t.visible !== false && (!t.targetChromosomes || t.targetChromosomes.includes(chrom)))
+}
 
 export default function AnnotationTrack({ track, width, height, onWarning, onAutoHeight }) {
   // Report 0 when there is nothing stacked so the panel's auto-fit reverts to
@@ -314,21 +322,51 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
 
   // Exact signal of every visible coverage/read track over the hovered feature,
   // from the backend — summing the displayed bins depended on the zoom level.
+  // Asked for only once the pointer has rested on the feature for
+  // STATS_DWELL_MS, so sweeping across genes doesn't send a request per gene
+  // passed; tracks still computing are asked again while it stays hovered.
   const hoverFeat = tooltip?.feat || null
   const statsKey = hoverFeat && region ? `${region.chrom}:${hoverFeat.start}-${hoverFeat.end}` : null
-  const [featStats, setFeatStats] = useState(null)   // { key, rows: [fetchSignalStats rows] | null }
+  // { key, rows: [fetchSignalStats rows] | null (loading), waiting: some answer still to come }
+  const [featStats, setFeatStats] = useState(null)
   useEffect(() => {
     if (!hoverFeat || !region) return undefined
-    const targets = tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') &&
-      t.visible !== false && (!t.targetChromosomes || t.targetChromosomes.includes(region.chrom)))
+    const chrom = region.chrom, { start, end } = hoverFeat
+    const targets = signalTracksOn(tracks, chrom)
     const controller = new AbortController()
+    const rows = new Map()   // track id -> latest row (null: the request failed)
+    let timer = null
+    // Keep tracks with data there, those still computing and those without an
+    // exact answer (each shown as such).
+    const show = () => setFeatStats({
+      key: statsKey,
+      rows: targets.map(t => rows.get(t.id)).filter(r => r && (r.covered > 0 || !r.complete || r.truncated)),
+      waiting: targets.some(t => !rows.has(t.id)),
+    })
+    const ask = (list) => Promise.all(list.map(t => fetchSignalStats(t, chrom, start, end, { signal: controller.signal, slot: 'hover' })))
+      .then(res => {
+        if (controller.signal.aborted) return
+        // undefined: superseded by a newer hover request, which answers instead
+        res.forEach((r, i) => { if (r !== undefined) rows.set(list[i].id, r) })
+        show()
+        const again = list.filter((t, i) => res[i] && !res[i].complete)
+        if (again.length) timer = setTimeout(() => ask(again), STATS_RETRY_MS)
+      })
+    const known = targets.map(t => cachedSignalStats(t, chrom, start, end))
+    if (known.every(Boolean)) {
+      // Hovered before (or no signal tracks): no request needed.
+      known.forEach((r, i) => rows.set(targets[i].id, r))
+      show()
+      return undefined
+    }
     setFeatStats({ key: statsKey, rows: null })
-    Promise.all(targets.map(t => fetchSignalStats(t, region.chrom, hoverFeat.start, hoverFeat.end, controller.signal)))
-      // Keep tracks with data there, and those still computing (shown as such).
-      .then(rows => { if (!controller.signal.aborted) setFeatStats({ key: statsKey, rows: rows.filter(r => r && (r.covered > 0 || !r.complete)) }) })
-    return () => controller.abort()
+    timer = setTimeout(() => ask(targets), STATS_DWELL_MS)
+    return () => { controller.abort(); clearTimeout(timer) }
   }, [statsKey, tracks])
-  const trackStats = featStats && featStats.key === statsKey && featStats.rows ? featStats.rows : []
+  const statsReady = featStats && featStats.key === statsKey && featStats.rows
+  const trackStats = statsReady ? featStats.rows : []
+  // While waiting, a loading line — never the previous feature's numbers.
+  const statsLoading = (!statsReady || featStats.waiting) && !!statsKey && signalTracksOn(tracks, region.chrom).length > 0
 
   const tooltipEl = tooltip ? createPortal(
     <div style={{
@@ -371,7 +409,7 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
       {tooltip.feat.attributes?.note && (
         <TooltipRow label="Note" value={String(tooltip.feat.attributes.note).slice(0, 120)} />
       )}
-      {trackStats.length > 0 && (
+      {(trackStats.length > 0 || statsLoading) && (
         <>
           <div style={{ borderTop: `1px solid ${theme.tooltipBorder}`, margin: '4px 0', paddingTop: 4 }}>
             <span style={{ color: theme.textSecondary, fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>
@@ -384,10 +422,13 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
                 {ts.name}
               </span>
               <span style={{ color: theme.textPrimary, fontWeight: 600, flexShrink: 0 }}>
-                {ts.complete ? `${formatValue(ts.sum)} · ${formatValue(Math.max(ts.max ?? 0, Math.abs(ts.min ?? 0)))}` : 'computing…'}
+                {!ts.complete ? 'computing…'
+                  : ts.truncated ? 'unavailable (too many reads)'
+                    : `${formatValue(ts.sum)} · ${formatValue(Math.max(ts.max ?? 0, Math.abs(ts.min ?? 0)))}`}
               </span>
             </div>
           ))}
+          {statsLoading && <div style={{ color: theme.textTertiary }}>loading…</div>}
         </>
       )}
     </div>,
