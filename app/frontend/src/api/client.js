@@ -122,8 +122,9 @@ export const tracksApi = {
     api.get(`/tracks/${id}/coverage`, { params: { chrom, start, end, bins }, signal: opts.signal }),
   // Exact signal statistics over [start, end) — mean, max, min, sum and
   // covered bp, independent of the zoom level the track is displayed at.
-  // opts.slot names the asker ('select', 'hover'): a newer request for the
-  // same track and slot makes an older one still waiting answer 409.
+  // opts.slot names the asker (signalStats sends e.g. 'select-<page id>'): a
+  // newer request for the same track and slot makes an older one still
+  // waiting answer 409.
   stats: (id, chrom, start, end, opts = {}) =>
     api.get(`/tracks/${id}/stats`, { params: { chrom, start, end, slot: opts.slot }, signal: opts.signal }),
   reads: (id, chrom, start, end, opts = {}) =>

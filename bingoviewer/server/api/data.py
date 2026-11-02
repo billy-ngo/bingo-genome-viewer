@@ -3,6 +3,7 @@ Track data API — fetch coverage, reads, variants, and features for loaded trac
 
 Endpoints:
   GET /api/tracks/{track_id}/coverage  Binned coverage signal
+  GET /api/tracks/{track_id}/stats     Exact signal statistics over a region
   GET /api/tracks/{track_id}/reads     Individual read alignments (zoomed-in only)
   GET /api/tracks/{track_id}/variants  Variant calls in a region
   GET /api/tracks/{track_id}/features  Annotation features in a region
@@ -25,8 +26,9 @@ def _validate_region(start: int, end: int):
 
 
 def _superseded():
-    """Response for a request overtaken by a newer one for the same track
-    (the client already aborted it). 409, which the client may retry."""
+    """Response for a request overtaken by a newer one for the same track (for
+    /stats: the same track and slot); the client already aborted it. 409,
+    which the client may retry."""
     return HTTPException(status_code=409, detail="Superseded by a newer request for this track")
 
 
@@ -102,29 +104,62 @@ def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Qu
 
 
 @router.get("/{track_id}/stats")
-def get_stats(track_id: str, chrom: str, start: int, end: int):
+def get_stats(track_id: str, chrom: str, start: int, end: int,
+              slot: str = Query(default="default", pattern=r"^[a-z0-9_-]{1,32}$")):
     """Exact statistics of a coverage/read track's signal over [start, end):
     mean per covered bp, max, min, per-base sum and covered bp — plus
     forward/reverse sums for strand data. Unlike summing displayed bins, the
-    result does not depend on the zoom level the track is shown at."""
+    result does not depend on the zoom level the track is shown at.
+
+    ``slot`` names the asker (e.g. the selection or the feature-hover
+    tooltip). A newer request for the same track and slot supersedes one
+    still waiting for the track lock, which then answers 409 instead of
+    parking a worker thread until, say, a long read scan on the track ends.
+    Stats requests have generations of their own: they never cancel the
+    track's coverage/read requests, nor do those cancel them.
+
+    ``complete`` is False only while a BAM's coverage index has not reached
+    the range yet (ask again). A range the live fallback pileup could not
+    finish (read cap hit) is final: ``truncated`` with null numbers.
+    ``coverage_state`` is the BAM coverage index state (None for other
+    tracks)."""
     _validate_region(start, end)
     reader = _get_reader(track_id)
     if app_state.tracks[track_id]["track_type"] not in ("coverage", "reads"):
         raise HTTPException(status_code=400, detail="Track does not support signal statistics")
+    gen_key = f"{track_id}|stats|{slot}"
+    gen = app_state.next_request(gen_key)
     track_chrom = app_state.resolve_track_chrom(track_id, chrom)
     try:
-        with app_state.track_lock(track_id):
+        with app_state.lock_if_current(track_id, gen, gen_key=gen_key) as current:
+            if not current:
+                raise _superseded()
             res = reader.get_coverage(track_chrom, start, end, bins=1)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
-    bins_data = res.get("bins", []) if isinstance(res, dict) else res
+    if isinstance(res, dict):
+        bins_data, meta = res.get("bins", []), res.get("meta", {})
+    else:
+        bins_data, meta = res, {}
+    state = meta.get("coverage_state")
     out = {"chrom": chrom, "start": start, "end": end, "covered_bp": 0,
-           "mean": 0.0, "max": 0.0, "min": 0.0, "sum": 0.0, "complete": True}
+           "mean": 0.0, "max": 0.0, "min": 0.0, "sum": 0.0, "complete": True,
+           "truncated": bool(meta.get("truncated")), "coverage_state": state}
+    if "coverage_progress" in meta:
+        out["coverage_progress"] = meta["coverage_progress"]
     if not bins_data:
         return out
     b = bins_data[0]
     if b.get("pending"):
-        out["complete"] = False
+        if state == "building":
+            out["complete"] = False      # the index fills this range in later
+        else:
+            # Never filled in: the live fallback pileup hit its read cap. Say
+            # so rather than give numbers for part of the range.
+            out.update(truncated=True, covered_bp=None, mean=None, max=None, min=None,
+                       sum=None, forward_sum=None, reverse_sum=None)
         return out
     cov = b.get("cov", b["end"] - b["start"])
     out.update(covered_bp=cov, mean=b["value"], max=b.get("max", b["value"]),
@@ -157,6 +192,10 @@ def get_reads(track_id: str, chrom: str, start: int, end: int):
                 raise _superseded()
             res = reader.get_reads(track_chrom, start, end,
                                    is_current=lambda: app_state.is_current(track_id, gen))
+            # A newer request may have cut the scan short: its reads and total
+            # would cover only part of the window, so never answer with them.
+            if (isinstance(res, dict) and res.get("cancelled")) or not app_state.is_current(track_id, gen):
+                raise _superseded()
     except HTTPException:
         raise
     except Exception as e:

@@ -203,7 +203,6 @@ class BamCoverageIndex:
         self._blk_max: dict[str, array.array] = {}
         self._blk_min: dict[str, array.array] = {}
         self._final_upto: dict[str, int] = {}   # positions < value are final
-        self._max_span: dict[str, int] = {}     # longest reference span of any mapped read
         self._names: list[str] = []
         self._coord_sorted = False              # header declares @HD SO:coordinate
         self._raw = None
@@ -238,11 +237,6 @@ class BamCoverageIndex:
 
     def has_contig(self, name: str) -> bool:
         return name in self._lengths
-
-    def max_span(self, name: str) -> int | None:
-        """Longest reference span of a mapped read on ``name``; None until the
-        scan has finished (callers then use a conservative default)."""
-        return self._max_span.get(name) if self.state == "ready" else None
 
     def coverage(self, contig: str, start: int, end: int, bins: int) -> list[dict]:
         """Bins over [start, end): exact mean / max / min depth per bin.
@@ -389,7 +383,6 @@ class BamCoverageIndex:
         f, names = self._bgzf, self._names
         lens = [self._lengths[n] for n in names]
         diffs = [self._diff[n] for n in names]
-        spans = [0] * len(names)
         final = self._final_upto
         unpack_from = struct.unpack_from
         # Partial results are published only when the header declares the BAM
@@ -433,8 +426,7 @@ class BamCoverageIndex:
                     for name in names:
                         final[name] = 0
                 last_pos = pos
-                if n_cig and not (flag & 0x4):
-                    count = not (flag & SKIP_FLAGS)
+                if n_cig and not (flag & SKIP_FLAGS):
                     d = diffs[refid]
                     L = lens[refid]
                     p = pos
@@ -445,16 +437,13 @@ class BamCoverageIndex:
                         op = c & 0xF
                         if op == 0 or op == 7 or op == 8:      # M = X: aligned bases
                             e = p + (c >> 4)
-                            if count and p < L and e > 0:
+                            if p < L and e > 0:
                                 d[p if p > 0 else 0] += 1
                                 d[e if e < L else L] -= 1
                             p = e
                         elif op == 2 or op == 3:                # D N: skip reference
                             p += c >> 4
-                    if p - pos > spans[refid]:
-                        spans[refid] = p - pos
             off += 4 + bs
         # Every record has been counted: all of every contig is final.
         for name, L in zip(names, lens):
             final[name] = L
-        self._max_span = {name: spans[i] for i, name in enumerate(names)}

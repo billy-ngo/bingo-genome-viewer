@@ -10,7 +10,9 @@ export const MIN_AUTO_BINS = 500
  *  - Fixed binSize (bp): bins aligned to genomic multiples of the size, so they
  *    don't shift while panning; when that would exceed MAX_BINS the size is
  *    coarsened to the smallest multiple that fits (capped=true).
- * The range never extends past the chromosome end (when chromLength is known).
+ * The range is clamped to the chromosome (when chromLength is known), except
+ * that a fixed-size last bin stays whole and may reach past the end; readers
+ * count only the bases inside the chromosome in it (its cov).
  * Returns { fetchStart, fetchEnd, bins, binSize, requestedBinSize, capped }.
  */
 export function planCoverageFetch({ start, end, chromLength, canvasWidth, binSize, overscan = OVERSCAN }) {

@@ -175,6 +175,7 @@ class AppState:
 
     # ── Chromosome-name mapping between the genome and a track ─────
     _TRUE_LENGTH_FORMATS = ("bam", "bw", "bigwig")   # headers carry real contig lengths
+    _MAX_LISTED_ALIASES = 100                        # pairs listed in a compatibility result
 
     def chrom_map(self, track_id: str) -> Optional[ChromMap]:
         """The track's ChromMap against the loaded genome (see
@@ -391,7 +392,8 @@ class AppState:
         and a human-readable ``message`` when there is a problem. When genome
         chromosomes are paired with differently named track contigs by their
         exact length, ``aliases`` lists the pairs as
-        ``[{"genome", "track", "length"}]``.
+        ``[{"genome", "track", "length"}]`` (the first _MAX_LISTED_ALIASES;
+        ``aliases_total`` gives the count when there are more).
         """
         if self.genome is None:
             return {"status": "no_genome"}
@@ -420,8 +422,15 @@ class AppState:
             aliases = {}
         else:
             matching, aliases = cmap.names, cmap.aliases
-        listed = {"aliases": [{"genome": g, "track": t, "length": track_chroms.get(t, 0)}
-                              for g, t in aliases.items()]} if aliases else {}
+        listed = {}
+        if aliases:
+            # A renamed draft assembly can alias thousands of contigs; list the
+            # first few and say how many there are.
+            pairs = list(aliases.items())
+            listed["aliases"] = [{"genome": g, "track": t, "length": track_chroms.get(t, 0)}
+                                 for g, t in pairs[:self._MAX_LISTED_ALIASES]]
+            if len(pairs) > self._MAX_LISTED_ALIASES:
+                listed["aliases_total"] = len(pairs)
 
         # ── Single-chromosome special case ──
         # Many bacterial tracks have one chromosome with a different name

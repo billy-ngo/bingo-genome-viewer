@@ -5,31 +5,38 @@ Zoomed-out coverage used to be computed live by iterating reads through
 bamnostic (~25k reads/s) with a 500k-read cap, so on a deep ChIP BAM the
 whole-chromosome view showed coverage for the first few kb and zeros after.
 Instead the BAM is streamed once by a minimal BGZF/BAM record scanner
-(gzip + struct — pure Python, ~600k reads/s), accumulating a per-base depth
+(zlib + struct — pure Python, ~600k reads/s), accumulating a per-base depth
 difference array per contig; every coverage query is then answered exactly
 (mean / max / min depth per bin) at any zoom.
 
 Counting rules match IGV's defaults, so coverage agrees with the read pileup:
 reads flagged unmapped (0x4), QC-fail (0x200) or duplicate (0x400) are
 skipped (secondary/supplementary alignments count), and only aligned bases
-(CIGAR M/=/X) count — deletions and introns (D/N) do not.
+(CIGAR M/=/X) count — deletions and introns (D/N) do not. A CIGAR of more
+than 65,535 operations is stored in the CG tag behind a placeholder; the
+real one is used, as htslib and bamnostic do.
 
-While the scan is running, positions the scan has already passed are final
-(the BAM is coordinate-sorted), so queries are answered exactly up to that
-point and the remaining bins are returned with ``pending: True``.
+While the scan is running, positions it has already passed are final if the
+header declares the BAM coordinate-sorted (@HD SO:coordinate), so queries are
+answered exactly up to that point and the remaining bins are returned with
+``pending: True``. Without that declaration every bin stays pending until the
+scan has finished.
 """
 
 import array
-import gzip
 import itertools
 import os
 import struct
 import threading
+import zlib
 from pathlib import Path
 
 SKIP_FLAGS = 0x4 | 0x200 | 0x400           # unmapped | QC-fail | duplicate (IGV defaults)
 _CHUNK = 1 << 22                            # uncompressed bytes per read() of the stream
+_RAW_CHUNK = 1 << 22                        # compressed bytes per read() of the file
 _BLOCK = 64                                 # bp per pre-aggregated block for fast zoomed-out queries
+# Size in bytes of each fixed-size SAM aux value type (A c C s S i I f).
+_AUX_SIZE = {ord(t): n for t, n in zip("AcCsSiIf", (1, 1, 1, 2, 2, 4, 4, 4))}
 # The index holds two int32 arrays per reference base at its peak (difference
 # + depth), so cap it at genome sizes this viewer targets; larger references
 # fall back to the live (bounded) pileup.
@@ -38,6 +45,147 @@ MAX_INDEX_BP = 32_000_000
 
 class IndexTooLarge(Exception):
     pass
+
+
+class _BgzfReader:
+    """Sequential reader of a BGZF file's uncompressed stream.
+
+    The file is read in large chunks and each BGZF block is inflated, and its
+    CRC32 and size checked, by a single zlib call: one GIL release per block.
+    gzip.GzipFile released it two or more times per block (inflate, CRC, file
+    reads), and while another Python thread is busy every release costs the
+    scan a switch interval or more, so the background build crawled whenever
+    requests were being served. A file that ends after a complete block,
+    without the EOF marker block, just ends the stream; one that ends inside
+    a block raises EOFError."""
+
+    def __init__(self, raw):
+        self._raw = raw
+        self._buf = b""          # compressed bytes read from the file
+        self._pos = 0            # offset of the next block in _buf
+        self._out = b""          # inflated bytes not yet returned by read()
+        self.offset = 0          # compressed bytes consumed so far
+
+    def read(self, n: int) -> bytes:
+        """The next ``n`` uncompressed bytes (fewer only at the end of the file)."""
+        out = self._out
+        if len(out) >= n:
+            self._out = out[n:]
+            return out[:n]
+        parts, have = [out], len(out)
+        while have < n:
+            block = self._block()
+            if block is None:
+                break
+            parts.append(block)
+            have += len(block)
+        data = b"".join(parts)
+        self._out = data[n:]
+        return data[:n] if have > n else data
+
+    def _fill(self, need: int):
+        """At least ``need`` compressed bytes from the next block on (fewer
+        only at the end of the file)."""
+        rest = self._buf[self._pos:]
+        parts, have = [rest], len(rest)
+        while have < need:
+            more = self._raw.read(max(_RAW_CHUNK, need - have))
+            if not more:
+                break
+            parts.append(more)
+            have += len(more)
+        self._buf, self._pos = b"".join(parts), 0
+        return self._buf, 0
+
+    def _block(self):
+        """Inflate the next BGZF block; None at the end of the file."""
+        buf, p = self._buf, self._pos
+        if len(buf) - p < 18:
+            buf, p = self._fill(18)
+            if len(buf) - p < 18:
+                if len(buf) == p:
+                    return None
+                raise EOFError("BAM file ends inside a BGZF block")
+        if buf[p] != 31 or buf[p + 1] != 139 or buf[p + 2] != 8 or not buf[p + 3] & 4:
+            raise ValueError("not a BGZF file (bad block header)")
+        xlen = buf[p + 10] | buf[p + 11] << 8
+        if len(buf) - p < 12 + xlen:
+            buf, p = self._fill(12 + xlen)
+            if len(buf) - p < 12 + xlen:
+                raise EOFError("BAM file ends inside a BGZF block")
+        # The total block size - 1 is in the 'BC' extra subfield.
+        bsize, q, xend = 0, p + 12, p + 12 + xlen
+        while q + 6 <= xend:
+            slen = buf[q + 2] | buf[q + 3] << 8
+            if buf[q] == 66 and buf[q + 1] == 67 and slen == 2:
+                bsize = (buf[q + 4] | buf[q + 5] << 8) + 1
+                break
+            q += 4 + slen
+        if bsize < 12 + xlen + 8:
+            raise ValueError("not a BGZF file (no block size)")
+        if len(buf) - p < bsize:
+            buf, p = self._fill(bsize)
+            if len(buf) - p < bsize:
+                raise EOFError("BAM file ends inside a BGZF block")
+        isize = struct.unpack_from("<I", buf, p + bsize - 4)[0]
+        if isize > 65536:                # BGZF blocks hold at most 64 KiB
+            raise ValueError("corrupt BGZF block (bad uncompressed size)")
+        # wbits 31: zlib parses the gzip header and verifies the CRC32/ISIZE
+        # trailer itself. An output buffer one byte larger than the block
+        # makes it a single inflate() call (one GIL release).
+        data = zlib.decompress(memoryview(buf)[p:p + bsize], 31, isize + 1)
+        self._pos = p + bsize
+        self.offset += bsize
+        return data
+
+
+def _declares_coordinate_order(text: bytes) -> bool:
+    """True when the SAM header text has an @HD line with SO:coordinate."""
+    for line in text.split(b"\n"):
+        if line.startswith(b"@HD"):
+            return any(f.strip(b"\r\0 ") == b"SO:coordinate" for f in line.split(b"\t"))
+    return False
+
+
+def _real_cigar(data, off, bs, l_rn, cig):
+    """The CIGAR of the record at ``off`` (block size ``bs``, name length
+    ``l_rn``) whose stored two-op CIGAR ``cig`` is S then N. That is the
+    placeholder for a CIGAR of more than 65,535 operations when the S length
+    equals the read length: the real CIGAR is in the CG:B:I aux tag. Returns
+    ``cig`` itself when the record is not such a placeholder or has no
+    usable CG tag."""
+    l_seq = struct.unpack_from("<i", data, off + 20)[0]
+    if cig[0] >> 4 != l_seq:
+        return cig
+    end = off + 4 + bs
+    # The aux tags follow the read name, the CIGAR, SEQ and QUAL.
+    p = off + 36 + l_rn + 8 + (l_seq + 1) // 2 + l_seq
+    while p + 3 <= end:
+        typ = data[p + 2]
+        if typ == 66:                                   # 'B': sub-type, count, values
+            if p + 8 > end:
+                break
+            sub = data[p + 3]
+            n = struct.unpack_from("<i", data, p + 4)[0]
+            size = _AUX_SIZE.get(sub)
+            if size is None or n < 0:
+                break
+            if data[p] == 67 and data[p + 1] == 71 and (sub == 73 or sub == 105):   # CG:B:I / CG:B:i
+                if p + 8 + 4 * n <= end:
+                    return struct.unpack_from("<%dI" % n, data, p + 8)
+                break
+            p += 8 + size * n
+        elif typ == 90 or typ == 72:                    # 'Z' / 'H': NUL-terminated
+            q = data.find(b"\0", p + 3, end)
+            if q < 0:
+                break
+            p = q + 1
+        else:
+            size = _AUX_SIZE.get(typ)
+            if size is None:
+                break
+            p += 3 + size
+    return cig
 
 
 class BamCoverageIndex:
@@ -55,10 +203,10 @@ class BamCoverageIndex:
         self._blk_max: dict[str, array.array] = {}
         self._blk_min: dict[str, array.array] = {}
         self._final_upto: dict[str, int] = {}   # positions < value are final
-        self._max_span: dict[str, int] = {}     # longest reference span of any mapped read
         self._names: list[str] = []
+        self._coord_sorted = False              # header declares @HD SO:coordinate
         self._raw = None
-        self._gz = None
+        self._bgzf = None
         self._cancel = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name=f"bam-coverage:{Path(self.path).name}")
@@ -89,11 +237,6 @@ class BamCoverageIndex:
 
     def has_contig(self, name: str) -> bool:
         return name in self._lengths
-
-    def max_span(self, name: str) -> int | None:
-        """Longest reference span of a mapped read on ``name``; None until the
-        scan has finished (callers then use a conservative default)."""
-        return self._max_span.get(name) if self.state == "ready" else None
 
     def coverage(self, contig: str, start: int, end: int, bins: int) -> list[dict]:
         """Bins over [start, end): exact mean / max / min depth per bin.
@@ -198,15 +341,18 @@ class BamCoverageIndex:
             self._close_file()
 
     def _open(self):
-        """Open the BAM stream and read its header: contig names/lengths and
-        zeroed difference arrays. The stream is left positioned at the first
-        alignment record for the background scan."""
+        """Open the BAM stream and read its header: contig names/lengths,
+        whether it declares coordinate order, and zeroed difference arrays.
+        The stream is left positioned at the first alignment record for the
+        background scan."""
         self._raw = open(self.path, "rb")
-        f = self._gz = gzip.GzipFile(fileobj=self._raw, mode="rb")
+        f = self._bgzf = _BgzfReader(self._raw)
         if f.read(4) != b"BAM\x01":
             raise ValueError("not a BAM file (bad magic)")
         l_text, = struct.unpack("<i", f.read(4))
-        f.read(l_text)
+        if l_text < 0:
+            raise ValueError("not a BAM file (bad header length)")
+        self._coord_sorted = _declares_coordinate_order(f.read(l_text))
         n_ref, = struct.unpack("<i", f.read(4))
         names, lens = [], []
         for _ in range(n_ref):
@@ -225,24 +371,29 @@ class BamCoverageIndex:
             self._lengths[name] = L   # last: has_contig() must not see a contig before its array
 
     def _close_file(self):
-        for fh in (self._gz, self._raw):
-            try:
-                if fh is not None:
-                    fh.close()
-            except Exception:
-                pass
-        self._gz = self._raw = None
+        try:
+            if self._raw is not None:
+                self._raw.close()
+        except Exception:
+            pass
+        self._bgzf = self._raw = None
 
     def _scan(self):
         size = os.path.getsize(self.path) or 1
-        raw, f, names = self._raw, self._gz, self._names
+        f, names = self._bgzf, self._names
         lens = [self._lengths[n] for n in names]
         diffs = [self._diff[n] for n in names]
-        spans = [0] * len(names)
+        final = self._final_upto
         unpack_from = struct.unpack_from
+        # Partial results are published only when the header declares the BAM
+        # coordinate-sorted: then every position left of the scan is final.
+        # Records out of order despite that (a stale or mismatched file)
+        # withdraw them again until the scan has finished.
+        live = self._coord_sorted
+        unsorted = False
         data = f.read(_CHUNK)
         off = 0
-        cur_ref, last_pos, sorted_ok = -1, -1, True
+        cur_ref, last_pos = -1, -1
         while True:
             avail = len(data) - off
             if avail < 4 or avail < 4 + unpack_from("<i", data, off)[0]:
@@ -251,9 +402,9 @@ class BamCoverageIndex:
                     break
                 data = data[off:] + more
                 off = 0
-                self.progress = min(0.999, raw.tell() / size)
-                if cur_ref >= 0 and sorted_ok:
-                    self._final_upto[names[cur_ref]] = max(0, last_pos)
+                self.progress = min(0.999, f.offset / size)
+                if live and cur_ref >= 0:
+                    final[names[cur_ref]] = max(0, last_pos)
                 if self._cancel.is_set():
                     return
                 continue
@@ -262,36 +413,37 @@ class BamCoverageIndex:
             if refid >= 0:
                 if refid != cur_ref:
                     if refid < cur_ref:
-                        sorted_ok = False
-                    elif cur_ref >= 0 and sorted_ok:
-                        self._final_upto[names[cur_ref]] = lens[cur_ref]
+                        unsorted = True
+                    elif live:
+                        # Contigs before this one get no more records.
+                        for k in range(max(cur_ref, 0), refid):
+                            final[names[k]] = lens[k]
                     cur_ref, last_pos = refid, -1
                 elif pos < last_pos:
-                    sorted_ok = False
-                if not sorted_ok and any(self._final_upto.values()):
-                    # Not coordinate-sorted: nothing is final until the scan ends.
+                    unsorted = True
+                if unsorted and live:
+                    live = False
                     for name in names:
-                        self._final_upto[name] = 0
+                        final[name] = 0
                 last_pos = pos
-                if n_cig and not (flag & 0x4):
-                    count = not (flag & SKIP_FLAGS)
+                if n_cig and not (flag & SKIP_FLAGS):
                     d = diffs[refid]
                     L = lens[refid]
                     p = pos
-                    for c in unpack_from("<%dI" % n_cig, data, off + 36 + l_rn):
+                    cig = unpack_from("<%dI" % n_cig, data, off + 36 + l_rn)
+                    if n_cig == 2 and cig[0] & 0xF == 4 and cig[1] & 0xF == 3:
+                        cig = _real_cigar(data, off, bs, l_rn, cig)   # CIGAR kept in the CG tag
+                    for c in cig:
                         op = c & 0xF
                         if op == 0 or op == 7 or op == 8:      # M = X: aligned bases
                             e = p + (c >> 4)
-                            if count and p < L and e > 0:
+                            if p < L and e > 0:
                                 d[p if p > 0 else 0] += 1
                                 d[e if e < L else L] -= 1
                             p = e
                         elif op == 2 or op == 3:                # D N: skip reference
                             p += c >> 4
-                    if p - pos > spans[refid]:
-                        spans[refid] = p - pos
             off += 4 + bs
-        if sorted_ok:
-            for name, L in zip(names, lens):
-                self._final_upto[name] = L
-        self._max_span = {name: spans[i] for i, name in enumerate(names)}
+        # Every record has been counted: all of every contig is final.
+        for name, L in zip(names, lens):
+            final[name] = L

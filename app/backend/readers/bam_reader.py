@@ -10,6 +10,7 @@ and serves the live coverage fallback.
 """
 
 import zlib
+from heapq import heappop, heappush
 from pathlib import Path
 from typing import Optional
 
@@ -27,10 +28,6 @@ MAX_COVERAGE_READS = 500_000   # cap for the live fallback pileup (index unavail
 READ_DETAIL_THRESHOLD = 50_000  # bp
 # Reads hidden in the pileup, matching IGV's defaults and the coverage index.
 READ_VIEW_SKIP_FLAGS = 0x200 | 0x400   # QC-fail | duplicate
-# The live coverage fallback fetches through bamnostic, whose fetch() decides
-# overlap from pos + len(SEQ) instead of the reference span; it fetches from
-# this far left of the range so reads that start before it are still counted.
-DEFAULT_READ_LOOKBACK = 2_000
 
 # Standard index naming conventions: file.bam.bai and file.bai
 _INDEX_SUFFIXES = (".bam.bai", ".bai")
@@ -316,8 +313,6 @@ class BamReader:
         contig without index intervals has zero depth, and bins beyond the
         read cap are flagged ``pending`` rather than reported as zero.
         Returns (bins, truncated)."""
-        from heapq import heappop, heappush
-
         L = self._contig_length(chrom)
         region_len = end - start
         n_bins = min(bins, region_len)
