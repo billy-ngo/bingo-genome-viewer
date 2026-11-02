@@ -13,9 +13,90 @@ reader with its own ``threading.Lock`` and expose them via
 
 import threading
 import uuid
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, NamedTuple, Optional
+
+
+class ChromMap(NamedTuple):
+    """How one track's contigs line up with the loaded genome's chromosomes."""
+    names: dict[str, str]     # genome chromosome -> track contig of the same name
+    aliases: dict[str, str]   # genome chromosome -> differently named contig of the same length
+
+
+def _norm_name(name: str) -> str:
+    """A contig name with a leading 'chr' and letter case ignored."""
+    n = name[3:] if name[:3].lower() == "chr" else name
+    return n.lower()
+
+
+def _accession_base(name: str) -> str:
+    """A contig name without a trailing '.version' (CP124550.1 -> CP124550)."""
+    return name.rsplit(".", 1)[0] if "." in name else name
+
+
+def _match_chromosomes(genome_chroms: list[dict], track_chroms: list[dict]) -> ChromMap:
+    """Line a track's contigs up with the genome's chromosomes, in one pass
+    over each list.
+
+    By name first, with the rules BamReader._resolve_chrom uses: the exact
+    name, else the first contig equal ignoring a leading 'chr' and case, else
+    the first equal ignoring a trailing '.version'.
+
+    Then exact-length aliases for the rest, e.g. a GenBank genome whose LOCUS
+    name differs from the accession (CP124550.1) its BigWigs and BAMs were
+    aligned to. Genome chromosome G maps to track contig T of the same length
+    only when:
+      (a) the length is unique among the genome's chromosomes and among the
+          track's contigs;
+      (b) G has no name match, and T is not the name match of any other
+          chromosome;
+      (c) the aliases explain the track rather than coincide with it: they
+          cover at least half the length of the genome chromosomes without a
+          name match, or at least half that of the track's unmatched contigs.
+          Two unrelated draft assemblies of a few hundred contigs each share
+          some exact contig length more often than not, but such coincidences
+          cover a small fraction of either side. If (c) fails, the track gets
+          no aliases at all.
+    """
+    genome: dict[str, int] = {}
+    for c in genome_chroms:
+        genome.setdefault(c["name"], int(c.get("length") or 0))
+    track: dict[str, int] = {}
+    for c in track_chroms:
+        track.setdefault(c["name"], int(c.get("length") or 0))
+
+    by_norm: dict[str, str] = {}
+    by_base: dict[str, str] = {}
+    for t in track:                                  # header order: first match wins
+        by_norm.setdefault(_norm_name(t), t)
+        by_base.setdefault(_accession_base(t), t)
+    names: dict[str, str] = {}
+    for g in genome:
+        t = g if g in track else by_norm.get(_norm_name(g))
+        if t is None:
+            t = by_base.get(_accession_base(g))
+        if t is not None:
+            names[g] = t
+
+    claimed = set(names.values())
+    g_count, t_count = Counter(genome.values()), Counter(track.values())
+    t_by_len = {length: t for t, length in track.items() if t_count[length] == 1}
+    aliases: dict[str, str] = {}
+    for g, length in genome.items():
+        if g in names or length <= 0 or g_count[length] != 1:
+            continue
+        t = t_by_len.get(length)
+        if t is not None and t not in claimed:
+            aliases[g] = t
+    if aliases:
+        aliased = sum(genome[g] for g in aliases)    # the same on both sides
+        g_open = sum(length for g, length in genome.items() if g not in names)
+        t_open = sum(length for t, length in track.items() if t not in claimed)
+        if 2 * aliased < g_open and 2 * aliased < t_open:
+            aliases = {}
+    return ChromMap(names, aliases)
 
 
 class AppState:
@@ -27,12 +108,16 @@ class AppState:
         self._genome_lock = threading.Lock()
         # Guards mutations to the dicts above (load_track / remove_track)
         self._state_lock = threading.Lock()
-        # Per-track data-request generation: each coverage/reads request bumps
-        # it, so a long-running read scan can notice it has been superseded
-        # (the client aborted it on pan/zoom) and stop early instead of holding
-        # the track lock while newer requests queue behind it.
+        # Data-request generations, per key: the track id for coverage/reads
+        # requests, one key per track and slot for /stats. Each request bumps
+        # its key's, so a long-running read scan can notice it has been
+        # superseded (the client aborted it on pan/zoom) and stop early instead
+        # of holding the track lock while newer requests queue behind it.
         self._request_gen: dict[str, int] = {}
-        self._chrom_alias_cache: dict[tuple, str] = {}
+        # Bumped whenever the genome is replaced or extended; per-track
+        # ChromMaps computed against an older version are recomputed.
+        self._genome_version = 0
+        self._chrom_maps: dict[str, tuple[int, Optional[ChromMap]]] = {}
 
     # ── Thread-safety helpers ────────────────────────────────────
     def track_lock(self, track_id: str) -> threading.Lock:
@@ -50,90 +135,95 @@ class AppState:
     def genome_lock(self) -> threading.Lock:
         return self._genome_lock
 
-    def next_request(self, track_id: str) -> int:
-        """Register a new data request for a track; returns its generation."""
+    def next_request(self, key: str) -> int:
+        """Register a new data request under ``key`` and return its generation.
+        Coverage/read requests use their track id; /stats requests use one key
+        per track and slot, so neither kind cancels the other."""
         with self._state_lock:
-            gen = self._request_gen.get(track_id, 0) + 1
-            self._request_gen[track_id] = gen
+            gen = self._request_gen.get(key, 0) + 1
+            self._request_gen[key] = gen
         return gen
 
-    def is_current(self, track_id: str, gen: int) -> bool:
-        """False once a newer data request for the track has arrived."""
-        return self._request_gen.get(track_id) == gen
+    def is_current(self, key: str, gen: int) -> bool:
+        """False once a newer data request under ``key`` has arrived."""
+        return self._request_gen.get(key) == gen
 
     @contextmanager
-    def lock_if_current(self, track_id: str, gen: int, poll: float = 0.05) -> Iterator[bool]:
+    def lock_if_current(self, track_id: str, gen: int, poll: float = 0.05,
+                        gen_key: Optional[str] = None) -> Iterator[bool]:
         """Take the track lock for data request ``gen``, giving up as soon as a
-        newer request for the track arrives. Yields True while holding the
-        lock, or False (lock not taken) when the request was superseded; the
-        client has already abandoned it, so it should not read at all.
+        newer request arrives under its generation key: the track id, or
+        ``gen_key`` for requests registered under a key of their own (/stats).
+        Yields True while holding the lock, or False (lock not taken) when the
+        request was superseded; the client has already abandoned it, so it
+        should not read at all.
 
         Superseded requests used to wait for the lock one after another, each
         parking a server worker thread meanwhile. Panning at base level over a
         deep BAM queued dozens of them and starved every other endpoint (the
         reference sequence, other tracks) until the backlog drained."""
         lock = self.track_lock(track_id)
+        key = track_id if gen_key is None else gen_key
         while not lock.acquire(timeout=poll):
-            if not self.is_current(track_id, gen):
+            if not self.is_current(key, gen):
                 yield False
                 return
         try:
-            yield self.is_current(track_id, gen)
+            yield self.is_current(key, gen)
         finally:
             lock.release()
 
     # ── Chromosome-name mapping between the genome and a track ─────
     _TRUE_LENGTH_FORMATS = ("bam", "bw", "bigwig")   # headers carry real contig lengths
 
-    def _length_alias(self, track_id: str, chrom: str):
-        """The track contig whose length EXACTLY equals genome chromosome
-        ``chrom``'s, when that length is unique among both the genome's
-        chromosomes and the track's contigs; else None. Only for formats whose
-        headers carry true lengths — other readers report the last data
-        position as a length."""
-        if self.genome is None:
-            return None
-        info = self.tracks.get(track_id, {})
-        reader = self.readers.get(track_id)
-        if reader is None or info.get("file_format") not in self._TRUE_LENGTH_FORMATS:
-            return None
-        try:
-            contigs = {c["name"]: c.get("length", 0) for c in reader.chromosomes}
-            genome_chroms = self.genome.chromosomes
-        except Exception:
-            return None
-        g_len = next((c["length"] for c in genome_chroms if c["name"] == chrom), 0)
-        if not g_len:
-            return None
-        same = [n for n, length in contigs.items() if length == g_len]
-        g_same = [c for c in genome_chroms if c["length"] == g_len]
-        return same[0] if len(same) == 1 and len(g_same) == 1 else None
+    def chrom_map(self, track_id: str) -> Optional[ChromMap]:
+        """The track's ChromMap against the loaded genome (see
+        _match_chromosomes), or None when its contig names are left to its
+        reader: no genome, or a format whose headers carry no true contig
+        lengths (WIG and bedGraph report the last data position instead).
+
+        Computed in one pass per track and genome version, then cached: the
+        load-time checks and every data request share it."""
+        with self._state_lock:
+            version, genome = self._genome_version, self.genome
+            info, reader = self.tracks.get(track_id), self.readers.get(track_id)
+            hit = self._chrom_maps.get(track_id)
+        if hit is not None and hit[0] == version:
+            return hit[1]
+        cmap = None
+        if genome is not None and reader is not None and info \
+                and info.get("file_format") in self._TRUE_LENGTH_FORMATS:
+            try:
+                cmap = _match_chromosomes(genome.chromosomes, reader.chromosomes)
+            except Exception:
+                cmap = None
+        with self._state_lock:
+            # Not if the genome changed or the track went away meanwhile.
+            if version == self._genome_version and self.readers.get(track_id) is reader:
+                self._chrom_maps[track_id] = (version, cmap)
+        return cmap
 
     def resolve_track_chrom(self, track_id: str, chrom: str) -> str:
         """Name to ask a track's reader for when the genome shows ``chrom``.
 
-        Readers resolve exact / 'chr'-prefix / case / single-sequence matches
-        themselves. This adds the case they cannot see: a differently named
-        contig of exactly the same, unique length — e.g. a GenBank genome whose
-        LOCUS name differs from the accession (CP124550.1) its BigWigs and BAMs
-        were aligned to, which otherwise drew those tracks blank."""
-        g = self.genome
-        key = (track_id, chrom, id(g), len(g.chromosomes) if g is not None else 0)
-        hit = self._chrom_alias_cache.get(key)
-        if hit is not None:
-            return hit
-        result = chrom
-        reader = self.readers.get(track_id)
-        try:
-            names = {c["name"] for c in reader.chromosomes} if reader is not None else set()
-        except Exception:
-            names = set()
-        if names and chrom not in names:
-            resolved = reader._resolve_chrom(chrom) if hasattr(reader, "_resolve_chrom") else chrom
-            if resolved not in names:
-                result = self._length_alias(track_id, chrom) or chrom
-        self._chrom_alias_cache[key] = result
-        return result
+        For BAM and BigWig tracks, the contig the track's ChromMap pairs with
+        ``chrom``: by name ('chr' prefix, case and '.version' variants too), or
+        by a unique exact length — e.g. a GenBank genome whose LOCUS name
+        differs from the accession (CP124550.1) its BigWigs and BAMs were
+        aligned to, which otherwise drew those tracks blank. Other readers
+        resolve exact / 'chr'-prefix / case / single-sequence matches
+        themselves, so ``chrom`` is passed through."""
+        cmap = self.chrom_map(track_id)
+        if cmap is None:
+            return chrom
+        name = cmap.names.get(chrom)
+        return name if name is not None else cmap.aliases.get(chrom, chrom)
+
+    def _genome_changed(self):
+        """Forget what was computed against the previous genome (caller holds
+        _state_lock)."""
+        self._genome_version += 1
+        self._chrom_maps.clear()
 
     def load_genome(self, file_path: str):
         from readers.genome_reader import GenomeReader
@@ -148,6 +238,7 @@ class AppState:
         # a torn dict.
         with self._genome_lock, self._state_lock:
             self.genome = new_genome
+            self._genome_changed()
             if self.genome.is_annotated():
                 track_id = "genome_annotations"
                 self.tracks[track_id] = {
@@ -158,6 +249,15 @@ class AppState:
                     "file_format": "genbank",
                 }
                 self.readers[track_id] = None  # served directly from genome reader
+
+    def add_chromosomes(self, file_path: str):
+        """Merge another file's chromosomes into the loaded genome."""
+        # genome_lock: concurrent /sequence and /features requests can't read
+        # mid-mutation while sub-readers are being appended.
+        with self._genome_lock:
+            self.genome.add_chromosomes_from(file_path)
+            with self._state_lock:
+                self._genome_changed()
 
     def load_track(self, file_path: str, name: str, index_path: str = None) -> dict:
         # Detect compound extensions (.vcf.gz / .wig.gz / .bedgraph.gz / .bdg.gz)
@@ -288,7 +388,10 @@ class AppState:
         """Compare a track reader's chromosomes against the loaded genome.
 
         Returns a dict with ``status`` ('ok', 'mismatch', or 'size_mismatch')
-        and a human-readable ``message`` when there is a problem.
+        and a human-readable ``message`` when there is a problem. When genome
+        chromosomes are paired with differently named track contigs by their
+        exact length, ``aliases`` lists the pairs as
+        ``[{"genome", "track", "length"}]``.
         """
         if self.genome is None:
             return {"status": "no_genome"}
@@ -308,7 +411,17 @@ class AppState:
             return {"status": "ok"}
 
         genome_chroms = {c["name"]: c["length"] for c in self.genome.chromosomes}
-        matching_names = set(track_chroms) & set(genome_chroms)
+        # The pairs resolve_track_chrom serves: genome chromosome -> track
+        # contig by name (exact; for BAM/BigWig also the 'chr' / case /
+        # '.version' variants), and for BAM/BigWig by unique exact length.
+        cmap = self.chrom_map(track_id)
+        if cmap is None:
+            matching = {n: n for n in genome_chroms if n in track_chroms}
+            aliases = {}
+        else:
+            matching, aliases = cmap.names, cmap.aliases
+        listed = {"aliases": [{"genome": g, "track": t, "length": track_chroms.get(t, 0)}
+                              for g, t in aliases.items()]} if aliases else {}
 
         # ── Single-chromosome special case ──
         # Many bacterial tracks have one chromosome with a different name
@@ -329,11 +442,10 @@ class AppState:
                         "track_chromosomes": list(track_chroms.keys()),
                         "genome_chromosomes": list(genome_chroms.keys()),
                     }
-            return {"status": "ok"}
+            return {"status": "ok", **listed}
 
-        # ── Multi-chromosome: check name overlap (unique exact-length aliases
-        # count as matches — see resolve_track_chrom) ──
-        if not matching_names and not any(self._length_alias(track_id, g) for g in genome_chroms):
+        # ── Multi-chromosome: check name overlap (aliases count as matches) ──
+        if not matching and not aliases:
             t_sample = sorted(track_chroms)[:5]
             g_sample = sorted(genome_chroms)[:5]
             return {
@@ -349,9 +461,9 @@ class AppState:
 
         # ── Check size mismatches for matching names ──
         size_issues = []
-        for name in matching_names:
-            t_len = track_chroms[name]
-            g_len = genome_chroms[name]
+        for name, t_name in matching.items():
+            t_len = track_chroms.get(t_name, 0)
+            g_len = genome_chroms.get(name, 0)
             if t_len > 0 and g_len > 0:
                 ratio = abs(t_len - g_len) / max(g_len, 1)
                 if ratio > 0.05:
@@ -364,13 +476,14 @@ class AppState:
                 "message": (
                     f"Size mismatch on {', '.join(size_issues[:3])}: "
                     f"e.g. '{ex}' is {genome_chroms[ex]:,} bp in genome "
-                    f"but {track_chroms[ex]:,} bp in track"
+                    f"but {track_chroms[matching[ex]]:,} bp in track"
                 ),
                 "track_chromosomes": list(track_chroms.keys()),
                 "genome_chromosomes": list(genome_chroms.keys()),
+                **listed,
             }
 
-        return {"status": "ok"}
+        return {"status": "ok", **listed}
 
     def get_target_chromosomes(self, track_id: str) -> list:
         """Return the list of genome chromosome names this track can serve.
@@ -408,10 +521,14 @@ class AppState:
         if len(track_names) == 1 and len(genome_chroms) == 1:
             return [genome_chroms[0]["name"]]
 
-        # Multi-chrom: exact name matches, plus unique exact-length aliases
-        # (e.g. LOCUS name vs accession — see resolve_track_chrom)
-        matched = [gc["name"] for gc in genome_chroms
-                   if gc["name"] in track_names or self._length_alias(track_id, gc["name"])]
+        # Multi-chrom: name matches (exact; for BAM/BigWig also the 'chr' /
+        # case / '.version' variants), plus unique exact-length aliases (e.g.
+        # LOCUS name vs accession) — the pairs resolve_track_chrom serves.
+        cmap = self.chrom_map(track_id)
+        if cmap is None:
+            matched = [n for n in all_names if n in track_names]
+        else:
+            matched = [n for n in all_names if n in cmap.names or n in cmap.aliases]
         if matched:
             return matched
 
@@ -451,6 +568,10 @@ class AppState:
                 except Exception:
                     pass
         self.tracks.pop(track_id, None)
+        with self._state_lock:
+            self._chrom_maps.pop(track_id, None)
+            for key in [k for k in self._request_gen if k == track_id or k.startswith(track_id + "|")]:
+                del self._request_gen[key]
 
 
 app_state = AppState()
