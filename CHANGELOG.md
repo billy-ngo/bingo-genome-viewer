@@ -24,8 +24,13 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   silently drop data, so a tall Tn-seq insertion site could vanish at 1 kb zoom
   and reappear after a 1 bp pan. BigWig, bedGraph and WIG now use integer bin
   edges.
-- **WIG files with repeated positions** are summed instead of averaged; two
-  entries at one position no longer halve the value.
+- **WIG files with repeated positions** (the same position and span) are
+  summed instead of averaged; two entries at one position no longer halve the
+  value.
+- **Infinite or NaN values.** A WIG, bedGraph or BigWig containing `inf`,
+  `-inf` or `nan` (for example a log ratio that hit log(0)) no longer fails to
+  draw, or empties the tooltips, wherever such a value is in view. These
+  values are skipped.
 - **BAM coverage is exact.** The old computation had several bugs:
   - it counted reads that crossed internal 50 kb chunk boundaries twice, giving
     false plateaus up to 2× that moved as you panned;
@@ -34,21 +39,34 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   - it failed for views near a contig end and for contigs with no reads.
 
   A BAM track now builds an exact per-base coverage index in the background
-  when it is loaded; a 370 MB BAM takes about 13 s. Until the index is ready,
-  the computed part is shown and the rest is shaded as pending. As in IGV,
-  depth counts aligned bases (CIGAR `M`/`=`/`X`) and skips unmapped, QC-fail
-  and duplicate reads.
-- **The read view of deep BAMs covers the whole window.** At ≤ 50 kb zoom it
-  used to stop after the first 5,000 reads, which left most of the view empty.
-  Reads are now sampled evenly across the window, and a warning says how many
-  are shown. Long reads that start left of the view are no longer missing.
+  when it is loaded; a 370 MB BAM takes about 12 s. Until the index is ready,
+  the part already computed is shown (for coordinate-sorted BAMs) and the rest
+  is shaded as pending. As in IGV, depth counts aligned bases (CIGAR
+  `M`/`=`/`X`) and skips unmapped, QC-fail and duplicate reads. Ultra-long
+  reads whose CIGAR is stored in the `CG` tag are counted along their real
+  alignment. References over 32 Mbp, too large for the index, get exact
+  coverage computed per view for up to 500,000 reads; past that point the view
+  is shaded as pending.
+- **The read view of deep BAMs covers the whole window, and is faster.** At
+  ≤ 50 kb zoom it used to stop after the first 5,000 reads, which left most of
+  the view empty. Now every read is shown when 5,000 or fewer overlap the
+  window. Beyond that, 5,000 are sampled evenly across it and a warning gives
+  the exact total. A 50 kb view of a 370 MB ChIP-seq BAM loads in about 0.5 s
+  instead of about 3 s. These reads are now shown at their true extent:
+  - reads that start far left of the view;
+  - alignments stored without a sequence, such as secondary alignments;
+  - ultra-long reads with a `CG`-tag CIGAR.
+
+  Unmapped mates placed at a position are hidden, as in IGV.
 - **Linked and overlaid tracks:**
   - hidden members, and members with no data on the current chromosome, no
     longer set the shared axis;
   - "Link scales across selected tracks" creates a new link group each time
     instead of one global group;
   - an overlay member whose file covers another chromosome is no longer drawn
-    at this chromosome's coordinates.
+    at this chromosome's coordinates;
+  - an overlay row's selection tooltip describes a member that is actually
+    drawn.
 - **The split (+/−) layout** for signed data is decided once per chromosome, so
   it no longer flips while you pan.
 - **Numbers and labels:**
@@ -56,11 +74,15 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   - ruler tick labels stay distinct at every zoom (they used to repeat on
     Mb-scale chromosomes);
   - variant markers sit on the centre of their base.
-- **SVG/PNG export** uses exactly the on-screen axis, layout and windowing.
+- **SVG/PNG export** uses exactly the on-screen axis, layout and windowing. It
+  leaves out overlay members that are hidden, unticked under Include tracks,
+  or have no data on the chromosome.
 - **Exact tooltip statistics.** The selected-region tooltip shows the true
   mean, max and sum of the signal (forward/reverse for strand data). It used to
   show an "Avg cov" that changed with the zoom level. The gene tooltip's
-  "Track signal in feature" is exact too.
+  "Track signal in feature" is exact too. The numbers are fetched once a
+  selection stops changing, or once the pointer rests on a gene, so dragging
+  and sweeping stay responsive.
 - **Data handling:**
   - switching chromosome never draws the previous chromosome's data or axis;
   - panning back into an already loaded range during a slow request no longer
@@ -70,10 +92,16 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   - unticking Auto keeps each track's current axis instead of jumping to 100;
   - a selection that mixes auto and fixed tracks shows as mixed instead of
     "Auto".
-- **Contig naming.** A BigWig or BAM whose contig is named differently from the
-  genome's chromosome is matched by exact length when that match is
-  unambiguous. An example is a GenBank LOCUS name versus the accession
-  `CP124550.1`. Such tracks used to stay blank.
+- **Contig naming.**
+  - A BigWig or BAM contig whose name differs from the genome's chromosome
+    only by a `chr` prefix, letter case or a `.version` suffix now counts as a
+    match. Such tracks used to be reported as mismatched.
+  - A contig named differently altogether is matched by exact length when
+    that length is unique on both sides and the matches account for most of
+    the unmatched sequence. An example is a GenBank LOCUS name versus the
+    accession `CP124550.1`. Such tracks used to stay blank.
+  - Unrelated assemblies that merely share a contig length are not matched.
+  - The load response lists the pairs matched by length.
 
 ### Fixed — nucleotide strip
 - The reference sequence strip no longer drops out while you scroll at base
@@ -97,8 +125,16 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
 - **Windowing** (Track Settings): Max (default, keeps peak heights) or Mean.
 - `GET /api/tracks/{id}/stats` returns the exact mean, max, min, sum and
   covered bp of a coverage/read track over a region.
+  - `complete` is false while a BAM's coverage index is still building.
+  - `truncated` is set when no exact answer is possible.
+  - An optional `slot` names the asker. A newer request in the same slot makes
+    an older one that is still waiting answer 409.
 
 ### Changed
+- `GET /api/tracks/{id}/reads` reports the exact number of overlapping reads
+  in `total`, with `truncated` when the reads returned are a sample.
+  `/coverage` and `/reads` answer 409 to a request that a newer one for the
+  same track has superseded.
 - Sessions are saved as version 3, which adds bin size, windowing and
   link-group ids. Older sessions restore with fit-to-visible auto scale on.
 - The health and heartbeat endpoints answer even while track requests are

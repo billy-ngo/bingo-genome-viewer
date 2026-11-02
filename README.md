@@ -44,7 +44,7 @@ or compiled C dependencies.
 |------|---------|-------|
 | **Reference genome** | FASTA (`.fa`, `.fasta`), GenBank (`.gb`, `.gbk`, `.genbank`) | GenBank files contribute both reference sequence and a built-in annotation track. Multiple genome files can be merged with `Add chromosomes`. |
 | **Coverage / signal** | BigWig (`.bw`, `.bigwig`), WIG (`.wig`, `.wig.gz`), BedGraph (`.bedgraph`, `.bedgraph.gz`, `.bdg`, `.bdg.gz`) | Compressed `.gz` variants are decompressed on the fly. WIG dialects (`fixedStep`, `variableStep`, headerless, 3-column forward/reverse) are auto-detected. BigWig parsing is pure-Python via R-tree traversal. |
-| **Read alignments** | BAM (`.bam` + `.bai` index) | Index file required. Coverage is shown when zoomed out. It comes from an exact per-base depth index built in the background when the BAM is loaded. As in IGV, depth counts aligned bases and skips unmapped, QC-fail and duplicate reads. Within 50 kbp views, individual reads appear with CIGAR-aware match / deletion / intron / insertion / soft-clip rendering. Deep regions are evenly downsampled to 5,000 reads per view. CRAM is not supported. |
+| **Read alignments** | BAM (`.bam` + `.bai` index) | Index file required. Coverage is shown when zoomed out. It comes from an exact per-base depth index built in the background when the BAM is loaded. As in IGV, depth counts aligned bases and skips unmapped, QC-fail and duplicate reads. Within 50 kbp views, individual reads appear with CIGAR-aware match / deletion / intron / insertion / soft-clip rendering. Up to 5,000 reads per view are all shown; deeper views show 5,000 sampled evenly across the view, with the exact total. CRAM is not supported. |
 | **Variants** | VCF (`.vcf`, `.vcf.gz`), BCF (`.bcf`) | Plain and gzip-compressed VCF; up to 10 000 variants per region returned. |
 | **Feature annotations** | BED (`.bed`), GTF (`.gtf`), GFF2 (`.gff2`), GFF3 (`.gff3`), GenBank (`.gb`) | The ambiguous `.gff` extension is auto-detected as GFF2/GTF or GFF3 by inspecting `##gff-version` and the column-9 attribute style. |
 
@@ -162,8 +162,9 @@ and BAMs loaded simultaneously. Indicative timings on a recent laptop:
 | WIG parse (3 MB gzipped) | ~730 ms |
 | Coverage query (full chromosome, 1000 bins, 11 MB WIG) | ~250 ms |
 | Coverage query (full chromosome, 1000 bins, BigWig) | ~70 ms |
-| BAM coverage index build (370 MB BAM, background, once per load) | ~15 s |
+| BAM coverage index build (370 MB BAM, background, once per load) | ~12 s |
 | BAM coverage query once indexed (full chromosome, 1000 bins) | ~5 ms |
+| BAM read view (50 kb window of that BAM, ~200,000 overlapping reads) | ~0.5 s |
 | Annotation query (full chromosome GFF3) | <1 ms |
 
 These numbers reflect cold reads. The frontend keeps an in-memory overscan
@@ -186,6 +187,7 @@ shaded as pending.
 | Browser doesn't open | Visit <http://localhost:8000> manually; the server will keep running. |
 | Server won't stop | It auto-exits shortly (~20 s) after the last tab closes; `Ctrl+C` from the launching terminal also works. |
 | BAM rejected | Ensure a `.bai` index sits alongside the BAM (named `reads.bam.bai` or `reads.bai`). CRAM is not supported. |
+| Track loads but stays blank | Its chromosome names probably differ from the genome's. A `chr` prefix and letter case are matched automatically. For BigWig and BAM, so are a `.version` suffix and contigs of unique, exactly equal length, when such matches cover most of the unmatched sequence. Otherwise rename the contigs to match the genome. |
 | Cloud-synced file errors | OneDrive / Dropbox files marked "online only" cannot be read. Pin them locally before loading. |
 
 ## API

@@ -34,7 +34,8 @@ app/
     main.py, state.py, requirements.txt
     api/          data.py, genome.py, tracks.py
     readers/      annotation_reader, bam_reader, bam_coverage (BAM depth
-                  index), bigwig_reader (BigWig/bedGraph/WIG),
+                  index), bam_records (raw BAI/BGZF scan for the read
+                  view), bigwig_reader (BigWig/bedGraph/WIG),
                   genbank_reader, genome_reader, vcf_reader
   frontend/       <-- DEVELOP FRONTEND HERE (React + Vite)
     src/          App.jsx, main.jsx, api/client.js,
@@ -122,9 +123,20 @@ guarded by the per-track or genome lock: `app_state.track_lock(track_id)` /
 or mutation. The `/coverage` and `/reads` endpoints register each request with
 `app_state.next_request(track_id)` and take the lock through
 `app_state.lock_if_current(track_id, gen)`. A request that a newer one has
-overtaken returns 409 instead of queueing. Queued stale requests used to hold
-worker threads and starve every other endpoint. Liveness endpoints (`/health`,
-`/api/heartbeat`) are `async` so they never wait for the thread pool.
+overtaken returns 409 instead of queueing; so does a read scan that noticed it
+was superseded (`cancelled`). Queued stale requests used to hold worker
+threads and starve every other endpoint. `/stats` does the same under its own
+key per track and `slot` (`lock_if_current(..., gen_key=...)`), so stats and
+coverage/read requests never cancel each other; the frontend sends one slot
+per asker and page. Liveness endpoints (`/health`, `/api/heartbeat`) are
+`async` so they never wait for the thread pool.
+
+**Chromosome names (backend).** `AppState.resolve_track_chrom` maps a genome
+chromosome to a BAM/BigWig contig through a cached `ChromMap`
+(`_match_chromosomes` in `state.py`): name rules first, then unique
+exact-length aliases that must cover most of the unmatched sequence. Change
+the genome only through `load_genome` / `add_chromosomes`, which bump the
+genome version that invalidates the cache.
 
 **JavaScript / React.** Functional components with hooks only (no classes).
 Keep render-time logic minimal; put expensive computation in `useMemo`.
@@ -155,12 +167,19 @@ won't survive session export/restore. If a default changes meaning, bump
   the chromosome don't count. SVG/PNG export (`components/ui/ExportImage.jsx`)
   must reproduce the screen exactly.
 - **Fetch planning.** Coverage requests are planned by `utils/fetchPlan.js`:
-  the range is clamped to the chromosome, and a fixed `track.binSize` gives
-  genome-aligned bins, coarsened to at most 5,000 per view.
+  the range is clamped to the chromosome (a fixed-size last bin stays whole),
+  and a fixed `track.binSize` gives genome-aligned bins, coarsened to at most
+  5,000 per view.
 - **BAM coverage.** BAM coverage comes from `readers/bam_coverage.py`, an exact
   per-base depth index built in a background thread at load time. It returns
   `pending` bins until it is ready. Don't reintroduce per-request read
-  counting.
+  counting; the only exception is `BamReader._live_coverage`, the bounded
+  fallback for references too large for the index.
+- **BAM read view.** `BamReader.get_reads` scans the `.bai` chunks itself
+  (`readers/bam_records.py`, struct + zlib) and decodes only the reads it
+  returns. It reports the exact `total` and samples evenly above 5,000 reads.
+  Don't route it through bamnostic's `fetch()`, which judges overlap by
+  sequence length and misses reads in sparse regions.
 - **Exact numbers.** For tooltips and other exact figures, use
   `GET /api/tracks/{id}/stats` (`utils/signalStats.js`), never the displayed
   bins: those depend on zoom and windowing.
