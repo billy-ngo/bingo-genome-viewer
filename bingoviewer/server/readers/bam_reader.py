@@ -2,6 +2,9 @@
 BAM reader — uses bamnostic (pure Python, Windows-compatible).
 Requires a .bai index alongside the BAM file for random-access queries.
 CRAM and SAM are not supported by bamnostic; convert to an indexed BAM.
+
+Coverage comes from a BamCoverageIndex (exact per-base depth, built once in
+the background); individual reads for the zoomed-in view come from bamnostic.
 """
 
 from pathlib import Path
@@ -9,9 +12,21 @@ from typing import Optional
 
 import bamnostic as bam
 
+from readers.bam_coverage import BamCoverageIndex, SKIP_FLAGS
+
 MAX_READS_RETURNED = 5000
-MAX_COVERAGE_READS = 500_000   # cap reads iterated for coverage computation
+MAX_READS_SCANNED = 400_000    # bound on reads examined for one read-view request
+MAX_COVERAGE_READS = 500_000   # cap for the live fallback pileup (index unavailable)
 READ_DETAIL_THRESHOLD = 50_000  # bp
+# Reads hidden in the pileup, matching IGV's defaults and the coverage index.
+READ_VIEW_SKIP_FLAGS = 0x200 | 0x400   # QC-fail | duplicate
+# bamnostic's fetch() decides overlap from pos + len(SEQ) instead of the
+# reference span, so it drops reads that start left of the window and span
+# more reference than their sequence length (long reads with deletions,
+# alignments stored without SEQ). We fetch from further left and re-check
+# overlap with the true CIGAR span; until the coverage index reports the
+# longest read on a contig, this lookback is used.
+DEFAULT_READ_LOOKBACK = 2_000
 
 # Standard index naming conventions: file.bam.bai and file.bai
 _INDEX_SUFFIXES = (".bam.bai", ".bai")
@@ -150,11 +165,28 @@ class BamReader:
                 f"to a reference and retains its @SQ header."
             )
 
+        # Exact coverage is built in the background from a separate file handle
+        # (bamnostic's handle stays free for read queries).
+        self._cov = BamCoverageIndex(file_path)
+
     def close(self):
+        self._cov.cancel()
         try:
             self._aln.close()
         except Exception:
             pass
+
+    def coverage_status(self) -> dict:
+        return self._cov.status()
+
+    def has_negative(self, chrom: str) -> bool:
+        return False   # read depth is never negative
+
+    def _contig_length(self, chrom: str) -> int:
+        for c in self.chromosomes:
+            if c["name"] == chrom:
+                return c["length"]
+        return 0
 
     @property
     def chromosomes(self) -> list[dict]:
@@ -230,90 +262,166 @@ class BamReader:
                 return name
         return chrom
 
-    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> list[dict]:
-        """Return binned coverage by piling up fetched reads.
+    def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> dict:
+        """Binned read depth over [start, end): exact mean / max / min per bin.
 
-        For large regions, splits into sub-regions (50kb chunks) to ensure
-        bamnostic's index-based fetch covers the entire span reliably.
-        Large BAM files can fail to return all reads from a single huge
-        fetch spanning millions of bases.
-        """
+        Served from the background coverage index; bins the index has not
+        reached yet come back ``pending``. If the index is unavailable (very
+        large reference, or the scan failed) a bounded live pileup is used
+        instead and the result is flagged ``truncated`` when its read cap was
+        hit — never silently drawn as zero coverage."""
         chrom = self._resolve_chrom(chrom)
-        region_len = end - start
-        if region_len <= 0:
-            return []
+        if end - start <= 0:
+            return {"bins": [], "meta": {}}
+        state = self._cov.state
+        if state in ("building", "ready"):
+            if not self._cov.has_contig(chrom):
+                return {"bins": [], "meta": {"coverage_state": state}}   # contig not in this BAM
+            bins_data = self._cov.coverage(chrom, start, end, bins)
+            if bins_data:
+                return {"bins": bins_data, "meta": {
+                    "coverage_state": self._cov.state,
+                    "coverage_progress": self._cov.progress,
+                }}
+        # Index unavailable (reference too large for it, or the scan failed).
+        bins_data, truncated = self._live_coverage(chrom, start, end, bins)
+        return {"bins": bins_data, "meta": {
+            "coverage_state": self._cov.state,
+            "coverage_error": self._cov.error,
+            "truncated": truncated,
+        }}
 
+    def _live_coverage(self, chrom, start, end, bins):
+        """Fallback pileup when the coverage index is unavailable: mean depth of
+        aligned bases per bin, bounded by MAX_COVERAGE_READS.
+
+        Fixes over the original implementation: the range is clamped to the
+        contig (bamnostic raises for a start past the contig end), each read
+        is counted once — in the 50 kb chunk where it starts — instead of once
+        per chunk it overlaps, and bins beyond the read cap are flagged
+        ``pending`` rather than reported as zero. Returns (bins, truncated)."""
+        L = self._contig_length(chrom)
+        region_len = end - start
         n_bins = min(bins, region_len)
         bin_size = region_len / n_bins
-        counts = [0.0] * n_bins
+        edges = [start + int(i * bin_size) for i in range(n_bins)] + [end]
+        sums = [0] * n_bins
+        lo, hi = max(0, start), min(end, L)
+        truncated = False
+        complete_to = hi
 
-        # Split large regions into chunks for reliable index traversal
-        CHUNK_SIZE = 50_000
-        total_reads = 0
+        def add(a, b):
+            k = min(n_bins - 1, max(0, int((a - start) / bin_size)))
+            while k > 0 and edges[k] > a:
+                k -= 1
+            while k < n_bins and edges[k] < b:
+                ov = min(b, edges[k + 1]) - max(a, edges[k])
+                if ov > 0:
+                    sums[k] += ov
+                k += 1
 
-        try:
-            chunk_start = start
-            while chunk_start < end:
-                chunk_end = min(chunk_start + CHUNK_SIZE, end)
-                for read in self._aln.fetch(chrom, chunk_start, chunk_end):
-                    if read.is_unmapped:
-                        continue
-                    rs = read.reference_start
-                    re = read.reference_end if read.reference_end else rs + 1
-                    rs = max(rs, start)
-                    re = min(re, end)
-                    if rs >= re:
-                        continue
-                    bi_start = int((rs - start) / bin_size)
-                    bi_end = int((re - 1 - start) / bin_size) + 1
-                    bi_start = max(0, min(bi_start, n_bins - 1))
-                    bi_end = max(1, min(bi_end, n_bins))
-                    for bi in range(bi_start, bi_end):
-                        b_lo = start + bi * bin_size
-                        b_hi = start + (bi + 1) * bin_size
-                        overlap = min(re, b_hi) - max(rs, b_lo)
-                        if overlap > 0:
-                            counts[bi] += overlap / (b_hi - b_lo)
-                    total_reads += 1
-                    if total_reads >= MAX_COVERAGE_READS:
-                        break
-                if total_reads >= MAX_COVERAGE_READS:
-                    break
-                chunk_start = chunk_end
-        except KeyError:
-            # Chromosome genuinely absent from this BAM's index — a legitimate
-            # empty result (e.g. a per-chromosome BAM viewed on another chrom).
-            return []
-        except Exception as e:
-            # Corrupt index / BGZF decode failure mid-fetch. The previous
-            # `except Exception: pass` returned whatever partial counts had
-            # accumulated — a coverage track that looks valid but is silently
-            # wrong. Convert to a clear message that data.py turns into an
-            # HTTP 503 the frontend surfaces as an "update failed" warning,
-            # rather than leaking a cryptic 'unpack requires a buffer' error.
-            raise RuntimeError(_fetch_error_msg(self.file_path)) from e
+        if hi > lo:
+            CHUNK = 50_000
+            total = 0
+            try:
+                cs = lo
+                while cs < hi and not truncated:
+                    ce = min(cs + CHUNK, hi)
+                    fetch_from = max(0, cs - DEFAULT_READ_LOOKBACK) if cs == lo else cs
+                    for read in self._aln.fetch(chrom, fetch_from, ce):
+                        rs = read.reference_start
+                        if cs != lo and rs < cs:
+                            continue            # already counted in the chunk where it starts
+                        if read.flag & SKIP_FLAGS or not read.cigarstring:
+                            continue
+                        p = rs
+                        for ln, op in _parse_cigar(read.cigarstring):
+                            if op in "M=X":
+                                a, b = max(p, lo), min(p + ln, hi)
+                                if b > a:
+                                    add(a, b)
+                                p += ln
+                            elif op in "DN":
+                                p += ln
+                        total += 1
+                        if total >= MAX_COVERAGE_READS:
+                            truncated = True
+                            complete_to = max(lo, rs)
+                            break
+                    cs = ce
+            except KeyError:
+                return [], False   # contig absent from this BAM
+            except Exception as e:
+                # Corrupt index / BGZF decode failure mid-fetch: a clear message
+                # (HTTP 503) rather than a track that looks valid but is wrong.
+                raise RuntimeError(_fetch_error_msg(self.file_path)) from e
 
-        result = []
+        out = []
         for i in range(n_bins):
-            b_start = int(start + i * bin_size)
-            b_end = int(start + (i + 1) * bin_size)
-            result.append({
-                "start": b_start,
-                "end":   b_end,
-                "value": counts[i],
-            })
-        return result
+            a, b = edges[i], edges[i + 1]
+            d = {"start": a, "end": b}
+            ac, bc = max(a, 0), min(b, L)
+            if bc <= ac:
+                d.update(value=0.0, cov=0)
+            elif bc > complete_to:
+                d.update(value=0.0, cov=0, pending=True)
+            else:
+                d.update(value=sums[i] / (bc - ac), cov=bc - ac)
+            out.append(d)
+        return out, truncated
 
-    def get_reads(self, chrom: str, start: int, end: int) -> list[dict]:
-        """Return individual read alignments with parsed CIGAR operations."""
+    def get_reads(self, chrom: str, start: int, end: int, is_current=None) -> dict:
+        """Individual read alignments overlapping [start, end), with parsed CIGAR
+        operations. Returns {"reads", "truncated", "total", "total_exact"}.
+
+        - Fetches from further left and re-checks overlap against the true
+          reference span (bamnostic's own test uses the sequence length and
+          silently drops long reads that start left of the window).
+        - QC-fail and duplicate reads are hidden (IGV defaults).
+        - When more than MAX_READS_RETURNED reads overlap the window they are
+          downsampled UNIFORMLY across it (a cap per sampling window, as IGV
+          does) — previously the first 5,000 by position were kept, leaving the
+          rest of a deep view blank. ``truncated`` says the pileup is a sample;
+          ``total`` is the number of overlapping reads (a lower bound when
+          ``total_exact`` is False because MAX_READS_SCANNED was reached).
+        - ``is_current`` (optional) is polled while scanning; when it returns
+          False a newer request has superseded this one and the scan stops.
+        """
         chrom = self._resolve_chrom(chrom)
+        L = self._contig_length(chrom)
+        empty = {"reads": [], "truncated": False, "total": 0, "total_exact": True}
+        if (L and start >= L) or end <= start:
+            return empty
+        lookback = self._cov.max_span(chrom)
+        if lookback is None:
+            lookback = DEFAULT_READ_LOOKBACK
+        fetch_end = min(end, L) if L else end
+        span = end - start
+        window = max(50, span // 200)                    # sampling windows across the view
+        per_window = max(1, -(-MAX_READS_RETURNED // -(-span // window)))
+        kept = [0] * (-(-span // window))
         reads = []
+        total = 0
+        total_exact = True
         try:
-            for read in self._aln.fetch(chrom, start, end):
-                if read.is_unmapped:
+            for read in self._aln.fetch(chrom, max(0, start - lookback), fetch_end):
+                if read.is_unmapped or (read.flag & READ_VIEW_SKIP_FLAGS):
                     continue
                 rs = read.reference_start
                 re = read.reference_end if read.reference_end else rs + 1
+                if re <= start or rs >= end:
+                    continue
+                total += 1
+                if total % 2000 == 0:
+                    if total >= MAX_READS_SCANNED:
+                        total_exact = False
+                        break
+                    if is_current is not None and not is_current():
+                        break                             # superseded: the client has moved on
+                w = (rs - start) // window if rs > start else 0
+                if kept[w] >= per_window:
+                    continue                              # downsampled
+                kept[w] += 1
                 cigar = read.cigarstring or ""
 
                 # Parse CIGAR into segments for rendering
@@ -330,17 +438,22 @@ class BamReader:
                     "sequence": read.query_sequence or "",
                     "row":      0,
                 })
-                if len(reads) >= MAX_READS_RETURNED:
-                    break
-        except KeyError:
-            return []  # chromosome not in index
+        except (KeyError, IndexError):
+            # Contig absent from this BAM, or present but without index
+            # intervals (no reads on it): an empty view, not a corrupt file.
+            return empty
+        except ValueError as e:
+            if "out of bounds" in str(e):
+                return empty
+            raise RuntimeError(_fetch_error_msg(self.file_path)) from e
         except Exception as e:
             # Corrupt/truncated BAM or index surfacing mid-fetch as a low-level
             # struct/decode error — convert to a clear, actionable message.
             raise RuntimeError(_fetch_error_msg(self.file_path)) from e
 
         _assign_rows(reads)
-        return reads
+        return {"reads": reads, "truncated": total > len(reads) or not total_exact,
+                "total": total, "total_exact": total_exact}
 
 
 def _cigar_to_segments(ref_pos: int, cigar: str) -> list[dict]:

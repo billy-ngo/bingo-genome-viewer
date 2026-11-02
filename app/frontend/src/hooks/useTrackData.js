@@ -6,27 +6,40 @@
  *
  * Three fetch strategies:
  * 1. Viewport within overscan, same zoom: skip fetch (cached data is fine)
- * 2. Viewport within overscan, different zoom: debounced 1s refetch at new resolution
- * 3. Viewport outside overscan: immediate fetch (pan debounce 120ms, or instant if
+ * 2. Viewport within overscan, different zoom: debounced refetch at the new
+ *    resolution (immediate-ish for large jumps such as a gene search)
+ * 3. Viewport outside overscan: immediate fetch (pan debounce 100ms, or instant if
  *    no data exists yet)
+ *
+ * Coverage requests are planned by planCoverageFetch: the range never extends
+ * past the chromosome end, and a track's fixed bin size (Track Settings →
+ * Bin size) produces genome-aligned bins; Auto keeps ~one bin per pixel.
  *
  * Robustness against rapid zoom/pan:
  *  - Each new fetch aborts the previous one (signal is passed to axios so the
- *    underlying HTTP request is actually cancelled, not just the state update).
+ *    underlying HTTP request is actually cancelled, not just the state update),
+ *    and so does panning back into the already-fetched range, so a late
+ *    response for an abandoned view can never overwrite the current one.
  *  - Transient network/server errors (status 0, 5xx) trigger up to 2 silent
  *    retries with exponential backoff before surfacing as `error`.
- *  - Old data is NEVER cleared on error — it stays on screen so the viewer
- *    never "blanks out" mid-zoom, preserving data integrity for the user.
- *  - Errors are cleared automatically when the user changes chromosome or
- *    when a subsequent fetch succeeds.
+ *  - Within a chromosome, old data is never cleared on error — it stays on
+ *    screen so the viewer never "blanks out" mid-zoom. On a chromosome switch
+ *    the previous chromosome's data is dropped immediately, so it can never
+ *    be drawn (or scaled) at the new chromosome's coordinates.
+ *  - Coverage that is still being computed (a BAM's background coverage
+ *    index) is shown as far as it goes and re-requested until complete.
  */
 import { useState, useEffect, useRef } from 'react'
 import { tracksApi } from '../api/client'
+import { useBrowser } from '../store/BrowserContext'
+import { planCoverageFetch, OVERSCAN } from '../utils/fetchPlan'
+import { binExtremes, hasNegativeSide, windowingOf } from '../utils/coverageStats'
 
 const READ_DETAIL_THRESHOLD = 50_000
-const OVERSCAN = 0.5            // fetch 0.5x extra on each side (2x total)
 const PAN_DEBOUNCE = 100
 const ZOOM_REFETCH_DELAY = 800
+const BIG_ZOOM_RATIO = 4           // zoom jumps beyond this refetch at pan speed
+const INCOMPLETE_POLL_MS = 1500    // re-ask while a BAM coverage index is building
 const MAX_RETRIES = 2
 const RETRY_BACKOFF_MS = [250, 750]   // delays before retry #1 and #2
 
@@ -101,7 +114,7 @@ export function clearTrackData(trackId) {
 
 export function getCachedDataForTrack(trackId, chrom) {
   const live = liveData.get(trackId)
-  if (live) return live
+  if (live && (!live.chrom || live.chrom === chrom)) return live
   return cache.findByPrefix(`${trackId}|coverage|${chrom}|`)
     || cache.findByPrefix(`${trackId}|reads|${chrom}|`)
     || cache.findByPrefix(`${trackId}|annotations|${chrom}|`)
@@ -110,55 +123,76 @@ export function getCachedDataForTrack(trackId, chrom) {
     || null
 }
 
-/** Compute the auto Y-scale (max/min) for a coverage/read track, honoring the
- *  per-track toggles:
- *   - autoScaleVisible: scale to only the bins inside the visible region
- *     [region.start, region.end] so the axis re-fits on every pan; otherwise
- *     use the track's fetched-range max_value/min_value (the existing
- *     zoom-only autoscale).
- *   - linkScale: take the max/min across ALL linked coverage/read tracks so a
- *     linked group shares one axis (and, with autoScaleVisible, a shared axis
- *     that re-fits the visible region as you pan).
- *  Returns { max, min } in data units. */
-export function computeAutoScale(track, region, tracks) {
-  // Overlay groups always share one Y axis (the union of all members) so the
-  // layered, transparent profiles are directly comparable. This takes
-  // precedence over linkScale. Otherwise fall back to a linked group, or just
-  // the track itself.
-  let group
-  if (track.overlayGroup && Array.isArray(tracks)) {
-    group = tracks.filter(t => t.overlayGroup === track.overlayGroup)
-  } else if (track.linkScale === true && Array.isArray(tracks)) {
-    group = tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') && t.linkScale === true)
-  } else {
-    group = [track]
-  }
-  const members = group.length ? group : [track]
-  // For an overlay group, "fit to visible region" applies if ANY member has it
-  // on, so every member resolves to the same axis regardless of which one asks.
-  const visible = (track.overlayGroup
-    ? members.some(m => m.autoScaleVisible === true)
-    : track.autoScaleVisible === true) && region
-  let maxV = 0, minV = 0
-  for (const t of members) {
-    const d = liveData.get(t.id)
-    if (!d) continue
-    if (visible && d.bins?.length) {
-      for (const b of d.bins) {
-        if (b.end <= region.start || b.start >= region.end) continue
-        const fwd = b.forward != null ? b.forward : b.value
-        const rev = b.reverse != null ? b.reverse : 0
-        if (fwd > maxV) maxV = fwd
-        if (b.value > maxV) maxV = b.value
-        if (rev < minV) minV = rev
-        if (b.value < minV) minV = b.value
-      }
-    } else {
-      if (d.max_value != null && d.max_value > maxV) maxV = d.max_value
-      if (d.min_value != null && d.min_value < minV) minV = d.min_value
+/** True when `t` is shown on `chrom` (visible and targeting that chromosome). */
+function isActiveOn(t, chrom) {
+  if (t.visible === false) return false
+  return !t.targetChromosomes || !chrom || t.targetChromosomes.includes(chrom)
+}
+
+/** The tracks whose data shares `track`'s Y axis: its overlay group, else its
+ *  link group (tracks carrying the same linkScale id), else just itself.
+ *  Hidden members and members not shown on this chromosome are excluded —
+ *  their frozen data must not steer the axis of the tracks still on screen. */
+export function scaleGroup(track, region, tracks) {
+  let group = [track]
+  if (Array.isArray(tracks)) {
+    if (track.overlayGroup) {
+      group = tracks.filter(t => t.overlayGroup === track.overlayGroup)
+    } else if (track.linkScale) {
+      group = tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') && t.linkScale === track.linkScale)
     }
   }
+  const chrom = region?.chrom
+  const active = group.filter(t => t.id === track.id || isActiveOn(t, chrom))
+  return active.length ? active : [track]
+}
+
+/** Live data for a track if it belongs to `chrom` (never another chromosome's). */
+function liveFor(t, chrom) {
+  const d = liveData.get(t.id)
+  if (!d || (chrom && d.chrom && d.chrom !== chrom)) return null
+  return d
+}
+
+/** Compute the auto Y-scale (max/min) for a coverage/read track.
+ *
+ *  Every member is summarised with ITS windowing function (Max — the default,
+ *  peak-preserving — or Mean), the same statistic its bars are drawn with, so
+ *  the axis describes exactly what is on screen.
+ *   - autoScaleVisible (default on): only bins inside the visible region
+ *     [region.start, region.end), so the axis fits what you see and re-fits as
+ *     you pan. Off: the whole fetched range (view ±50%), which keeps the axis
+ *     steadier while panning at the cost of off-screen peaks setting it.
+ *   - Overlay / link groups share one axis: the union of their visible members
+ *     (fit-to-visible applies when any member has it on).
+ *  Returns { max, min } in data units. */
+export function computeAutoScale(track, region, tracks) {
+  const members = scaleGroup(track, region, tracks)
+  const visible = members.some(m => m.autoScaleVisible !== false) && region
+  const lo = visible ? region.start : -Infinity
+  const hi = visible ? region.end : Infinity
+  let maxV = 0, minV = 0
+  for (const t of members) {
+    const d = liveFor(t, region?.chrom)
+    if (!d || !d.bins?.length) continue
+    const e = binExtremes(d.bins, windowingOf(t), lo, hi)
+    if (e.max > maxV) maxV = e.max
+    if (e.min < minV) minV = e.min
+  }
   return { max: maxV, min: minV }
+}
+
+/** Whether `track` needs the split (forward up / reverse down) layout. Decided
+ *  from the backend's chromosome-wide `has_negative` when available, so the
+ *  layout doesn't flip as you pan sparse signed data; group-wide for overlay
+ *  and link groups so every member uses the same coordinate system. */
+export function needsSplitLayout(track, region, tracks) {
+  for (const t of scaleGroup(track, region, tracks)) {
+    const d = liveFor(t, region?.chrom)
+    if (!d) continue
+    if (d.has_negative != null ? d.has_negative : hasNegativeSide(d.bins, windowingOf(t))) return true
+  }
+  return false
 }
 
 /** Classify a fetch error as transient (worth retrying) or permanent. */
@@ -171,28 +205,35 @@ function isTransientError(err) {
   // 5xx server errors → retry (especially 502/503/504 which are common
   // when the backend is overwhelmed by rapid zoom/pan).
   if (status >= 500 && status < 600) return true
-  // 408 Request Timeout, 429 Too Many Requests
-  if (status === 408 || status === 429) return true
+  // 408 Request Timeout, 429 Too Many Requests, 409 superseded by a newer
+  // request for the same track (normally one this client already aborted)
+  if (status === 408 || status === 409 || status === 429) return true
   return false
 }
 
 export function useTrackData(track, region, canvasWidth) {
+  const { genome } = useBrowser()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const abortRef = useRef(null)
-  const fetchedRef = useRef(null)   // { trackId, chrom, start, end, viewLen }
+  const fetchedRef = useRef(null)   // { trackId, chrom, start, end, viewLen, binSize }
   const debounceRef = useRef(null)
   const zoomDebounceRef = useRef(null)
   const hasDataRef = useRef(false)
   const retryTimerRef = useRef(null)
+  const pollTimerRef = useRef(null)
+  const latestRef = useRef(null)    // newest request parameters (timers read these)
+
+  const chromLength = (region && genome?.chromosomes?.find(c => c.name === region.chrom)?.length) || 0
+  const binSize = track && track.binSize > 0 ? track.binSize : null
 
   // Cleanup on unmount: cancel any in-flight request and pending timers
   useEffect(() => () => {
     if (abortRef.current) abortRef.current.abort()
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
-    if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+    for (const r of [debounceRef, zoomDebounceRef, retryTimerRef, pollTimerRef]) {
+      if (r.current) clearTimeout(r.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -200,64 +241,86 @@ export function useTrackData(track, region, canvasWidth) {
     const { chrom, start, end } = region
     const viewLen = end - start
     const type = track.track_type
+    latestRef.current = { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize }
 
     if (fetchedRef.current && fetchedRef.current.trackId !== track.id) {
       fetchedRef.current = null
       hasDataRef.current = false
     }
 
-    // When chromosome changes, drop sticky errors so a stale failure from a
-    // previous chrom doesn't follow the user.
+    // Chromosome switch: drop the previous chromosome's data at once (it must
+    // never be drawn or scaled at the new coordinates), and any sticky error.
     if (fetchedRef.current && fetchedRef.current.chrom !== chrom) {
+      if (abortRef.current) abortRef.current.abort()
+      fetchedRef.current = null
+      hasDataRef.current = false
+      liveData.delete(track.id)
+      notifyLiveDataChange()
+      setData(null)
       setError(null)
     }
 
     const f = fetchedRef.current
     const withinOverscan = f && f.trackId === track.id && f.chrom === chrom &&
-      start >= f.start && end <= f.end
+      start >= f.start && end <= f.end && f.binSize === binSize
 
     if (withinOverscan) {
       const zoomRatio = viewLen / (f.viewLen || viewLen)
       if (zoomRatio > 0.8 && zoomRatio < 1.2) {
-        // Same zoom, within overscan — nothing to do
-        if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+        // Same zoom, within the fetched range — nothing to load. Anything still
+        // in flight (e.g. a pan that was abandoned by panning back) is for a
+        // view we no longer show: cancel it so it can't overwrite this data.
+        if (zoomDebounceRef.current) { clearTimeout(zoomDebounceRef.current); zoomDebounceRef.current = null }
+        if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null }
+        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
+        if (abortRef.current) abortRef.current.abort()
         return
       }
-      // Zoom changed but still within overscan — schedule resolution refetch.
-      // Keep showing current data (no clearing).
-      if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
-      zoomDebounceRef.current = setTimeout(() => {
-        doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth)
-      }, ZOOM_REFETCH_DELAY)
+      // Zoom changed but still within overscan — schedule a resolution refetch,
+      // keeping the current data on screen. Big jumps (gene search, typed
+      // locus) refetch at pan speed; the timer is not restarted by every
+      // further move, so dragging cannot postpone it indefinitely.
+      const big = zoomRatio < 1 / BIG_ZOOM_RATIO || zoomRatio > BIG_ZOOM_RATIO
+      if (!zoomDebounceRef.current || big) {
+        if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+        zoomDebounceRef.current = setTimeout(() => {
+          zoomDebounceRef.current = null
+          fetchLatest()
+        }, big ? PAN_DEBOUNCE : ZOOM_REFETCH_DELAY)
+      }
       return
     }
 
     // Viewport outside overscan — need new data.
     // Cancel any pending zoom refetch since we're doing a real one.
-    if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+    if (zoomDebounceRef.current) { clearTimeout(zoomDebounceRef.current); zoomDebounceRef.current = null }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
 
     // If we have data already, debounce briefly (user is panning).
     // If no data at all, fetch immediately.
     if (hasDataRef.current && f?.chrom === chrom) {
-      debounceRef.current = setTimeout(() => {
-        doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth)
-      }, PAN_DEBOUNCE)
+      debounceRef.current = setTimeout(() => { debounceRef.current = null; fetchLatest() }, PAN_DEBOUNCE)
     } else {
-      doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth)
+      fetchLatest()
     }
 
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+      if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null }
     }
-  }, [track?.id, region?.chrom, region?.start, region?.end, canvasWidth])
+  }, [track?.id, region?.chrom, region?.start, region?.end, canvasWidth, chromLength, binSize])
 
-  function doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth) {
+  /** Fetch for the newest requested view (timers may fire after several moves). */
+  function fetchLatest() {
+    const p = latestRef.current
+    if (p) doFetchForRegion(p.track, p.chrom, p.start, p.end, p.viewLen, p.type, p.canvasWidth, p.chromLength, p.binSize)
+  }
+
+  function doFetchForRegion(track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize) {
     // Cancel any previous in-flight request — passes signal to axios so the
     // underlying HTTP request is genuinely aborted, not merely suppressed.
     if (abortRef.current) abortRef.current.abort()
+    if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null }
     const controller = new AbortController()
     abortRef.current = controller
 
@@ -265,26 +328,26 @@ export function useTrackData(track, region, canvasWidth) {
     if (!hasDataRef.current) setLoading(true)
     setError(null)
 
-    // Snapshot the request identity. The retry path checks against this so
-    // a backoff-scheduled retry that fires after the user has navigated to
-    // a different chrom/track will bail instead of overwriting fresh data
-    // with stale results.
-    const requestKey = { trackId: track.id, chrom, start, end, viewLen }
-    attemptFetchOnce(controller, requestKey, track, chrom, start, end, viewLen, type, canvasWidth, 0)
+    attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, 0)
   }
 
-  function attemptFetchOnce(controller, requestKey, track, chrom, start, end, viewLen, type, canvasWidth, attempt) {
+  function attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, attempt) {
     // Bail if a newer fetch has superseded this one or the hook has unmounted.
     if (controller.signal.aborted) return
 
-    const useOverscan = type !== 'reads' || viewLen > READ_DETAIL_THRESHOLD
-    const os = useOverscan ? OVERSCAN : 0
-    const fetchStart = Math.max(0, Math.floor(start - viewLen * os))
-    const fetchEnd = Math.ceil(end + viewLen * os)
-    const ratio = (fetchEnd - fetchStart) / viewLen
-    // Cap bins at 5000 (a deliberate client-side limit — plenty for any screen
-    // width; the backend itself accepts up to 10000), but at least 500 for quality.
-    const bins = Math.max(500, Math.min(Math.floor(canvasWidth * ratio), 5000))
+    const readMode = type === 'reads' && viewLen <= READ_DETAIL_THRESHOLD
+    const useOverscan = !readMode
+    let plan
+    if (type === 'coverage' || (type === 'reads' && !readMode)) {
+      plan = planCoverageFetch({ start, end, chromLength, canvasWidth, binSize, overscan: OVERSCAN })
+    } else {
+      const os = useOverscan ? OVERSCAN : 0
+      const fs = Math.max(0, Math.floor(start - viewLen * os))
+      let fe = Math.ceil(end + viewLen * os)
+      if (chromLength > 0) fe = Math.min(fe, chromLength)
+      plan = { fetchStart: fs, fetchEnd: Math.max(fe, fs + 1), bins: 0, binSize: null, requestedBinSize: null, capped: false }
+    }
+    const { fetchStart, fetchEnd, bins } = plan
 
     const cacheKey = `${track.id}|${type}|${chrom}|${fetchStart}|${fetchEnd}|${bins}`
 
@@ -296,7 +359,8 @@ export function useTrackData(track, region, canvasWidth) {
         setData(cached)
         setLiveData(track.id, cached)
         setError(null)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen }
+        setLoading(false)
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize }
         hasDataRef.current = true
         return
       }
@@ -304,13 +368,9 @@ export function useTrackData(track, region, canvasWidth) {
 
     const opts = { signal: controller.signal }
     let promise
-    if (type === 'reads') {
-      if (viewLen <= READ_DETAIL_THRESHOLD) {
-        promise = tracksApi.reads(track.id, chrom, start, end, opts)
-      } else {
-        promise = tracksApi.coverage(track.id, chrom, fetchStart, fetchEnd, bins, opts)
-      }
-    } else if (type === 'coverage') {
+    if (type === 'reads' && readMode) {
+      promise = tracksApi.reads(track.id, chrom, start, end, opts)
+    } else if (type === 'coverage' || type === 'reads') {
       promise = tracksApi.coverage(track.id, chrom, fetchStart, fetchEnd, bins, opts)
     } else if (type === 'variants') {
       promise = tracksApi.variants(track.id, chrom, fetchStart, fetchEnd, opts)
@@ -324,17 +384,32 @@ export function useTrackData(track, region, canvasWidth) {
     promise
       .then(res => {
         if (controller.signal.aborted) return
+        // A response for another chromosome than the one now shown is stale.
+        if (latestRef.current && latestRef.current.chrom !== chrom) return
         const result = {
           ...res.data,
-          mode: type === 'reads' && viewLen <= READ_DETAIL_THRESHOLD ? 'reads' : 'coverage',
+          mode: readMode ? 'reads' : 'coverage',
+          // What the bins actually are — shown by Track Settings → Bin size.
+          plan: { binSize: plan.binSize, requestedBinSize: plan.requestedBinSize, capped: plan.capped },
         }
-        cache.set(cacheKey, result)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen }
+        const incomplete = result.complete === false
+        if (!incomplete) cache.set(cacheKey, result)
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize }
         hasDataRef.current = true
         setData(result)
         setLiveData(track.id, result)
         setError(null)
         setLoading(false)
+        if (incomplete) {
+          // The backend is still building this BAM's exact coverage: show what
+          // is done and ask again shortly (only while this view is current).
+          pollTimerRef.current = setTimeout(() => {
+            pollTimerRef.current = null
+            if (abortRef.current === controller && !controller.signal.aborted) {
+              attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, 1)
+            }
+          }, INCOMPLETE_POLL_MS)
+        }
       })
       .catch(err => {
         // Aborted requests: silently drop. Use the captured controller so a
@@ -353,7 +428,7 @@ export function useTrackData(track, region, canvasWidth) {
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
           const delay = RETRY_BACKOFF_MS[attempt] || 1000
           retryTimerRef.current = setTimeout(() => {
-            attemptFetchOnce(controller, requestKey, track, chrom, start, end, viewLen, type, canvasWidth, attempt + 1)
+            attemptFetchOnce(controller, track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, attempt + 1)
           }, delay)
           return
         }
@@ -366,5 +441,7 @@ export function useTrackData(track, region, canvasWidth) {
       })
   }
 
-  return { data, loading, error }
+  // Never hand a component data for another chromosome than the one it shows.
+  const shown = data && region && data.chrom && data.chrom !== region.chrom ? null : data
+  return { data: shown, loading, error }
 }

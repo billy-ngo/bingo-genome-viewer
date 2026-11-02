@@ -44,7 +44,9 @@ export default function VariantTrack({ track, width, height, onWarning }) {
     const lineW = barAuto ? 1 : Math.max(0.5, barFixedPx)
     const dotR = barAuto ? 5 : Math.max(2, barFixedPx * 2)
     for (const v of data.variants) {
-      const x = ((v.pos - region.start) / regionLen) * width
+      // Centre of the variant's base (pos is the 0-based base start), so the
+      // marker sits on its nucleotide at base-level zoom, not the left edge.
+      const x = ((v.pos + 0.5 - region.start) / regionLen) * width
       const color = variantColor(v.ref, v.alt)
       ctx.strokeStyle = color; ctx.lineWidth = lineW
       ctx.beginPath(); ctx.moveTo(x, height - 4); ctx.lineTo(x, 14); ctx.stroke()

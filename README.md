@@ -19,6 +19,10 @@ or compiled C dependencies.
 - **Pure-Python readers** for every supported format (no `pysam`, no
   `pyBigWig` C extensions). Works on Windows, macOS, and Linux without
   build tools.
+- **Y axes you can trust at every zoom.** By default, zoomed-out bins keep
+  their peak height (Max windowing) and the auto Y axis fits the visible
+  region. A peak therefore reads the same value whole-genome and at gene
+  level. BAM depth comes from an exact per-base coverage index.
 - **Auto-cancelled fetches.** Pan/zoom requests are cancelled when
   superseded; transient backend failures retry silently with backoff;
   in-flight reads are serialised per-track to keep non-thread-safe file
@@ -40,7 +44,7 @@ or compiled C dependencies.
 |------|---------|-------|
 | **Reference genome** | FASTA (`.fa`, `.fasta`), GenBank (`.gb`, `.gbk`, `.genbank`) | GenBank files contribute both reference sequence and a built-in annotation track. Multiple genome files can be merged with `Add chromosomes`. |
 | **Coverage / signal** | BigWig (`.bw`, `.bigwig`), WIG (`.wig`, `.wig.gz`), BedGraph (`.bedgraph`, `.bedgraph.gz`, `.bdg`, `.bdg.gz`) | Compressed `.gz` variants are decompressed on the fly. WIG dialects (`fixedStep`, `variableStep`, headerless, 3-column forward/reverse) are auto-detected. BigWig parsing is pure-Python via R-tree traversal. |
-| **Read alignments** | BAM (`.bam` + `.bai` index) | Index file required. Coverage is shown when zoomed out; individual reads with CIGAR-aware match / deletion / intron / insertion / soft-clip rendering appear within 50 kbp views. CRAM is not supported. |
+| **Read alignments** | BAM (`.bam` + `.bai` index) | Index file required. Coverage is shown when zoomed out. It comes from an exact per-base depth index built in the background when the BAM is loaded. As in IGV, depth counts aligned bases and skips unmapped, QC-fail and duplicate reads. Within 50 kbp views, individual reads appear with CIGAR-aware match / deletion / intron / insertion / soft-clip rendering. Deep regions are evenly downsampled to 5,000 reads per view. CRAM is not supported. |
 | **Variants** | VCF (`.vcf`, `.vcf.gz`), BCF (`.bcf`) | Plain and gzip-compressed VCF; up to 10 000 variants per region returned. |
 | **Feature annotations** | BED (`.bed`), GTF (`.gtf`), GFF2 (`.gff2`), GFF3 (`.gff3`), GenBank (`.gb`) | The ambiguous `.gff` extension is auto-detected as GFF2/GTF or GFF3 by inspecting `##gff-version` and the column-9 attribute style. |
 
@@ -112,18 +116,28 @@ shutdown beacon). You can also stop it with `Ctrl+C`.
    cursor). Use the chromosome scrubber along the top to jump anywhere on
    the current sequence. **Shift+scroll** scrolls vertically inside read
    pile-ups.
-3. **Select a region.** Right-click drag to mark a region; a tooltip
-   shows the selection length and per-track stats (mean coverage, variant
-   count, feature count, read count). Click the highlighted band to
-   dismiss; right-click it to recolour the underlying region.
+3. **Select a region.** Right-click drag to mark a region. A tooltip shows
+   the selection length and per-track statistics:
+   - exact signal mean, max and sum, with forward/reverse for strand data,
+     computed from the data rather than the drawn bins;
+   - variant, feature and read counts.
+
+   Click the highlighted band to dismiss it; right-click it to recolour the
+   underlying region.
 4. **Zoom to a feature.** Double-click any annotation to centre it in the
    view with ~15 % flanking context.
-5. **Tune tracks.** Open **Track Settings** to adjust height, colour,
-   linear/log Y-axis, fixed Y range, auto-fit-to-visible-region scaling,
-   bar width, peak outline tracing, strand visibility (BAM), strand colours,
-   arrow style, nucleotide display, and per-feature-type visibility
-   (GenBank/GFF). Multi-select to apply changes to several tracks at once;
-   mixed values render as indeterminate checkboxes.
+5. **Tune tracks.** Open **Track Settings** to adjust:
+   - height, colour, bar width and peak outline tracing;
+   - **bin size**: Auto, which shows the bin size currently drawn, or a fixed
+     or custom size in bp;
+   - **windowing**: Max keeps peak heights, Mean averages each bin;
+   - the Y axis: linear/log, a fixed range, fit to the visible region, and
+     scales linked across chosen tracks;
+   - strand visibility and strand colours (BAM), arrow style, nucleotide
+     display, and per-feature-type visibility (GenBank/GFF).
+
+   Multi-select to apply changes to several tracks at once; mixed values
+   render as indeterminate controls.
 6. **Overlay coverage tracks.** Multi-select two or more coverage tracks in
    Track Settings and click **Overlay** to stack them in one shared-axis row.
    The merged row's legend controls each track's colour, transparency, and
@@ -143,16 +157,21 @@ and BAMs loaded simultaneously. Indicative timings on a recent laptop:
 
 | Workload | Time |
 |----------|------|
-| GenBank parse (1.8 MB) | ~200 ms |
-| WIG parse (11 MB, point data) | ~340 ms |
-| WIG parse (3 MB gzipped) | ~410 ms |
-| Coverage query (full chromosome, 1000 bins, 11 MB WIG) | ~140 ms |
+| GenBank parse (1.8 MB) | ~300 ms |
+| WIG parse (11 MB, point data) | ~670 ms |
+| WIG parse (3 MB gzipped) | ~730 ms |
+| Coverage query (full chromosome, 1000 bins, 11 MB WIG) | ~250 ms |
+| Coverage query (full chromosome, 1000 bins, BigWig) | ~70 ms |
+| BAM coverage index build (370 MB BAM, background, once per load) | ~15 s |
+| BAM coverage query once indexed (full chromosome, 1000 bins) | ~5 ms |
 | Annotation query (full chromosome GFF3) | <1 ms |
 
 These numbers reflect cold reads. The frontend keeps an in-memory overscan
-cache of fetched regions, so panning within — or returning to — an
-already-loaded area is served instantly without a new backend request; the
-backend parses on demand and does not itself cache.
+cache of fetched regions, so panning within, or returning to, an
+already-loaded area is served without a new backend request. The backend
+parses on demand. The one exception is BAM depth, which is indexed once in
+the background; until that finishes, coverage that is not computed yet is
+shaded as pending.
 
 ## Troubleshooting
 
@@ -210,7 +229,7 @@ workflow.
 
 If you use this software in published research, please cite:
 
-> Ngo, B. M. (2026). *BiNgo Genome Viewer* (v2.12) [Software].
+> Ngo, B. M. (2026). *BiNgo Genome Viewer* (v2.14) [Software].
 > <https://github.com/billy-ngo/bingo-genome-viewer>
 
 ## Acknowledgements

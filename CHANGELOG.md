@@ -6,6 +6,104 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [2.14.0] — 2026-11-02
+
+### Fixed — Y-axis (scale bar) accuracy
+- **The zoomed-out Y axis no longer understates the data.** Zoomed out, each
+  bar summarises many bases, and it used to show their *mean*, which flattens
+  narrow peaks. For example, a ChIP track peaking at 30.9 had an axis of about 7
+  at whole-genome zoom, but 0–30 after zooming into a gene. Bars now show the
+  **maximum** of each bin by default, so a peak keeps its true height at every
+  zoom and the whole-genome axis is never below a zoomed-in one. The old
+  behaviour is available as Track Settings → **Windowing → Mean**.
+- **The auto Y axis fits the visible region by default.** It was fitted to the
+  whole fetched range (the view plus 50% on each side), so a peak just
+  off-screen could set the scale and flatten what you see. Untick "Fit to
+  visible region" for the old behaviour.
+- **No more dropped signal at kilobase zoom.** Bins with fractional widths could
+  silently drop data, so a tall Tn-seq insertion site could vanish at 1 kb zoom
+  and reappear after a 1 bp pan. BigWig, bedGraph and WIG now use integer bin
+  edges.
+- **WIG files with repeated positions** are summed instead of averaged; two
+  entries at one position no longer halve the value.
+- **BAM coverage is exact.** The old computation had several bugs:
+  - it counted reads that crossed internal 50 kb chunk boundaries twice, giving
+    false plateaus up to 2× that moved as you panned;
+  - it stopped counting after 500,000 reads;
+  - it counted deletions, introns, duplicates and QC-fail reads;
+  - it failed for views near a contig end and for contigs with no reads.
+
+  A BAM track now builds an exact per-base coverage index in the background
+  when it is loaded; a 370 MB BAM takes about 13 s. Until the index is ready,
+  the computed part is shown and the rest is shaded as pending. As in IGV,
+  depth counts aligned bases (CIGAR `M`/`=`/`X`) and skips unmapped, QC-fail
+  and duplicate reads.
+- **The read view of deep BAMs covers the whole window.** At ≤ 50 kb zoom it
+  used to stop after the first 5,000 reads, which left most of the view empty.
+  Reads are now sampled evenly across the window, and a warning says how many
+  are shown. Long reads that start left of the view are no longer missing.
+- **Linked and overlaid tracks:**
+  - hidden members, and members with no data on the current chromosome, no
+    longer set the shared axis;
+  - "Link scales across selected tracks" creates a new link group each time
+    instead of one global group;
+  - an overlay member whose file covers another chromosome is no longer drawn
+    at this chromosome's coordinates.
+- **The split (+/−) layout** for signed data is decided once per chromosome, so
+  it no longer flips while you pan.
+- **Numbers and labels:**
+  - axis labels keep their precision (e.g. 0.0792, not 0.1);
+  - ruler tick labels stay distinct at every zoom (they used to repeat on
+    Mb-scale chromosomes);
+  - variant markers sit on the centre of their base.
+- **SVG/PNG export** uses exactly the on-screen axis, layout and windowing.
+- **Exact tooltip statistics.** The selected-region tooltip shows the true
+  mean, max and sum of the signal (forward/reverse for strand data). It used to
+  show an "Avg cov" that changed with the zoom level. The gene tooltip's
+  "Track signal in feature" is exact too.
+- **Data handling:**
+  - switching chromosome never draws the previous chromosome's data or axis;
+  - panning back into an already loaded range during a slow request no longer
+    leaves half the view blank.
+- **Fixed Y scale:**
+  - values below 1 are accepted;
+  - unticking Auto keeps each track's current axis instead of jumping to 100;
+  - a selection that mixes auto and fixed tracks shows as mixed instead of
+    "Auto".
+- **Contig naming.** A BigWig or BAM whose contig is named differently from the
+  genome's chromosome is matched by exact length when that match is
+  unambiguous. An example is a GenBank LOCUS name versus the accession
+  `CP124550.1`. Such tracks used to stay blank.
+
+### Fixed — nucleotide strip
+- The reference sequence strip no longer drops out while you scroll at base
+  level. There were four causes:
+  - each drag lengthened the view by about 1 bp until it crossed the letter
+    threshold;
+  - the strip was hidden in intergenic stretches;
+  - responses could arrive out of order;
+  - abandoned BAM read requests piled up on the server and delayed the
+    sequence requests.
+
+  The server now drops a request as soon as a newer one for the same track
+  arrives.
+
+### Added
+- **Bin size** (Track Settings). **Auto** is the default (about one bin per
+  pixel) and shows the bin size currently drawn. You can also choose a fixed
+  size from 1 bp to 10 kb, or a custom size. Fixed bins align to the genome.
+  If a size would need more than 5,000 bins at the current zoom, it is
+  coarsened and the panel says so.
+- **Windowing** (Track Settings): Max (default, keeps peak heights) or Mean.
+- `GET /api/tracks/{id}/stats` returns the exact mean, max, min, sum and
+  covered bp of a coverage/read track over a region.
+
+### Changed
+- Sessions are saved as version 3, which adds bin size, windowing and
+  link-group ids. Older sessions restore with fit-to-visible auto scale on.
+- The health and heartbeat endpoints answer even while track requests are
+  busy, so the idle-shutdown watchdog cannot stop a busy session.
+
 ## [2.13.0] — 2026-07-28
 
 ### Added

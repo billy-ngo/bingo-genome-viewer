@@ -120,6 +120,10 @@ export const tracksApi = {
   // which floods the backend and causes the most-recent fetch to fail under load.
   coverage: (id, chrom, start, end, bins = 1000, opts = {}) =>
     api.get(`/tracks/${id}/coverage`, { params: { chrom, start, end, bins }, signal: opts.signal }),
+  // Exact signal statistics over [start, end) — mean, max, min, sum and
+  // covered bp, independent of the zoom level the track is displayed at.
+  stats: (id, chrom, start, end, opts = {}) =>
+    api.get(`/tracks/${id}/stats`, { params: { chrom, start, end }, signal: opts.signal }),
   reads: (id, chrom, start, end, opts = {}) =>
     api.get(`/tracks/${id}/reads`, { params: { chrom, start, end }, signal: opts.signal }),
   variants: (id, chrom, start, end, opts = {}) =>

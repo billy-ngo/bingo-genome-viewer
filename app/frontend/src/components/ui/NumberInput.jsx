@@ -18,7 +18,7 @@ function fmtNum(v) {
 }
 
 export default function NumberInput({
-  value, onCommit, min, max, integer = true, allowEmpty = false,
+  value, onCommit, min, max, integer = true, allowEmpty = false, validate,
   placeholder, style, ...rest
 }) {
   const [draft, setDraft] = useState(() => fmtNum(value))
@@ -31,7 +31,9 @@ export default function NumberInput({
   }, [value])
 
   const parse = (s) => (integer ? parseInt(s, 10) : parseFloat(s))
-  const inRange = (n) => (min == null || n >= min) && (max == null || n <= max)
+  // `validate` rejects values the range can't express (e.g. "> 0"): they are
+  // never applied, and on blur the field reverts to the current value.
+  const inRange = (n) => (min == null || n >= min) && (max == null || n <= max) && (!validate || validate(n))
   const clamp = (n) => {
     let r = n
     if (min != null) r = Math.max(min, r)
@@ -66,6 +68,7 @@ export default function NumberInput({
     let n = parse(t)
     if (Number.isNaN(n)) { setDraft(fmtNum(value)); return }
     n = clamp(n)
+    if (validate && !validate(n)) { setDraft(fmtNum(value)); return }
     setDraft(String(n))
     onCommit(n)
   }

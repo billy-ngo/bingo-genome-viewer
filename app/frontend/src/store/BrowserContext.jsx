@@ -26,9 +26,14 @@ export function BrowserProvider({ children }) {
     if (!g) return
     const chr = g.chromosomes.find(c => c.name === chrom)
     if (!chr) return
-    let s = Math.floor(start)
-    let e = Math.ceil(end)
-    const len = e - s
+    // Round the start and keep the requested LENGTH exactly. Flooring the
+    // start and ceiling the end grew the view by 1 bp on every pan with a
+    // fractional offset (i.e. every mouse drag), so repeated panning slowly
+    // zoomed out — and at nucleotide zoom pushed the view past the letter
+    // threshold, making the sequence strip vanish until the next zoom.
+    const len = Math.max(1, Math.round(end - start))
+    let s = Math.round(start)
+    let e = s + len
     // Preserve region width: shift the window instead of clamping each edge independently
     if (len <= chr.length) {
       if (s < 0) { s = 0; e = len }
@@ -49,13 +54,15 @@ export function BrowserProvider({ children }) {
     if (!r) return
     const sel = selectionRef.current
     const len = r.end - r.start
-    // If a selection exists on the same chromosome, zoom centered on it
-    let anchor
+    // If a selection on this chromosome is on screen, zoom centred on it;
+    // an off-screen selection must not make the view jump away.
+    let anchor = r.start + len * anchorFraction
     if (sel && sel.chrom === r.chrom) {
-      anchor = (sel.start + sel.end) / 2
-      anchorFraction = (anchor - r.start) / len
-    } else {
-      anchor = r.start + len * anchorFraction
+      const mid = (sel.start + sel.end) / 2
+      if (mid >= r.start && mid <= r.end) {
+        anchor = mid
+        anchorFraction = (anchor - r.start) / len
+      }
     }
     const newLen = Math.max(100, len * factor)
     navigateTo(r.chrom, anchor - newLen * anchorFraction, anchor + newLen * (1 - anchorFraction))

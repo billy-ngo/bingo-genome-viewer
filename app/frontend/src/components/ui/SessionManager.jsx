@@ -12,7 +12,9 @@ import { useTheme } from '../../store/ThemeContext'
 import { genomeApi, tracksApi } from '../../api/client'
 
 const SESSION_STORAGE_KEY = 'genomics-viewer-session'
-const SESSION_VERSION = 2
+// v3: fit-to-visible auto scale became the default, link groups carry ids,
+// and tracks gained `windowing` and `binSize`.
+const SESSION_VERSION = 3
 
 // ── Public helpers (shared with ExitGuard, etc.) ─────────────────────────
 
@@ -46,8 +48,10 @@ export function collectSession(genome, region, tracks, themeName, customTheme, l
       useArrows: t.useArrows,
       scaleMax: t.scaleMax ?? null,
       scaleMin: t.scaleMin ?? null,
-      autoScaleVisible: t.autoScaleVisible === true,
-      linkScale: t.linkScale === true,
+      autoScaleVisible: t.autoScaleVisible !== false,
+      linkScale: t.linkScale || false,            // link-group id (legacy: true)
+      windowing: t.windowing === 'mean' ? 'mean' : 'max',
+      binSize: t.binSize > 0 ? t.binSize : null,  // null = auto
       logScale: t.logScale || false,
       barAutoWidth: t.barAutoWidth !== false,
       barWidth: t.barWidth || 2,
@@ -279,6 +283,7 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
       restoredTracks.sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
 
       // Apply frontend track state (colors, heights, settings)
+      const legacy = !(session.version >= 3)
       setTracks(restoredTracks.map(t => ({
         ...t,
         name: cleanName(t.name) || t.name,
@@ -288,8 +293,12 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         useArrows: t.useArrows !== false,
         scaleMax: t.scaleMax ?? null,
         scaleMin: t.scaleMin ?? null,
-        autoScaleVisible: t.autoScaleVisible === true,
-        linkScale: t.linkScale === true,
+        // Before v3 "off" was the default (axis from the whole fetched range,
+        // so off-screen peaks set it) — older sessions get the new default.
+        autoScaleVisible: legacy ? true : t.autoScaleVisible !== false,
+        linkScale: t.linkScale || false,
+        windowing: t.windowing === 'mean' ? 'mean' : 'max',
+        binSize: t.binSize > 0 ? t.binSize : null,
         logScale: t.logScale || false,
         barAutoWidth: t.barAutoWidth !== false,
         barWidth: t.barWidth || 2,

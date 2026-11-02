@@ -22,12 +22,13 @@ export const DEFAULT_ANNOTATION_COLORS = {
   repeat: '#8d6e63', default: '#80cbc4',
 }
 
-/** Generate a unique overlay-group id. */
-function makeGroupId() {
+/** Generate a unique group id: 'ovl-…' for overlay groups, 'lnk-…' for
+ *  linked-scale groups. */
+export function makeGroupId(prefix = 'ovl') {
   const rand = (typeof crypto !== 'undefined' && crypto.randomUUID)
     ? crypto.randomUUID().slice(0, 8)
     : Math.random().toString(36).slice(2, 10)
-  return `ovl-${rand}`
+  return `${prefix}-${rand}`
 }
 
 /** Decode literal \\uXXXX escape sequences that can appear in filenames */
@@ -73,8 +74,10 @@ export function TrackProvider({ children }) {
         useArrows: true,
         scaleMax: null,
         scaleMin: null,
-        autoScaleVisible: false,  // auto-fit Y scale to the visible region (pan-responsive)
-        linkScale: false,         // share the auto Y scale across linked coverage/read tracks
+        autoScaleVisible: true,   // auto Y scale fits the visible region (off: the whole fetched range)
+        linkScale: false,         // link-group id ('lnk-…') sharing one auto Y scale; false = own scale
+        windowing: 'max',         // bin summary drawn when zoomed out: 'max' (peak-preserving) or 'mean'
+        binSize: null,            // fixed coverage bin size in bp; null = auto (~1 bin per pixel)
         logScale: false,
         barAutoWidth: true,
         barWidth: 2,

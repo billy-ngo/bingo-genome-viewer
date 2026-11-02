@@ -9,6 +9,7 @@ import React, { useRef, useEffect } from 'react'
 import { useBrowser } from '../store/BrowserContext'
 import { useTheme } from '../store/ThemeContext'
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction'
+import { rulerTicks } from '../utils/ruler'
 
 const RULER_HEIGHT = 30
 
@@ -54,13 +55,6 @@ export default function RulerTrack({ width }) {
     }
 
     // ── Tick marks ─────────────────────────────────────────────
-    const targetTicks = Math.min(10, Math.floor(width / 80))
-    const rawInterval = len / targetTicks
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawInterval)))
-    const candidates = [1, 2, 5, 10].map(x => x * magnitude)
-    const interval = candidates.find(c => c >= rawInterval) || candidates[candidates.length - 1]
-    const firstTick = Math.ceil(start / interval) * interval
-
     ctx.strokeStyle = theme.rulerTick
     ctx.fillStyle = theme.rulerLabel
     ctx.font = '10px Arial, Helvetica, sans-serif'
@@ -72,13 +66,12 @@ export default function RulerTrack({ width }) {
     ctx.lineWidth = 1
     ctx.stroke()
 
-    for (let pos = firstTick; pos <= end; pos += interval) {
-      const x = ((pos - start) / len) * width
+    for (const { x, label } of rulerTicks(start, end, width).ticks) {
       ctx.beginPath()
       ctx.moveTo(x, 14)
       ctx.lineTo(x, 20)
       ctx.stroke()
-      ctx.fillText(formatBp(pos), x, 11)
+      ctx.fillText(label, x, 11)
     }
   }, [region, selection, width, theme])
 
@@ -87,10 +80,4 @@ export default function RulerTrack({ width }) {
       <canvas ref={canvasRef} data-export-ruler="1" style={{ display: 'block', width: '100%', height: RULER_HEIGHT }} />
     </div>
   )
-}
-
-function formatBp(pos) {
-  if (pos >= 1_000_000) return `${(pos / 1_000_000).toFixed(2)}M`
-  if (pos >= 1_000) return `${(pos / 1_000).toFixed(1)}k`
-  return String(pos)
 }

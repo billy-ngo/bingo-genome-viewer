@@ -9,9 +9,11 @@ import { createPortal } from 'react-dom'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
-import { useTrackData, getCachedDataForTrack } from '../../hooks/useTrackData'
+import { useTrackData } from '../../hooks/useTrackData'
+import { useReferenceSequence } from '../../hooks/useReferenceSequence'
 import { usePeaks } from '../../store/PeakContext'
-import { genomeApi } from '../../api/client'
+import { fetchSignalStats } from '../../utils/signalStats'
+import { formatValue } from '../../utils/coverageStats'
 
 const FEAT_HEIGHT = 16
 const NUCL_FEAT_HEIGHT = 22  // taller when showing nucleotides
@@ -34,8 +36,7 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
   const showNucleotides = track.showNucleotides !== false
   const hitBoxesRef = useRef([])   // [{feat, x, y, w, h}, ...]
   const [tooltip, setTooltip] = useState(null)  // { feat, x, y }
-  const [refSeq, setRefSeq] = useState(null)
-  const refFetchRef = useRef(null)
+  const refSeq = useReferenceSequence(region, showNucleotides)
 
   // Publish ranked peak features so coverage/read tracks can overlay rank
   // labels at the matching positions. Cleared when this track has no ranks
@@ -52,27 +53,6 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
   }, [data, track.id, publishPeaks, clearPeaks])
   useEffect(() => () => clearPeaks(track.id), [track.id, clearPeaks])
 
-  // Fetch reference sequence when zoomed in enough
-  useEffect(() => {
-    if (!region || !showNucleotides) { setRefSeq(null); return }
-    const regionLen = region.end - region.start
-    const pxPerBp = width / regionLen
-    if (pxPerBp < NUCL_PX_THRESHOLD || regionLen > 2000) { setRefSeq(null); return }
-
-    if (refSeq && refSeq.chrom === region.chrom &&
-        refSeq.start <= region.start && refSeq.end >= region.end) return
-
-    const fetchStart = Math.max(0, region.start - 500)
-    const fetchEnd = region.end + 500
-    const key = `${region.chrom}:${fetchStart}-${fetchEnd}`
-    if (refFetchRef.current === key) return
-    refFetchRef.current = key
-
-    genomeApi.sequence(region.chrom, fetchStart, fetchEnd)
-      .then(res => setRefSeq({ chrom: region.chrom, start: fetchStart, end: fetchEnd, sequence: res.data.sequence }))
-      .catch(() => {})
-  }, [region?.chrom, region?.start, region?.end, width, showNucleotides])
-
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -86,6 +66,37 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
     ctx.fillRect(0, 0, width, height)
 
     hitBoxesRef.current = []
+
+    // Reference nucleotide strip at the bottom of the track. Drawn first and
+    // independently of the features: it used to sit after the "no features"
+    // early return, so it vanished in every intergenic stretch.
+    const regionLen = region ? region.end - region.start : 1
+    const pxPerBp = width / regionLen
+    const showBases = !!region && showNucleotides && pxPerBp >= NUCL_PX_THRESHOLD && refSeq != null
+    if (showBases) {
+      const stripH = 14
+      const stripY = height - stripH
+      ctx.fillStyle = theme.canvasBg
+      ctx.fillRect(0, stripY, width, stripH)
+      ctx.strokeStyle = theme.border || '#333'
+      ctx.lineWidth = 0.5
+      ctx.beginPath(); ctx.moveTo(0, stripY); ctx.lineTo(width, stripY); ctx.stroke()
+      const fontSize = Math.min(10, pxPerBp - 1)
+      if (fontSize >= 5) {
+        ctx.font = `bold ${fontSize}px monospace`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        for (let bp = Math.floor(region.start); bp < Math.ceil(region.end); bp++) {
+          if (bp >= refSeq.start && bp < refSeq.end) {
+            const base = (refSeq.sequence[bp - refSeq.start] || '').toUpperCase()
+            const bx = ((bp - region.start) / regionLen) * width
+            ctx.fillStyle = BASE_COLORS[base] || '#999'
+            ctx.fillText(base, bx + pxPerBp / 2, stripY + stripH / 2)
+          }
+        }
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'
+      }
+    }
 
     if (loading && !data?.features?.length) {
       ctx.fillStyle = theme.textTertiary
@@ -129,40 +140,10 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
       return
     }
 
-    const regionLen = region.end - region.start
-    const pxPerBp = width / regionLen
-    const showBases = showNucleotides && pxPerBp >= NUCL_PX_THRESHOLD && refSeq != null
     const fh = showBases ? NUCL_FEAT_HEIGHT : FEAT_HEIGHT
     const rowEnds = []
     const boxes = []
     let hiddenCount = 0
-
-    // Draw reference nucleotide strip at the bottom of the track
-    if (showBases) {
-      const stripH = 14
-      const stripY = height - stripH
-      // Background for the strip
-      ctx.fillStyle = theme.canvasBg
-      ctx.fillRect(0, stripY, width, stripH)
-      ctx.strokeStyle = theme.border || '#333'
-      ctx.lineWidth = 0.5
-      ctx.beginPath(); ctx.moveTo(0, stripY); ctx.lineTo(width, stripY); ctx.stroke()
-      // Draw each base
-      const fontSize = Math.min(10, pxPerBp - 1)
-      if (fontSize >= 5) {
-        ctx.font = `bold ${fontSize}px monospace`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        for (let bp = Math.floor(region.start); bp < Math.ceil(region.end); bp++) {
-          if (refSeq && bp >= refSeq.start && bp < refSeq.end) {
-            const base = (refSeq.sequence[bp - refSeq.start] || '').toUpperCase()
-            const bx = ((bp - region.start) / regionLen) * width
-            ctx.fillStyle = BASE_COLORS[base] || '#999'
-            ctx.fillText(base, bx + pxPerBp / 2, stripY + stripH / 2)
-          }
-        }
-      }
-    }
 
     // Pre-filter region overrides for current chromosome
     const barOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
@@ -331,8 +312,23 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
     }
   }, [width, height, region, navigateTo])
 
-  // Compute per-track stats for the hovered feature
-  const trackStats = tooltip ? computeTrackStats(tooltip.feat, tracks, region?.chrom) : []
+  // Exact signal of every visible coverage/read track over the hovered feature,
+  // from the backend — summing the displayed bins depended on the zoom level.
+  const hoverFeat = tooltip?.feat || null
+  const statsKey = hoverFeat && region ? `${region.chrom}:${hoverFeat.start}-${hoverFeat.end}` : null
+  const [featStats, setFeatStats] = useState(null)   // { key, rows: [fetchSignalStats rows] | null }
+  useEffect(() => {
+    if (!hoverFeat || !region) return undefined
+    const targets = tracks.filter(t => (t.track_type === 'coverage' || t.track_type === 'reads') &&
+      t.visible !== false && (!t.targetChromosomes || t.targetChromosomes.includes(region.chrom)))
+    const controller = new AbortController()
+    setFeatStats({ key: statsKey, rows: null })
+    Promise.all(targets.map(t => fetchSignalStats(t, region.chrom, hoverFeat.start, hoverFeat.end, controller.signal)))
+      // Keep tracks with data there, and those still computing (shown as such).
+      .then(rows => { if (!controller.signal.aborted) setFeatStats({ key: statsKey, rows: rows.filter(r => r && (r.covered > 0 || !r.complete)) }) })
+    return () => controller.abort()
+  }, [statsKey, tracks])
+  const trackStats = featStats && featStats.key === statsKey && featStats.rows ? featStats.rows : []
 
   const tooltipEl = tooltip ? createPortal(
     <div style={{
@@ -379,7 +375,7 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
         <>
           <div style={{ borderTop: `1px solid ${theme.tooltipBorder}`, margin: '4px 0', paddingTop: 4 }}>
             <span style={{ color: theme.textSecondary, fontWeight: 600, fontSize: 10, textTransform: 'uppercase' }}>
-              Track totals in gene
+              Track signal in feature (sum · max)
             </span>
           </div>
           {trackStats.map(ts => (
@@ -388,7 +384,7 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
                 {ts.name}
               </span>
               <span style={{ color: theme.textPrimary, fontWeight: 600, flexShrink: 0 }}>
-                {ts.total.toFixed(1)}
+                {ts.complete ? `${formatValue(ts.sum)} · ${formatValue(Math.max(ts.max ?? 0, Math.abs(ts.min ?? 0)))}` : 'computing…'}
               </span>
             </div>
           ))}
@@ -420,29 +416,6 @@ function TooltipRow({ label, value }) {
       <span>{value}</span>
     </div>
   )
-}
-
-/** Sum cached bin values for coverage/reads tracks that overlap a feature's range */
-function computeTrackStats(feat, allTracks, chrom) {
-  if (!feat || !chrom) return []
-  const stats = []
-  for (const t of allTracks) {
-    if (t.track_type !== 'coverage' && t.track_type !== 'reads') continue
-    const cached = getCachedDataForTrack(t.id, chrom)
-    if (!cached?.bins?.length) continue
-    let total = 0
-    for (const bin of cached.bins) {
-      if (bin.end <= feat.start || bin.start >= feat.end) continue
-      // Sum absolute values (counts both forward and reverse for Tn-seq)
-      const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value || 0)
-      const rev = bin.reverse != null ? Math.abs(bin.reverse) : Math.abs(Math.min(0, bin.value || 0))
-      total += fwd + rev
-    }
-    if (total > 0) {
-      stats.push({ trackId: t.id, name: t.name, total })
-    }
-  }
-  return stats
 }
 
 function drawArrowRect(ctx, color, x, y, w, h, strand) {

@@ -3,17 +3,23 @@
  *
  * Draws vertical bars with optional forward/reverse strand split.
  * Supports auto or fixed bar width, log scale, and custom Y-axis range.
+ *
+ * Each bin is summarised by the track's windowing function — Max (default,
+ * peak-preserving) or Mean — and the auto Y axis is computed from exactly that
+ * statistic, so the scale always describes what is drawn: zooming out can no
+ * longer shrink a peak below the axis it was measured against.
  */
 import React, { useRef, useEffect } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTracks } from '../../store/TrackContext'
-import { useTrackData, computeAutoScale, getLiveTrackData, useLiveDataVersion } from '../../hooks/useTrackData'
+import { useTrackData, computeAutoScale, needsSplitLayout, useLiveDataVersion } from '../../hooks/useTrackData'
+import { binHigh, binLow, binExtremes, windowingOf, formatValue } from '../../utils/coverageStats'
 
-const log2 = Math.log2
+export const LOG_LABEL = ' log₂(x+1)'
 
 /** Smooth an array of values using a moving average window. */
-function smoothValues(values, radius) {
+export function smoothValues(values, radius) {
   if (radius <= 0 || values.length === 0) return values
   const out = new Array(values.length)
   for (let i = 0; i < values.length; i++) {
@@ -27,9 +33,16 @@ function smoothValues(values, radius) {
 }
 
 function logScale(val, max) {
-  // Maps val ∈ [0, max] → [0, 1] on a log₂ scale
+  // Maps val ∈ [0, max] → [0, 1] on a log₂(x+1) scale
   if (val <= 0 || max <= 0) return 0
   return Math.log2(val + 1) / Math.log2(max + 1)
+}
+
+/** Fraction of the axis a value fills, clamped to [0, 1] so values above a
+ *  fixed maximum stop at the max line instead of running into the label margin. */
+export function axisRatio(v, max, useLog) {
+  const r = useLog ? logScale(v, max) : v / max
+  return r > 1 ? 1 : (r > 0 ? r : 0)
 }
 
 /** Return the barColor override for a position, or null if none applies.
@@ -81,13 +94,13 @@ export default function CoverageTrack({
     if (loading && !data?.bins?.length) {
       if (!isOverlayLayer) {
         ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
-        ctx.fillText('Loading\u2026', 8, height / 2 + 4)
+        ctx.fillText('Loading…', 8, height / 2 + 4)
       }
       if (onWarning) onWarning(null)
       return
     }
     // If we have stale data, prefer drawing it over a blank "Network error"
-    // splash \u2014 the user keeps their context and the failure surfaces as a
+    // splash — the user keeps their context and the failure surfaces as a
     // non-blocking warning badge instead.
     if (error && !data?.bins?.length) {
       if (!isOverlayLayer) {
@@ -102,27 +115,16 @@ export default function CoverageTrack({
       return
     }
 
-    // hasNegative (split forward/reverse rendering) is decided from the
-    // fetched-range data so it stays stable across pans; only the scale
-    // magnitude is made dynamic below. For an overlay member it must be a
-    // GROUP-WIDE decision (any member with negatives ⇒ all layers use the
-    // split layout) so the same value maps to the same pixel height on every
-    // layer; otherwise a positive-only layer and a negative layer would use
-    // different coordinate systems and stop being comparable.
-    const hasNegative = track.overlayGroup
-      ? tracks.some(t => t.overlayGroup === track.overlayGroup && ((getLiveTrackData(t.id)?.min_value || 0) < 0))
-      : (data.min_value || 0) < 0
-    // Auto-scale source: visible region and/or a linked group when those
-    // toggles are on; otherwise the fetched-range max/min (zoom-only autoscale).
-    let maxVal = data.max_value || 0
-    let minVal = data.min_value || 0
-    // Overlay members always resolve to the shared group axis (so the layered
-    // profiles are comparable), even when neither autoScale toggle is set.
-    if (track.autoScaleVisible || track.linkScale || track.overlayGroup) {
-      const a = computeAutoScale(track, region, tracks)
-      maxVal = a.max
-      minVal = a.min
-    }
+    const bins = data.bins
+    const windowing = windowingOf(track)
+    const hi = (b) => binHigh(b, windowing)     // >= 0
+    const lo = (b) => binLow(b, windowing)      // <= 0
+    // Split layout (forward up / reverse down): decided chromosome-wide (and
+    // group-wide for overlays and linked tracks) so it doesn't flip as you pan.
+    const hasNegative = needsSplitLayout(track, region, tracks)
+    // Auto scale from the drawn statistic: the visible region (default) or the
+    // fetched range, the track's link/overlay group sharing one axis.
+    const auto = computeAutoScale(track, region, tracks)
     const regionStart = region.start
     const regionLen = region.end - region.start
     const color = track.color || '#78909c'
@@ -145,6 +147,7 @@ export default function CoverageTrack({
     // Smooth fill draws a single-colour area under the (smoothed) peak-outline
     // curve in place of the discrete bars, so suppress the bars while it's on.
     const drawBars = showBars && !fillArea
+    const wantCurve = fillArea || showOutline
     // Pre-filter overlays for current chromosome (avoids per-bin filtering)
     const regionOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
     const fwdColor = color
@@ -162,6 +165,30 @@ export default function CoverageTrack({
       return Math.max(1, binW)
     }
 
+    // Curve (peak outline / smooth fill): the drawn statistic, smoothed.
+    const xs = bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
+    const curveHi = wantCurve ? smoothValues(bins.map(b => (b.pending ? 0 : hi(b))), outlineSmooth) : null
+    const curveLo = wantCurve && hasNegative ? smoothValues(bins.map(b => (b.pending ? 0 : -lo(b))), outlineSmooth) : null
+    // With the bars hidden the smoothed curve IS the track, and it can never
+    // reach a raw maximum (smoothing spreads a peak over neighbouring bins), so
+    // fit the axis to the curve and say so — standalone auto-scaled tracks only.
+    let maxVal = auto.max
+    let minVal = auto.min
+    let smoothedAxis = false
+    if (!drawBars && wantCurve && outlineSmooth > 0 && !inOverlay && !track.linkScale) {
+      const visibleOnly = track.autoScaleVisible !== false
+      let m = 0, n = 0
+      for (let i = 0; i < bins.length; i++) {
+        if (visibleOnly && (bins[i].end <= region.start || bins[i].start >= region.end)) continue
+        if (curveHi[i] > m) m = curveHi[i]
+        if (curveLo && curveLo[i] > n) n = curveLo[i]
+      }
+      maxVal = m
+      minVal = -n
+      smoothedAxis = true
+    }
+    const axisNote = (useLog ? LOG_LABEL : '') + (smoothedAxis && userScaleMax == null ? ' smoothed' : '')
+
     if (hasNegative) {
       const margin = 12
       const midY = Math.round(height / 2)
@@ -178,37 +205,33 @@ export default function CoverageTrack({
 
       ctx.globalAlpha = barAlpha
       if (drawBars) {
-        for (const bin of data.bins) {
+        for (const bin of bins) {
+          if (bin.pending) continue
           const binMid = (bin.start + bin.end) / 2
           const override = getRegionBarColor(regionOverlays, binMid)
           const binW = ((bin.end - bin.start) / regionLen) * width
           const w = autoBarWidth(binW)
           const x = ((bin.start - regionStart) / regionLen) * width
-          const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
-          const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
+          const fwd = hi(bin)
+          const rev = lo(bin)
           if (fwd > 0) {
-            const ratio = useLog ? logScale(fwd, posMax) : fwd / posMax
+            const ratio = axisRatio(fwd, posMax, useLog)
             ctx.fillStyle = override || fwdColor; ctx.fillRect(x, midY - ratio * topH, w, ratio * topH)
           }
           if (rev < 0) {
-            const ratio = useLog ? logScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax
+            const ratio = axisRatio(-rev, negMax, useLog)
             ctx.fillStyle = override || revColor; ctx.fillRect(x, midY, w, ratio * botH)
           }
         }
       }
 
-      // Peak-outline curve and/or smooth fill share the same smoothed Y values so
+      // Peak-outline curve and/or smooth fill share the same smoothed values so
       // the filled area and the stroke on top of it line up exactly.
-      if ((fillArea || showOutline) && data.bins.length > 0) {
+      if (wantCurve && bins.length > 0) {
         const fwdStroke = outlineColor || theme.textPrimary || '#fff'
         const revStroke = outlineColor || theme.textPrimary || '#fff'
-        const fwdRaw = data.bins.map(b => { const v = b.forward != null ? b.forward : Math.max(0, b.value); return v > 0 ? (useLog ? logScale(v, posMax) : v / posMax) : 0 })
-        const revRaw = data.bins.map(b => { const v = b.reverse != null ? b.reverse : Math.min(0, b.value); return v < 0 ? (useLog ? logScale(Math.abs(v), negMax) : Math.abs(v) / negMax) : 0 })
-        const fwdSmooth = smoothValues(fwdRaw, outlineSmooth)
-        const revSmooth = smoothValues(revRaw, outlineSmooth)
-        const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
-        const fwdYs = fwdSmooth.map(r => midY - r * topH)
-        const revYs = revSmooth.map(r => midY + r * botH)
+        const fwdYs = curveHi.map(v => midY - axisRatio(v, posMax, useLog) * topH)
+        const revYs = curveLo.map(v => midY + axisRatio(v, negMax, useLog) * botH)
         if (fillArea) {
           drawFilledArea(ctx, xs, fwdYs, midY, fwdColor, outlineSmooth > 0)
           drawFilledArea(ctx, xs, revYs, midY, revColor, outlineSmooth > 0)
@@ -219,65 +242,91 @@ export default function CoverageTrack({
         }
       }
       ctx.globalAlpha = 1
+      if (!isOverlayLayer) drawPending(ctx, bins, regionStart, regionLen, width, height, theme)
 
       if (!isOverlayLayer) {
-        const scaleLabel = useLog ? ' log\u2082' : ''
-        drawScaleLabel(ctx, `+${posMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
-        drawScaleLabel(ctx, `\u2212${negMax.toFixed(1)}${scaleLabel}`, 2, height - 12, theme)
+        drawScaleLabel(ctx, `+${formatValue(posMax)}${axisNote}`, 2, 2, theme)
+        drawScaleLabel(ctx, `−${formatValue(negMax)}${axisNote}`, 2, height - 12, theme)
         drawScaleLabel(ctx, '0', 2, midY - 6, theme, true)
       }
     } else {
       const effectiveMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
       ctx.globalAlpha = barAlpha
       if (drawBars) {
-        for (const bin of data.bins) {
+        for (const bin of bins) {
+          if (bin.pending) continue
+          const h = hi(bin)
+          if (h <= 0) continue
           const binMid = (bin.start + bin.end) / 2
           const override = getRegionBarColor(regionOverlays, binMid)
           ctx.fillStyle = override || fwdColor
           const binW = ((bin.end - bin.start) / regionLen) * width
           const w = autoBarWidth(binW)
           const x = ((bin.start - regionStart) / regionLen) * width
-          const ratio = useLog ? logScale(bin.value, effectiveMax) : bin.value / effectiveMax
-          const barH = ratio * (height - 14)
+          const barH = axisRatio(h, effectiveMax, useLog) * (height - 14)
           ctx.fillRect(x, height - barH - 2, w, barH)
         }
       }
-      if ((fillArea || showOutline) && data.bins.length > 0) {
-        const rawRatios = data.bins.map(b => useLog ? logScale(b.value, effectiveMax) : b.value / effectiveMax)
-        const smoothed = smoothValues(rawRatios, outlineSmooth)
-        const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
-        const ys = smoothed.map(r => height - r * (height - 14) - 2)
+      if (wantCurve && bins.length > 0) {
+        const ys = curveHi.map(v => height - axisRatio(v, effectiveMax, useLog) * (height - 14) - 2)
         if (fillArea) drawFilledArea(ctx, xs, ys, height - 2, color, outlineSmooth > 0)
         if (showOutline) drawSmoothLine(ctx, xs, ys, outlineColor || theme.textPrimary || '#fff', outlineSmooth > 0)
       }
       ctx.globalAlpha = 1
+      if (!isOverlayLayer) drawPending(ctx, bins, regionStart, regionLen, width, height, theme)
 
       if (!isOverlayLayer) {
-        const scaleLabel = useLog ? ' log\u2082' : ''
-        drawScaleLabel(ctx, `${effectiveMax.toFixed(1)}${scaleLabel}`, 2, 2, theme)
+        drawScaleLabel(ctx, `${formatValue(effectiveMax)}${axisNote}`, 2, 2, theme)
         drawScaleLabel(ctx, '0', 2, height - 12, theme, true)
       }
     }
 
-    // Detect clipping warnings (and surface a refresh-failure as a warning
-    // when stale data is being shown, so the user knows it isn't fresh).
+    // Warnings: refresh failures, coverage still being computed, and values
+    // clipped by a fixed scale (judged on what is visible, not the overscan).
     if (onWarning) {
       const warnings = []
       if (error) {
         const msg = typeof error === 'string' ? error : JSON.stringify(error)
         warnings.push(`Update failed: ${msg} — showing last loaded data`)
       }
-      if (userScaleMax != null && maxVal > userScaleMax) {
-        warnings.push(`Bars clipped: max value ${maxVal.toFixed(1)} exceeds scale ${userScaleMax.toFixed(1)}`)
+      if (data.complete === false) {
+        warnings.push(`Computing exact coverage… ${Math.round(100 * (data.coverage_progress || 0))}% (shaded part pending)`)
       }
-      if (hasNegative && userScaleMin != null && Math.abs(minVal) > userScaleMin) {
-        warnings.push(`Negative bars clipped: min value ${Math.abs(minVal).toFixed(1)} exceeds scale ${userScaleMin.toFixed(1)}`)
+      if (data.truncated) {
+        warnings.push('Coverage incomplete at this zoom (read limit reached) — shaded part not computed; zoom in for exact values')
+      }
+      const vis = binExtremes(bins, windowing, region.start, region.end)
+      if (userScaleMax != null && vis.max > userScaleMax) {
+        warnings.push(`Bars clipped: visible max ${formatValue(vis.max)} exceeds scale ${formatValue(userScaleMax)}`)
+      }
+      if (hasNegative && userScaleMin != null && -vis.min > userScaleMin) {
+        warnings.push(`Negative bars clipped: visible min −${formatValue(-vis.min)} exceeds scale −${formatValue(userScaleMin)}`)
       }
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea, track.windowing, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
+}
+
+/** Shade runs of bins that are not computed yet (a BAM's background coverage
+ *  index still building), so missing data is never mistaken for zero. */
+export function drawPending(ctx, bins, regionStart, regionLen, width, height, theme) {
+  let runStart = null
+  for (let i = 0; i <= bins.length; i++) {
+    const p = i < bins.length && bins[i].pending
+    if (p && runStart == null) runStart = bins[i].start
+    if (!p && runStart != null) {
+      const x0 = ((runStart - regionStart) / regionLen) * width
+      const x1 = ((bins[i - 1].end - regionStart) / regionLen) * width
+      ctx.save()
+      ctx.globalAlpha = 0.12
+      ctx.fillStyle = theme.textTertiary || '#888'
+      ctx.fillRect(x0, 0, x1 - x0, height)
+      ctx.restore()
+      runStart = null
+    }
+  }
 }
 
 /** Fill the area between a (smooth or step) curve and a baseline with a flat

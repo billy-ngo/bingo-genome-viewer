@@ -8,7 +8,10 @@ import React, { useState } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
-import { getLiveTrackData, computeAutoScale } from '../../hooks/useTrackData'
+import { getLiveTrackData, computeAutoScale, needsSplitLayout } from '../../hooks/useTrackData'
+import { binHigh, binLow, windowingOf, formatValue } from '../../utils/coverageStats'
+import { rulerTicks } from '../../utils/ruler'
+import { axisRatio, smoothValues, LOG_LABEL } from '../tracks/CoverageTrack'
 import NumberInput from './NumberInput'
 
 const FORMATS = ['svg', 'png', 'jpg']
@@ -47,14 +50,14 @@ export default function ExportImage({ onClose }) {
       const trackW = exportWidth - labelW
       const rulerH = includeRuler ? 30 : 0
       // Overlay groups occupy a single row (host height), not the sum of members.
-      const units = buildExportUnits(selectedTracks)
+      const units = buildExportUnits(selectedTracks, tracks)
       const totalH = rulerH + units.reduce((sum, u) => sum + unitHeight(u), 0)
 
       if (format === 'svg') {
         const svg = buildSVG(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, tracks)
         download(svg, 'genomics-export.svg', 'image/svg+xml')
       } else {
-        const canvas = buildCanvas(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, exportWidth, includeRuler, includeLabels)
+        const canvas = buildCanvas(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, exportWidth, includeRuler, includeLabels, tracks)
         const mime = format === 'png' ? 'image/png' : 'image/jpeg'
         canvas.toBlob(blob => {
           const url = URL.createObjectURL(blob)
@@ -131,15 +134,18 @@ export default function ExportImage({ onClose }) {
 
 /** Group a flat track list into render units, mirroring the on-screen layout:
  *  standalone tracks render one row each; overlay-group members render together
- *  in one row at the position of the first member. */
-function buildExportUnits(tracks) {
+ *  in one row at the position of the first member. An overlay unit lists ALL
+ *  of its group's members in screen order (hidden ones included), so the host
+ *  — whose height and scale settings the row uses — is the same as on screen;
+ *  hidden members are skipped only when drawing layers. */
+function buildExportUnits(tracks, allTracks = tracks) {
   const seen = new Set()
   const units = []
   for (const t of tracks) {
     if (t.overlayGroup) {
       if (seen.has(t.overlayGroup)) continue
       seen.add(t.overlayGroup)
-      const members = tracks.filter(m => m.overlayGroup === t.overlayGroup)
+      const members = allTracks.filter(m => m.overlayGroup === t.overlayGroup)
       units.push({ type: 'overlay', members })
     } else {
       units.push({ type: 'single', track: t })
@@ -150,6 +156,13 @@ function buildExportUnits(tracks) {
 
 function unitHeight(u) {
   return u.type === 'overlay' ? u.members[0].height : u.track.height
+}
+
+/** Overlay members drawn as layers: shown, and with data on this chromosome
+ *  (the same rule as OverlayTrackPanel). */
+function drawnMembers(unit, chrom) {
+  return unit.members.filter(m => m.visible !== false &&
+    (!m.targetChromosomes || !chrom || m.targetChromosomes.includes(chrom)))
 }
 
 // ─── SVG Builder ────────────────────────────────────────────────────────────
@@ -167,7 +180,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
     yOff += rulerH
   }
 
-  const units = buildExportUnits(tracks)
+  const units = buildExportUnits(tracks, allTracks)
   for (const [i, unit] of units.entries()) {
     const uH = unitHeight(unit)
     // Per-unit clip sized to THIS row's box. A single shared clip rect of
@@ -192,8 +205,9 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
       // labels. Mirror the on-screen rules: skip hidden members; all layers use
       // the group host's scale/log settings and a group-wide negative layout.
       const groupHost = unit.members[0]
-      const vis = unit.members.filter(m => m.visible !== false)
-      const groupHasNeg = unit.members.some(m => (getLiveTrackData(m.id)?.min_value || 0) < 0)
+      const vis = drawnMembers(unit, region.chrom)
+      // Same rule as the screen: group-wide, from visible members on this chromosome.
+      const groupHasNeg = needsSplitLayout(groupHost, region, allTracks)
       vis.forEach((m, mi) => {
         const sm = { ...m, logScale: groupHost.logScale, scaleMax: groupHost.scaleMax, scaleMin: groupHost.scaleMin }
         const data = getLiveTrackData(m.id)
@@ -287,35 +301,14 @@ function trackCanvasDataURL(trackId) {
 function svgRuler(region, x0, y0, w, h, theme) {
   let s = `<g transform="translate(${x0},${y0})">\n`
   s += `<rect width="${w}" height="${h}" fill="${theme.canvasBg}"/>\n`
-  const { start, end } = region
-  const len = end - start
-  const targetTicks = Math.min(10, Math.floor(w / 80))
-  const rawInterval = len / targetTicks
-  const mag = Math.pow(10, Math.floor(Math.log10(rawInterval)))
-  const candidates = [1, 2, 5, 10].map(x => x * mag)
-  const interval = candidates.find(c => c >= rawInterval) || candidates[candidates.length - 1]
-  const firstTick = Math.ceil(start / interval) * interval
-
   s += `<line x1="0" y1="20" x2="${w}" y2="20" stroke="${theme.rulerTick}" stroke-width="1"/>\n`
-  for (let pos = firstTick; pos <= end; pos += interval) {
-    const px = ((pos - start) / len) * w
+  // Same ticks and labels as the on-screen ruler.
+  for (const { x: px, label } of rulerTicks(region.start, region.end, w).ticks) {
     s += `<line x1="${px}" y1="14" x2="${px}" y2="20" stroke="${theme.rulerTick}" stroke-width="1"/>\n`
-    s += `<text x="${px}" y="11" text-anchor="middle" fill="${theme.rulerLabel}" font-size="10" font-family="Arial, Helvetica, sans-serif">${formatBp(pos)}</text>\n`
+    s += `<text x="${px}" y="11" text-anchor="middle" fill="${theme.rulerLabel}" font-size="10" font-family="Arial, Helvetica, sans-serif">${esc(label)}</text>\n`
   }
   s += `</g>\n`
   return s
-}
-
-function svgSmoothValues(values, radius) {
-  if (radius <= 0) return values
-  const out = new Array(values.length)
-  for (let i = 0; i < values.length; i++) {
-    let sum = 0, count = 0
-    const lo = Math.max(0, i - radius), hi = Math.min(values.length - 1, i + radius)
-    for (let j = lo; j <= hi; j++) { sum += values[j]; count++ }
-    out[i] = sum / count
-  }
-  return out
 }
 
 function svgOutlinePath(xs, ys, stroke, smooth) {
@@ -353,35 +346,31 @@ function svgFillPath(xs, ys, baseY, fill, smooth) {
   return `<path d="${d}" fill="${fill}" stroke="none"/>\n`
 }
 
-function svgLogScale(val, max) {
-  if (val <= 0 || max <= 0) return 0
-  return Math.log2(val + 1) / Math.log2(max + 1)
-}
-
-/** Returns { bars, outline, labels } as separate SVG strings for grouping.
- *  forceHasNeg (optional): override the positive/negative layout decision — used
- *  for overlay members so the whole group shares one coordinate system. */
+/** Returns { bars, fill, outline, labels } as separate SVG strings for grouping
+ *  — the SVG twin of CoverageTrack's drawing: same windowing statistic, auto
+ *  axis, clamping, smoothing and labels, so the export matches the screen.
+ *  forceHasNeg (optional): override the split-layout decision — used for
+ *  overlay members so the whole group shares one coordinate system. */
 function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasNeg) {
   if (!data?.bins?.length) return { bars: '', fill: '', outline: '', labels: '' }
   let bars = '', fill = '', outline = '', labels = ''
-  // Match CoverageTrack: the forward/reverse split is decided from the fetched
-  // range (stable), but the auto-scale magnitude follows the "fit to visible
-  // region" / "link scales" toggles so the export matches what's on screen.
-  const hasNeg = forceHasNeg != null ? forceHasNeg : (data.min_value || 0) < 0
-  let maxVal = data.max_value || 0
-  let minVal = data.min_value || 0
-  if (track.autoScaleVisible || track.linkScale || track.overlayGroup) {
-    const a = computeAutoScale(track, region, allTracks)
-    maxVal = a.max
-    minVal = a.min
-  }
+  const windowing = windowingOf(track)
+  const hiOf = (b) => binHigh(b, windowing)
+  const loOf = (b) => binLow(b, windowing)
+  const hasNeg = forceHasNeg != null ? forceHasNeg : needsSplitLayout(track, region, allTracks)
+  const auto = computeAutoScale(track, region, allTracks)
+  let maxVal = auto.max
+  let minVal = auto.min
   const rStart = region.start, rEnd = region.end
   const regionLen = rEnd - rStart
   const color = track.color || '#78909c'
   const userScaleMax = track.scaleMax
   const userScaleMin = track.scaleMin
   const useLog = track.logScale === true
-  const visibleBins = data.bins.filter(b => b.end > rStart && b.start < rEnd)
+  const bins = data.bins
+  const visIdx = []
+  bins.forEach((b, i) => { if (b.end > rStart && b.start < rEnd) visIdx.push(i) })
+  const visibleBins = visIdx.map(i => bins[i])
 
   const barAuto = track.barAutoWidth !== false
   const barFixedPx = track.barWidth || 2
@@ -392,6 +381,25 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
   const showOutline = track.showOutline === true
   const outColor = track.outlineColor || null
   const outSmooth = track.outlineSmooth || 0
+  const wantCurve = fillArea || showOutline
+  // Smooth over ALL fetched bins (as the screen does), then keep the visible ones.
+  const curveHiAll = wantCurve ? smoothValues(bins.map(b => (b.pending ? 0 : hiOf(b))), outSmooth) : null
+  const curveLoAll = wantCurve && hasNeg ? smoothValues(bins.map(b => (b.pending ? 0 : -loOf(b))), outSmooth) : null
+  let smoothedAxis = false
+  if (!showBars && wantCurve && outSmooth > 0 && !track.overlayGroup && !track.linkScale) {
+    const visibleOnly = track.autoScaleVisible !== false
+    let m = 0, n = 0
+    bins.forEach((b, i) => {
+      if (visibleOnly && (b.end <= rStart || b.start >= rEnd)) return
+      if (curveHiAll[i] > m) m = curveHiAll[i]
+      if (curveLoAll && curveLoAll[i] > n) n = curveLoAll[i]
+    })
+    maxVal = m
+    minVal = -n
+    smoothedAxis = true
+  }
+  const lbl = (useLog ? LOG_LABEL : '') + (smoothedAxis && userScaleMax == null ? ' smoothed' : '')
+  const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
 
   // Region bar-recolor overlays (RegionColorEditor) — matches CoverageTrack.
   const regionOverlays = (track.regionOverlays || []).filter(o => o.barColor && o.chrom === region.chrom)
@@ -418,23 +426,19 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
     bars += `<line x1="0" y1="${midY}" x2="${w}" y2="${midY}" stroke="${theme.centerLine}" stroke-width="1"/>\n`
     if (showBars) {
       for (const bin of visibleBins) {
+        if (bin.pending) continue
         const x = ((bin.start - rStart) / regionLen) * w
         const bw = autoW(((bin.end - bin.start) / regionLen) * w)
-        const fwd = bin.forward != null ? bin.forward : Math.max(0, bin.value)
-        const rev = bin.reverse != null ? bin.reverse : Math.min(0, bin.value)
+        const fwd = hiOf(bin)
+        const rev = loOf(bin)
         const ov = binOverride((bin.start + bin.end) / 2)
-        if (fwd > 0) { const r = useLog ? svgLogScale(fwd, posMax) : fwd / posMax; const bh = r * topH; bars += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${ov || color}"/>\n` }
-        if (rev < 0) { const r = useLog ? svgLogScale(Math.abs(rev), negMax) : Math.abs(rev) / negMax; const bh = r * botH; bars += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${ov || adjustColorSvg(color, -40)}"/>\n` }
+        if (fwd > 0) { const bh = axisRatio(fwd, posMax, useLog) * topH; bars += `<rect x="${x}" y="${midY - bh}" width="${bw}" height="${bh}" fill="${ov || color}"/>\n` }
+        if (rev < 0) { const bh = axisRatio(-rev, negMax, useLog) * botH; bars += `<rect x="${x}" y="${midY}" width="${bw}" height="${bh}" fill="${ov || adjustColorSvg(color, -40)}"/>\n` }
       }
     }
-    if ((fillArea || showOutline) && visibleBins.length > 0) {
-      const fwdRaw = visibleBins.map(b => { const v = b.forward != null ? b.forward : Math.max(0, b.value); return v > 0 ? (useLog ? svgLogScale(v, posMax) : v / posMax) : 0 })
-      const revRaw = visibleBins.map(b => { const v = b.reverse != null ? b.reverse : Math.min(0, b.value); return v < 0 ? (useLog ? svgLogScale(Math.abs(v), negMax) : Math.abs(v) / negMax) : 0 })
-      const fwdS = svgSmoothValues(fwdRaw, outSmooth)
-      const revS = svgSmoothValues(revRaw, outSmooth)
-      const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
-      const fwdYs = fwdS.map(r => midY - r * topH)
-      const revYs = revS.map(r => midY + r * botH)
+    if (wantCurve && visibleBins.length > 0) {
+      const fwdYs = visIdx.map(i => midY - axisRatio(curveHiAll[i], posMax, useLog) * topH)
+      const revYs = visIdx.map(i => midY + axisRatio(curveLoAll[i], negMax, useLog) * botH)
       if (fillArea) {
         fill += svgFillPath(xs, fwdYs, midY, color, outSmooth > 0)
         fill += svgFillPath(xs, revYs, midY, adjustColorSvg(color, -40), outSmooth > 0)
@@ -444,31 +448,30 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
         outline += svgOutlinePath(xs, revYs, outColor || theme.textPrimary || '#fff', outSmooth > 0)
       }
     }
-    const lbl = useLog ? ' log\u2082' : ''
-    labels += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${posMax.toFixed(1)}${lbl}</text>\n`
-    labels += `<text x="2" y="${h - 2}" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">\u2212${negMax.toFixed(1)}${lbl}</text>\n`
+    labels += `<text x="2" y="12" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">+${esc(formatValue(posMax))}${esc(lbl)}</text>\n`
+    labels += `<text x="2" y="${midY + 4}" fill="${theme.textTertiary}" font-size="10" font-family="Arial, Helvetica, sans-serif">0</text>\n`
+    labels += `<text x="2" y="${h - 2}" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">−${esc(formatValue(negMax))}${esc(lbl)}</text>\n`
   } else {
     const effMax = userScaleMax != null ? userScaleMax : (maxVal || 1)
     if (showBars) {
       for (const bin of visibleBins) {
+        if (bin.pending) continue
+        const v = hiOf(bin)
+        if (v <= 0) continue
         const x = ((bin.start - rStart) / regionLen) * w
         const bw = autoW(((bin.end - bin.start) / regionLen) * w)
-        const r = useLog ? svgLogScale(bin.value, effMax) : bin.value / effMax
-        const bh = r * (h - 14)
+        const bh = axisRatio(v, effMax, useLog) * (h - 14)
         const ov = binOverride((bin.start + bin.end) / 2)
         bars += `<rect x="${x}" y="${h - bh - 2}" width="${bw}" height="${bh}" fill="${ov || color}"/>\n`
       }
     }
-    if ((fillArea || showOutline) && visibleBins.length > 0) {
-      const rawR = visibleBins.map(b => useLog ? svgLogScale(b.value, effMax) : b.value / effMax)
-      const smoothed = svgSmoothValues(rawR, outSmooth)
-      const xs = visibleBins.map(b => ((b.start + b.end) / 2 - rStart) / regionLen * w)
-      const ys = smoothed.map(r => h - r * (h - 14) - 2)
+    if (wantCurve && visibleBins.length > 0) {
+      const ys = visIdx.map(i => h - axisRatio(curveHiAll[i], effMax, useLog) * (h - 14) - 2)
       if (fillArea) fill += svgFillPath(xs, ys, h - 2, color, outSmooth > 0)
       if (showOutline) outline += svgOutlinePath(xs, ys, outColor || theme.textPrimary || '#fff', outSmooth > 0)
     }
-    const lbl = useLog ? ' log\u2082' : ''
-    labels += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${effMax.toFixed(1)}${lbl}</text>\n`
+    labels += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${esc(formatValue(effMax))}${esc(lbl)}</text>\n`
+    labels += `<text x="2" y="${h - 2}" fill="${theme.textTertiary}" font-size="10" font-family="Arial, Helvetica, sans-serif">0</text>\n`
   }
   return { bars, fill, outline, labels }
 }
@@ -565,7 +568,7 @@ function svgVariants(data, region, track, w, h, theme) {
   // Filter to only variants within the visible region
   const visibleVars = data.variants.filter(v => v.pos >= rStart && v.pos <= rEnd)
   for (const v of visibleVars) {
-    const x = ((v.pos - region.start) / regionLen) * w
+    const x = ((v.pos + 0.5 - region.start) / regionLen) * w   // base centre, as on screen
     const color = varColor(v.ref, v.alt)
     s += `<line x1="${x}" y1="${h - 4}" x2="${x}" y2="14" stroke="${color}" stroke-width="${lineW}"/>\n`
     s += `<circle cx="${x}" cy="10" r="${dotR}" fill="${color}"/>\n`
@@ -578,7 +581,7 @@ function svgVariants(data, region, track, w, h, theme) {
 
 // ─── Canvas (raster) builder ────────────────────────────────────────────────
 
-function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, fullW, includeRuler, includeLabels) {
+function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, fullW, includeRuler, includeLabels, allTracks = tracks) {
   const canvas = document.createElement('canvas')
   canvas.width = fullW; canvas.height = totalH
   const ctx = canvas.getContext('2d')
@@ -602,7 +605,7 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
     yOff += rulerH
   }
 
-  const units = buildExportUnits(tracks)
+  const units = buildExportUnits(tracks, allTracks)
   for (const unit of units) {
     const uH = unitHeight(unit)
     if (includeLabels) {
@@ -627,7 +630,7 @@ function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, full
     // order (base first); each member canvas already carries its baked-in alpha
     // and transparency, so stacking them reproduces the on-screen blend.
     const layers = unit.type === 'overlay'
-      ? unit.members.filter(m => m.visible !== false)
+      ? drawnMembers(unit, region.chrom)
       : [unit.track]
     for (const m of layers) {
       const host = document.querySelector(`[data-export-track-id="${cssEscape(m.id)}"]`)

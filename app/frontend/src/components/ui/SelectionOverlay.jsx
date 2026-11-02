@@ -15,8 +15,11 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
+import { fetchSignalStats } from '../../utils/signalStats'
+import { formatValue } from '../../utils/coverageStats'
 
 const AUTO_SHOW_MS = 3500  // tooltip dwells this long after a new selection
+const STATS_RETRY_MS = 1500  // re-ask while a BAM's coverage is still being computed
 
 export default function SelectionOverlay({ width, height, trackData, trackType, trackId, regionOverlays }) {
   const { region, selection, clearSelection } = useBrowser()
@@ -50,6 +53,28 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
     }
   }, [selection?.chrom, selection?.start, selection?.end])
 
+  // Exact signal statistics of the selection (coverage/read tracks), fetched
+  // from the backend while the tooltip is up — averaging the drawn bins gave
+  // numbers that changed with the zoom level.
+  const isSignal = trackType === 'coverage' || trackType === 'reads'
+  const statsKey = isSignal && trackId && hasSelection && (hover || autoShow)
+    ? `${trackId}|${selection.chrom}|${selection.start}|${selection.end}` : null
+  const [sig, setSig] = useState(null)   // { key, row }
+  useEffect(() => {
+    if (!statsKey) return undefined
+    const controller = new AbortController()
+    let timer = null
+    const ask = () => fetchSignalStats({ id: trackId }, selection.chrom, selection.start, selection.end, controller.signal)
+      .then(row => {
+        if (controller.signal.aborted) return
+        setSig({ key: statsKey, row })
+        if (row && !row.complete) timer = setTimeout(ask, STATS_RETRY_MS)
+      })
+    ask()
+    return () => { controller.abort(); if (timer) clearTimeout(timer) }
+  }, [statsKey])
+  const sigRow = sig && sig.key === statsKey ? sig.row : undefined   // undefined = loading
+
   const onMouseMove = useCallback((e) => {
     setMousePos({ x: e.clientX, y: e.clientY })
     setHover(true)
@@ -80,7 +105,7 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
 
   const shouldShowTip = (hover || autoShow) && selPxWidth > 0
   // Only compute stats when the tooltip is actually visible
-  const stats = shouldShowTip ? computeStats(selection, trackData, trackType) : []
+  const stats = shouldShowTip ? computeStats(selection, trackData, trackType, sigRow) : []
   const selLen = selection ? selection.end - selection.start : 0
   const tipWidth = 260
 
@@ -164,17 +189,39 @@ export default function SelectionOverlay({ width, height, trackData, trackType, 
   )
 }
 
-function computeStats(selection, trackData, trackType) {
+/** Tooltip rows. `sig` is the exact /stats row for coverage/read tracks
+ *  (undefined while loading, null if unavailable). */
+function computeStats(selection, trackData, trackType, sig) {
   const stats = []
-  if (!trackData || !selection) return stats
-  if (trackType === 'reads' && trackData.reads) {
+  if (!selection) return stats
+  if (trackType === 'reads' && trackData?.reads) {
     const reads = trackData.reads.filter(r => r.end > selection.start && r.start < selection.end)
-    stats.push({ label: 'Reads', value: reads.length.toLocaleString() })
+    // A downsampled read view holds only a sample of the reads.
+    stats.push(trackData.truncated
+      ? { label: 'Reads shown', value: `${reads.length.toLocaleString()} (downsampled view)` }
+      : { label: 'Reads', value: reads.length.toLocaleString() })
   }
-  if ((trackType === 'coverage' || trackType === 'reads') && trackData.bins) {
-    const bins = trackData.bins.filter(b => b.end > selection.start && b.start < selection.end)
-    if (bins.length > 0) { const v = bins.map(b => b.value); stats.push({ label: 'Avg cov', value: (v.reduce((a, b) => a + b, 0) / v.length).toFixed(1) }) }
+  if (trackType === 'coverage' || trackType === 'reads') {
+    const len = selection.end - selection.start
+    if (sig === undefined) {
+      stats.push({ label: 'Signal', value: 'loading…' })
+    } else if (sig && !sig.complete) {
+      stats.push({ label: 'Signal', value: 'computing exact coverage…' })
+    } else if (sig && sig.covered > 0) {
+      if (sig.strand) {
+        stats.push({ label: 'Sum', value: `+${formatValue(sig.fwdSum)} / −${formatValue(Math.abs(sig.revSum))}` })
+        stats.push({ label: 'Max', value: `+${formatValue(sig.max)} / −${formatValue(Math.abs(sig.min))}` })
+      } else {
+        stats.push({ label: 'Mean', value: formatValue(sig.mean) })
+        stats.push({ label: sig.min < 0 ? 'Max / min' : 'Max', value: sig.min < 0 ? `${formatValue(sig.max)} / ${formatValue(sig.min)}` : formatValue(sig.max) })
+        stats.push({ label: 'Sum', value: formatValue(sig.sum) })
+      }
+      if (sig.covered < len) stats.push({ label: 'Data on', value: `${sig.covered.toLocaleString()} of ${len.toLocaleString()} bp` })
+    } else if (sig) {
+      stats.push({ label: 'Signal', value: 'no data' })
+    }
   }
+  if (!trackData) return stats
   if (trackType === 'variants' && trackData.variants) stats.push({ label: 'Variants', value: trackData.variants.filter(v => v.pos >= selection.start && v.pos < selection.end).length.toLocaleString() })
   if ((trackType === 'annotations' || trackType === 'genome_annotations') && trackData.features) stats.push({ label: 'Features', value: trackData.features.filter(f => f.end > selection.start && f.start < selection.end).length.toLocaleString() })
   return stats

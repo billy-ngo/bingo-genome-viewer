@@ -2,14 +2,38 @@
  * TrackSettings.jsx — Bulk track configuration panel.
  *
  * Allows adjusting visibility, height, color, scale (linear/log),
- * Y-axis range, and bar width for selected tracks.
+ * Y-axis range, coverage bin size and windowing, and bar width for
+ * selected tracks.
  */
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { useTracks, DEFAULT_ANNOTATION_COLORS } from '../../store/TrackContext'
+import { useTracks, DEFAULT_ANNOTATION_COLORS, makeGroupId } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
+import { useBrowser } from '../../store/BrowserContext'
+import { getLiveTrackData, useLiveDataVersion, computeAutoScale } from '../../hooks/useTrackData'
+import { formatBp } from '../../utils/coverageStats'
+import { MAX_BINS } from '../../utils/fetchPlan'
 import DraggablePanel from './DraggablePanel'
 import NumberInput from './NumberInput'
+
+// Fixed coverage bin sizes offered under Bin size (bp); Auto = ~1 bin per pixel.
+const BIN_PRESETS = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+
+/** Round up to `digits` significant figures (5577 → 5580, 0.01234 → 0.0124). */
+function ceilSig(v, digits = 3) {
+  if (!(v > 0)) return 0
+  const p = Math.pow(10, Math.floor(Math.log10(v)) - (digits - 1))
+  return Number((Math.ceil(v / p - 1e-9) * p).toPrecision(digits + 1))
+}
+
+/** "now 864 bp" — the bin width currently drawn, from the tracks' live data. */
+function binNowLabel(binNow) {
+  const sizes = binNow.filter(b => !b.reads).map(b => b.eff)
+  if (!sizes.length) return binNow.length ? 'individual reads at this zoom' : ''
+  const lo = Math.min(...sizes), hi = Math.max(...sizes)
+  const fmt = v => (Number.isInteger(v) ? '' : '≈') + formatBp(v)
+  return lo === hi ? `now ${fmt(lo)}` : `now ${fmt(lo)}–${formatBp(hi)}`
+}
 
 // Ordered by hue: reds → oranges → yellows → greens → cyans → blues → purples → grays
 const ORDERED_COLORS = [
@@ -28,8 +52,11 @@ const ORDERED_COLORS = [
 
 export default function TrackSettings({ onClose }) {
   const { theme } = useTheme()
+  const { region } = useBrowser()
   const { tracks, updateTrack, updateMultipleTracks, removeTrack, createOverlayGroup, dissolveOverlayGroup } = useTracks()
   const [selected, setSelected] = useState(new Set())
+  const [customBin, setCustomBin] = useState(false)
+  useEffect(() => { setCustomBin(false) }, [selected])
 
   function toggle(id) {
     setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
@@ -61,11 +88,36 @@ export default function TrackSettings({ onClose }) {
   const commonColor = selectedTracks.length > 0 && selectedTracks.every(t => t.color === selectedTracks[0].color) ? selectedTracks[0].color : '#888888'
   const commonVisible = selectedTracks.length > 0 && selectedTracks.every(t => t.visible === selectedTracks[0].visible) ? selectedTracks[0].visible : null
   const commonArrows = selectedTracks.length > 0 && selectedTracks.every(t => t.useArrows === selectedTracks[0].useArrows) ? selectedTracks[0].useArrows : null
-  const commonScaleMax = selectedTracks.length > 0 && selectedTracks.every(t => t.scaleMax === selectedTracks[0].scaleMax) ? selectedTracks[0].scaleMax : undefined
-  const commonScaleMin = selectedTracks.length > 0 && selectedTracks.every(t => t.scaleMin === selectedTracks[0].scaleMin) ? selectedTracks[0].scaleMin : undefined
-  const isAutoScale = (commonScaleMax === null || commonScaleMax === undefined) && (commonScaleMin === null || commonScaleMin === undefined)
-  const commonAutoScaleVisible = selectedTracks.length > 0 && selectedTracks.every(t => (t.autoScaleVisible === true) === (selectedTracks[0].autoScaleVisible === true)) ? (selectedTracks[0].autoScaleVisible === true) : null
-  const commonLinkScale = selectedTracks.length > 0 && selectedTracks.every(t => (t.linkScale === true) === (selectedTracks[0].linkScale === true)) ? (selectedTracks[0].linkScale === true) : null
+  // Scale, bin size and windowing apply to coverage-like tracks (coverage and
+  // BAM reads) only; their "common" values ignore the rest of the selection.
+  // commonOf → the shared value, or null when the selected tracks differ.
+  const coverageLike = selectedTracks.filter(t => t.track_type === 'coverage' || t.track_type === 'reads')
+  const coverageLikeIds = coverageLike.map(t => t.id)
+  const commonOf = (list, f) => list.length > 0 && list.every(x => f(x) === f(list[0])) ? f(list[0]) : null
+  const commonAutoScale = commonOf(coverageLike, t => t.scaleMax == null && t.scaleMin == null)
+  const commonScaleMax = commonOf(coverageLike, t => t.scaleMax ?? null)
+  const commonScaleMin = commonOf(coverageLike, t => t.scaleMin ?? null)
+  const commonAutoScaleVisible = commonOf(coverageLike, t => t.autoScaleVisible !== false)
+  const commonLinked = commonOf(coverageLike, t => t.linkScale || false)   // shared link id, false, or null
+  const showLink = coverageLike.length > 1 || coverageLike.some(t => t.linkScale)
+  const commonWindowing = commonOf(coverageLike, t => (t.windowing === 'mean' ? 'mean' : 'max'))
+  const commonBinSize = commonOf(coverageLike, t => (t.binSize > 0 ? t.binSize : 0))   // 0 = auto
+
+  // The bins drawn right now, per selected track (re-rendered as data arrives,
+  // so the readout follows the zoom).
+  useLiveDataVersion(coverageLike.length > 0)
+  const binNow = coverageLike.map(tr => {
+    const d = getLiveTrackData(tr.id)
+    if (!d || (region && d.chrom && d.chrom !== region.chrom)) return null
+    if (d.mode === 'reads') return { reads: true }
+    const eff = d.plan?.binSize ?? d.bin_size
+    return eff > 0 ? { eff, capped: d.plan?.capped === true } : null
+  }).filter(Boolean)
+  const binCapped = binNow.some(b => b.capped)
+  const binIsCustom = customBin || (commonBinSize > 0 && !BIN_PRESETS.includes(commonBinSize))
+  const binSelectValue = commonBinSize === null && !customBin ? ''
+    : binIsCustom ? 'custom' : commonBinSize === 0 ? 'auto' : String(commonBinSize)
+
   const commonLogScale = selectedTracks.length > 0 && selectedTracks.every(t => t.logScale === selectedTracks[0].logScale) ? selectedTracks[0].logScale : null
   const commonBarAutoWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barAutoWidth === selectedTracks[0].barAutoWidth) ? selectedTracks[0].barAutoWidth : null
   const commonBarWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barWidth === selectedTracks[0].barWidth) ? selectedTracks[0].barWidth : undefined
@@ -83,7 +135,32 @@ export default function TrackSettings({ onClose }) {
   const commonShowRev = selectedTracks.length > 0 && selectedTracks.every(t => (t.showRevStrand !== false) === (selectedTracks[0].showRevStrand !== false)) ? (selectedTracks[0].showRevStrand !== false) : null
 
   function applyToSelected(updates) { updateMultipleTracks([...selected], updates) }
+  function applyToCoverage(updates) { updateMultipleTracks(coverageLikeIds, updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
+
+  /** Turn Auto off at the axis each track shows now, so the picture doesn't
+   *  jump (the old fixed 100/100 start rarely suited the data). Linked and
+   *  overlaid tracks share their group's axis, so they get the same values. */
+  function fixScaleAtCurrent() {
+    for (const tr of coverageLike) {
+      const a = computeAutoScale(tr, region, tracks)
+      const known = !!getLiveTrackData(tr.id)?.bins?.length
+      const up = a.max > 0 ? ceilSig(a.max) : (known ? 1 : 100)
+      updateTrack(tr.id, { scaleMax: up, scaleMin: a.min < 0 ? ceilSig(-a.min) : up })
+    }
+  }
+
+  function onBinSelect(v) {
+    if (v === 'auto') { setCustomBin(false); applyToCoverage({ binSize: null }) }
+    else if (v === 'custom') {
+      setCustomBin(true)
+      // Start the custom size at what is drawn now, so nothing jumps.
+      if (!(commonBinSize > 0)) {
+        const sizes = binNow.filter(b => !b.reads).map(b => b.eff)
+        applyToCoverage({ binSize: sizes.length ? Math.max(1, Math.round(Math.max(...sizes))) : 100 })
+      }
+    } else if (v) { setCustomBin(false); applyToCoverage({ binSize: parseInt(v, 10) }) }
+  }
 
   const t = theme
   const S = {
@@ -106,6 +183,8 @@ export default function TrackSettings({ onClose }) {
     footer: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderTop: `1px solid ${t.border}`, gap: 8 },
     smallBtn: { background: 'none', border: `1px solid ${t.borderAccent}`, borderRadius: 3, color: t.textSecondary, cursor: 'pointer', fontSize: 10, padding: '2px 8px' },
     cbLabel: { fontSize: 12, color: t.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 },
+    select: { background: t.inputBg, border: `1px solid ${t.borderAccent}`, borderRadius: 4, color: t.textPrimary, padding: '2px 6px', fontSize: 11, cursor: 'pointer' },
+    hint: { fontSize: 10, color: t.textTertiary, lineHeight: 1.4 },
   }
 
   return (
@@ -256,58 +335,106 @@ export default function TrackSettings({ onClose }) {
               </>
             )}
 
-            {/* 6. Y Scale (coverage tracks only) */}
+            {/* 6. Bin size (coverage/read tracks) — Auto keeps ~one bin per
+                screen pixel; a fixed size gives genome-aligned bins of that
+                width at every zoom. The readout shows the bins drawn now. */}
+            {hasCoverage && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel} title="Width of each coverage bin. Auto uses about one bin per screen pixel.">Bin size</span>
+                <select value={binSelectValue} onChange={e => onBinSelect(e.target.value)} style={S.select}>
+                  {binSelectValue === '' && <option value="" disabled>Mixed</option>}
+                  <option value="auto">Auto</option>
+                  {BIN_PRESETS.map(b => <option key={b} value={String(b)}>{formatBp(b)}</option>)}
+                  <option value="custom">Custom{'…'}</option>
+                </select>
+                <span style={{ fontSize: 11, color: t.textTertiary }}>{binNowLabel(binNow)}</span>
+              </div>
+            )}
+            {hasCoverage && binIsCustom && (
+              <div style={S.subRow}>
+                <span style={S.subLabel}>Custom</span>
+                <NumberInput value={commonBinSize > 0 ? commonBinSize : null}
+                  onCommit={v => { if (v != null) applyToCoverage({ binSize: v }) }}
+                  min={1} max={10000000} integer placeholder="bp" style={S.input} />
+                <span style={{ fontSize: 11, color: t.textTertiary }}>bp</span>
+              </div>
+            )}
+            {hasCoverage && binCapped && (
+              <div style={S.subRow}>
+                <span style={S.hint}>
+                  Coarsened at this zoom: at most {MAX_BINS.toLocaleString()} bins are drawn per view.
+                </span>
+              </div>
+            )}
+
+            {/* 7. Windowing — what a bin shows when it spans many bases */}
+            {hasCoverage && (
+              <div style={S.controlRow}>
+                <span style={S.controlLabel} title="How each bin summarises the bases it spans when zoomed out">Windowing</span>
+                <select value={commonWindowing ?? ''} onChange={e => { if (e.target.value) applyToCoverage({ windowing: e.target.value }) }} style={S.select}>
+                  {commonWindowing === null && <option value="" disabled>Mixed</option>}
+                  <option value="max">Max (keeps peak heights)</option>
+                  <option value="mean">Mean (average per bin)</option>
+                </select>
+              </div>
+            )}
+
+            {/* 8. Y Scale (coverage/read tracks). Unticking Auto fixes the axis
+                where it is now; a mixed selection shows indeterminate. */}
             {hasCoverage && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Y Scale</span>
                 <label style={S.cbLabel}>
-                  <input type="checkbox" checked={isAutoScale}
-                    onChange={e => applyToSelected(e.target.checked ? { scaleMax: null, scaleMin: null } : { scaleMax: 100, scaleMin: 100 })}
+                  <input type="checkbox" checked={commonAutoScale === true}
+                    ref={el => { if (el) el.indeterminate = commonAutoScale === null }}
+                    onChange={e => { if (e.target.checked) applyToCoverage({ scaleMax: null, scaleMin: null }); else fixScaleAtCurrent() }}
                     style={{ cursor: 'pointer' }} />
                   Auto
                 </label>
+                {commonAutoScale === null && <span style={S.hint}>mixed {'—'} tick to make all auto</span>}
               </div>
             )}
-            {/* Auto-scale to the visible region — re-fits the Y axis on every
-                pan (in addition to the default rescale on zoom). */}
-            {hasCoverage && isAutoScale && (
+            {/* Fit to the visible region (default) — off fits the whole fetched
+                range, which also includes data just off-screen. */}
+            {hasCoverage && commonAutoScale === true && (
               <div style={S.subRow}>
                 <label style={S.cbLabel}>
                   <input type="checkbox" checked={commonAutoScaleVisible === true}
                     ref={el => { if (el) el.indeterminate = commonAutoScaleVisible === null }}
-                    onChange={e => applyToSelected({ autoScaleVisible: e.target.checked })}
+                    onChange={e => applyToCoverage({ autoScaleVisible: e.target.checked })}
                     style={{ cursor: 'pointer' }} />
-                  Fit to visible region (rescales as you pan)
+                  Fit to visible region
                 </label>
+                <span style={S.hint}>(off: also fits data just off-screen)</span>
               </div>
             )}
-            {/* Link the auto scale across selected coverage/read tracks so they
-                share one (zoom- and pan-responsive) Y axis. */}
-            {hasCoverage && isAutoScale && selectedTracks.filter(t => t.track_type === 'coverage' || t.track_type === 'reads').length > 1 && (
+            {/* Link the auto scale: every tick creates a new link group, so
+                separate sets of tracks can each share their own axis. */}
+            {hasCoverage && commonAutoScale === true && showLink && (
               <div style={S.subRow}>
                 <label style={S.cbLabel}>
-                  <input type="checkbox" checked={commonLinkScale === true}
-                    ref={el => { if (el) el.indeterminate = commonLinkScale === null }}
-                    onChange={e => applyToSelected({ linkScale: e.target.checked })}
+                  <input type="checkbox" checked={!!commonLinked}
+                    ref={el => { if (el) el.indeterminate = commonLinked === null }}
+                    onChange={e => applyToCoverage({ linkScale: e.target.checked ? makeGroupId('lnk') : false })}
                     style={{ cursor: 'pointer' }} />
-                  Link scales across selected tracks
+                  {coverageLike.length > 1 ? 'Link scales across selected tracks' : 'Linked scale (untick to unlink)'}
                 </label>
               </div>
             )}
-            {hasCoverage && !isAutoScale && (
+            {hasCoverage && commonAutoScale === false && (
               <div style={S.subRow}>
                 <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>+Ymax</span>
-                <NumberInput value={commonScaleMax == null ? null : commonScaleMax}
-                  onCommit={v => { if (v != null && v > 0) applyToSelected({ scaleMax: v }) }}
-                  min={1} integer={false} placeholder="max" style={S.input} />
-                <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>{'\u2212'}Ymax</span>
-                <NumberInput value={commonScaleMin == null ? null : commonScaleMin}
-                  onCommit={v => { if (v != null && v > 0) applyToSelected({ scaleMin: v }) }}
-                  min={1} integer={false} placeholder="min" style={S.input} />
+                <NumberInput value={commonScaleMax}
+                  onCommit={v => { if (v != null) applyToCoverage({ scaleMax: v }) }}
+                  min={0} validate={v => v > 0} integer={false} placeholder="mixed" style={S.input} />
+                <span style={{ fontSize: 11, color: t.textTertiary, width: 40 }}>{'−'}Ymax</span>
+                <NumberInput value={commonScaleMin}
+                  onCommit={v => { if (v != null) applyToCoverage({ scaleMin: v }) }}
+                  min={0} validate={v => v > 0} integer={false} placeholder="mixed" style={S.input} />
               </div>
             )}
 
-            {/* 7. Log2 (coverage tracks only) */}
+            {/* 9. Log2 (coverage tracks only) */}
             {hasCoverage && (
               <div style={S.controlRow}>
                 <span style={S.controlLabel}>Log scale</span>

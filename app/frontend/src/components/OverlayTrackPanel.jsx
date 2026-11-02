@@ -15,6 +15,7 @@
 import React, { useRef, useState, useCallback, Component } from 'react'
 import { useTracks } from '../store/TrackContext'
 import { useTheme } from '../store/ThemeContext'
+import { useBrowser } from '../store/BrowserContext'
 import { useCanvasInteraction } from '../hooks/useCanvasInteraction'
 import CoverageTrack from './tracks/CoverageTrack'
 import SelectionOverlay from './ui/SelectionOverlay'
@@ -38,6 +39,7 @@ export default function OverlayTrackPanel({
   onDragStart, onDragOver, onDrop, onDragEnd,
 }) {
   const { theme } = useTheme()
+  const { region } = useBrowser()
   const { updateTrack, reorderOverlayMember, removeFromOverlayGroup, dissolveOverlayGroup } = useTracks()
   const containerRef = useRef(null)
   const nativeColorRef = useRef(null)
@@ -47,7 +49,11 @@ export default function OverlayTrackPanel({
   const host = members[0]
   const width = containerWidth - labelWidth
   const height = host.height
-  const visibleMembers = members.filter(m => m.visible !== false)
+  // A member whose file has no data for this chromosome is not drawn (a
+  // single-chromosome file would otherwise be asked for this chromosome and
+  // answer with its own one — another replicon's signal at these coordinates).
+  const onChrom = m => !m.targetChromosomes || !region?.chrom || m.targetChromosomes.includes(region.chrom)
+  const visibleMembers = members.filter(m => m.visible !== false && onChrom(m))
 
   useCanvasInteraction(containerRef)
 
@@ -132,13 +138,14 @@ export default function OverlayTrackPanel({
             the z-stack. Array order is bottom→top; we render it reversed. */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 1, overflowY: 'auto' }}>
           {members.map((m, ai) => ({ m, ai })).reverse().map(({ m, ai }) => (
-            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, opacity: m.visible === false ? 0.45 : 1 }}>
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, opacity: m.visible === false || !onChrom(m) ? 0.45 : 1 }}>
               <span
                 onClick={() => openColorPicker(m.id, m.color)}
                 title="Click to change color"
                 style={{ width: 9, height: 9, borderRadius: 2, background: m.color, cursor: 'pointer', flexShrink: 0, border: '1px solid rgba(255,255,255,0.25)' }}
               />
-              <span style={{ flex: 1, color: theme.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={m.name}>{m.name}</span>
+              <span style={{ flex: 1, color: theme.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                title={onChrom(m) ? m.name : `${m.name} — no data on ${region?.chrom}`}>{m.name}</span>
               <input
                 type="range" min={0.1} max={1} step={0.05}
                 value={m.overlayOpacity ?? 0.6}
@@ -177,7 +184,9 @@ export default function OverlayTrackPanel({
       <div style={S.trackArea} ref={containerRef} data-export-overlay-group={groupId}>
         <TrackErrorBoundary>
           {visibleMembers.length === 0 ? (
-            <div style={{ padding: 8, color: theme.textTertiary, fontSize: 11 }}>All overlay tracks hidden</div>
+            <div style={{ padding: 8, color: theme.textTertiary, fontSize: 11 }}>
+              {members.some(m => m.visible !== false) ? `No overlay tracks have data on ${region?.chrom}` : 'All overlay tracks hidden'}
+            </div>
           ) : (
             visibleMembers.map((m, i) => (
               <div

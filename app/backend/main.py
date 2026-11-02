@@ -56,7 +56,7 @@ from api.genome import router as genome_router
 from api.tracks import router as tracks_router
 from api.data import router as data_router
 
-app = FastAPI(title="BiNgo Genome Viewer API", version="2.12.1")
+app = FastAPI(title="BiNgo Genome Viewer API", version="2.14.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,8 +83,12 @@ if frontend_dist:
         return FileResponse(str(frontend_dist / "index.html"))
 
 
+# Liveness endpoints are `async def` so they run on the event loop instead of
+# FastAPI's worker-thread pool: a burst of slow data requests can otherwise
+# occupy every pool thread, delay heartbeats past the timeout, and make the
+# auto-shutdown watchdog exit while the user is still working.
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 
@@ -119,14 +123,14 @@ def _drop_tab(tab_id: str | None) -> None:
 
 
 @app.get("/api/heartbeat")
-def heartbeat(tab: str = ""):
+async def heartbeat(tab: str = ""):
     """Keep-alive ping from a browser tab."""
     _record_tab(tab)
     return {"status": "ok"}
 
 
 @app.post("/api/tab-closing")
-def tab_closing(tab: str = ""):
+async def tab_closing(tab: str = ""):
     """Sent by the frontend on pagehide/beforeunload via sendBeacon so
     the server can drop the tab immediately rather than waiting for the
     heartbeat timeout. Returns 204 because the browser may have already

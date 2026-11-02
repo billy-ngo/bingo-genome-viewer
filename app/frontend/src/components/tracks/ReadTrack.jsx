@@ -9,8 +9,10 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTracks } from '../../store/TrackContext'
-import { useTrackData, computeAutoScale } from '../../hooks/useTrackData'
-import { genomeApi } from '../../api/client'
+import { useTrackData, computeAutoScale, useLiveDataVersion } from '../../hooks/useTrackData'
+import { useReferenceSequence } from '../../hooks/useReferenceSequence'
+import { binHigh, binExtremes, windowingOf, formatValue } from '../../utils/coverageStats'
+import { axisRatio, drawPending, LOG_LABEL, smoothValues } from './CoverageTrack'
 
 const READ_DETAIL_THRESHOLD = 50_000
 const NUCL_PX_THRESHOLD = 6
@@ -38,11 +40,6 @@ function repackRows(reads) {
 const BASE_COLORS = { A: '#4caf50', T: '#f44336', C: '#2196f3', G: '#ff9800', N: '#9e9e9e' }
 const MISMATCH_BG = '#ffeb3b'
 
-function log2Scale(val, max) {
-  if (val <= 0 || max <= 0) return 0
-  return Math.log2(val + 1) / Math.log2(max + 1)
-}
-
 export default function ReadTrack({ track, width, height, onWarning, onAutoHeight }) {
   // Report 0 when there are no stacked rows (coverage mode / no reads) so the
   // panel's auto-fit reverts to the default reads height.
@@ -51,9 +48,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
   const { region } = useBrowser()
   const { theme } = useTheme()
   const { tracks } = useTracks()
-  const { data, loading } = useTrackData(track, region, width)
-  const [refSeq, setRefSeq] = useState(null)
-  const refFetchRef = useRef(null)
+  const { data, loading, error } = useTrackData(track, region, width)
   const [scrollRow, setScrollRow] = useState(0)
   const scrollDragRef = useRef(null)
 
@@ -66,6 +61,9 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
   const arrowSizePx = track.arrowSize || 4
   const showFwd = track.showFwdStrand !== false
   const showRev = track.showRevStrand !== false
+  const refSeq = useReferenceSequence(region, showNucleotides)
+  // A linked read track's axis depends on its siblings' data: redraw when it lands.
+  const liveVersion = useLiveDataVersion(!!track.linkScale)
 
   // Filter by strand and repack rows so hidden strand doesn't leave gaps
   const visibleReads = useMemo(() => {
@@ -89,24 +87,6 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     }
     prevRegionRef.current = region
   }, [region?.chrom, region?.start, region?.end])
-
-  // Fetch reference sequence when zoomed in enough
-  useEffect(() => {
-    if (!region || !showNucleotides) { setRefSeq(null); return }
-    const regionLen = region.end - region.start
-    const pxPerBp = width / regionLen
-    if (pxPerBp < NUCL_PX_THRESHOLD || regionLen > 2000) { setRefSeq(null); return }
-    if (refSeq && refSeq.chrom === region.chrom &&
-        refSeq.start <= region.start && refSeq.end >= region.end) return
-    const fetchStart = Math.max(0, region.start - 500)
-    const fetchEnd = region.end + 500
-    const key = `${region.chrom}:${fetchStart}-${fetchEnd}`
-    if (refFetchRef.current === key) return
-    refFetchRef.current = key
-    genomeApi.sequence(region.chrom, fetchStart, fetchEnd)
-      .then(res => setRefSeq({ chrom: region.chrom, start: fetchStart, end: fetchEnd, sequence: res.data.sequence }))
-      .catch(() => {})
-  }, [region?.chrom, region?.start, region?.end, width, showNucleotides])
 
   // Scroll handler for the track area (wheel in read detail mode).
   // Only takes over when Shift is held (or trackpad vertical-only gesture);
@@ -156,12 +136,10 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
 
     // ── Coverage mode (zoomed out) ──────────────────────────────
     if (data.bins) {
-      let actualMax = data.max_value || 1
-      if (track.autoScaleVisible || track.linkScale) {
-        const a = computeAutoScale(track, region, tracks)
-        actualMax = a.max || 1
-      }
-      const maxVal = track.scaleMax != null ? track.scaleMax : actualMax
+      // Depth per bin under the track's windowing function (Max by default:
+      // the deepest base in each bin), with the axis from the same statistic.
+      const windowing = windowingOf(track)
+      const hi = (b) => binHigh(b, windowing)
       const color = track.color || '#78909c'
       const barAuto = track.barAutoWidth !== false
       const barFixedPx = track.barWidth || 2
@@ -169,27 +147,42 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       const fillArea = track.fillArea === true
       // Smooth fill replaces the bars with a single-colour area under the
       // (smoothed) outline curve, so suppress the bars while it's on.
-      if (track.showBars !== false && !fillArea) {
+      const drawBars = track.showBars !== false && !fillArea
+      const wantCurve = fillArea || track.showOutline
+      const sm = track.outlineSmooth || 0
+      const curve = wantCurve ? smoothValues(data.bins.map(b => (b.pending ? 0 : hi(b))), sm) : null
+      let actualMax = computeAutoScale(track, region, tracks).max || 1
+      let smoothedAxis = false
+      if (!drawBars && wantCurve && sm > 0 && !track.linkScale) {
+        // The smoothed curve is the whole track: fit the axis to it (see CoverageTrack).
+        const visibleOnly = track.autoScaleVisible !== false
+        let m = 0
+        data.bins.forEach((b, i) => {
+          if (visibleOnly && (b.end <= region.start || b.start >= region.end)) return
+          if (curve[i] > m) m = curve[i]
+        })
+        actualMax = m || 1
+        smoothedAxis = true
+      }
+      const maxVal = track.scaleMax != null ? track.scaleMax : actualMax
+      if (drawBars) {
         ctx.fillStyle = color
         for (const bin of data.bins) {
+          if (bin.pending) continue
           const binW = ((bin.end - bin.start) / regionLen) * width
           const w = barAuto
             ? (pxPerNt >= 1 ? Math.max(1, Math.min(pxPerNt, binW)) : Math.max(1, binW))
             : Math.min(barFixedPx, binW)
           const x = ((bin.start - regionStart) / regionLen) * width
-          const ratio = useLog ? log2Scale(bin.value, maxVal) : Math.min(1, bin.value / maxVal)
-          const barH = ratio * (height - 14)
+          const barH = axisRatio(hi(bin), maxVal, useLog) * (height - 14)
           ctx.fillRect(x, height - barH - 2, w, barH)
         }
       }
-      // Smooth fill and/or peak outline share the same smoothed Y values so the
+      // Smooth fill and/or peak outline share the same smoothed values so the
       // filled area and the stroke on top of it line up exactly.
-      if ((fillArea || track.showOutline) && data.bins.length > 0) {
-        const sm = track.outlineSmooth || 0
-        const rawRatios = data.bins.map(b => useLog ? log2Scale(b.value, maxVal) : Math.min(1, b.value / maxVal))
-        const smoothed = smoothVals(rawRatios, sm)
+      if (wantCurve && data.bins.length > 0) {
         const xs = data.bins.map(b => ((b.start + b.end) / 2 - regionStart) / regionLen * width)
-        const ys = smoothed.map(r => height - r * (height - 14) - 2)
+        const ys = curve.map(v => height - axisRatio(v, maxVal, useLog) * (height - 14) - 2)
         if (fillArea) drawFilledArea(ctx, xs, ys, height - 2, color, sm > 0)
         if (track.showOutline) {
           const strokeColor = track.outlineColor || theme.textPrimary || '#fff'
@@ -201,16 +194,25 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
           ctx.strokeStyle = strokeColor; ctx.lineWidth = 1.5; ctx.stroke()
         }
       }
+      drawPending(ctx, data.bins, regionStart, regionLen, width, height, theme)
 
-      const scaleLabel = useLog ? ' log\u2082' : ''
-      drawLabel(ctx, `${maxVal.toFixed(1)}${scaleLabel}`, 2, 2, theme)
+      const scaleLabel = (useLog ? LOG_LABEL : '') + (smoothedAxis && track.scaleMax == null ? ' smoothed' : '')
+      drawLabel(ctx, `${formatValue(maxVal)}${scaleLabel}`, 2, 2, theme)
       drawLabel(ctx, '0', 2, height - 12, theme, true)
       ctx.fillStyle = '#ffb74d'; ctx.font = '10px Arial, Helvetica, sans-serif'; ctx.textAlign = 'right'
       ctx.fillText('zoom in for reads', width - 4, 10)
       if (onWarning) {
-        onWarning(track.scaleMax != null && actualMax > track.scaleMax
-          ? `Bars clipped: max value ${actualMax.toFixed(1)} exceeds scale ${track.scaleMax.toFixed(1)}`
-          : null)
+        const warnings = []
+        if (error) warnings.push(`Update failed: ${error} \u2014 showing last loaded data`)
+        if (data.complete === false) {
+          warnings.push(`Computing exact coverage\u2026 ${Math.round(100 * (data.coverage_progress || 0))}% (shaded part pending)`)
+        }
+        if (data.truncated) warnings.push('Coverage incomplete at this zoom (read limit reached) \u2014 zoom in for exact values')
+        const visMax = binExtremes(data.bins, windowing, region.start, region.end).max
+        if (track.scaleMax != null && visMax > track.scaleMax) {
+          warnings.push(`Bars clipped: visible max ${formatValue(visMax)} exceeds scale ${formatValue(track.scaleMax)}`)
+        }
+        onWarning(warnings.length ? warnings.join('\n') : null)
       }
       return
     }
@@ -219,7 +221,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     if (!data.reads?.length) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
       ctx.fillText('No reads in region', 8, height / 2 + 4)
-      if (onWarning) onWarning(null)
+      if (onWarning) onWarning(error ? `Update failed: ${error} — showing last loaded data` : null)
       reportAuto(0)
       return
     }
@@ -341,19 +343,25 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     }
 
     if (onWarning) {
-      if (hiddenReads > 0 && !needsScroll) {
-        onWarning(`${hiddenReads} read${hiddenReads > 1 ? 's' : ''} hidden \u2014 increase track height to show all`)
-      } else if (needsScroll) {
-        onWarning(`${totalRows} rows · Shift+scroll or drag scrollbar to navigate`)
-      } else {
-        onWarning(null)
+      const warnings = []
+      if (error) warnings.push(`Update failed: ${error} — showing last loaded data`)
+      if (data.truncated) {
+        // The pileup is a uniform sample across the view (never just its left part).
+        warnings.push(`Showing ${data.reads.length.toLocaleString()} of ${data.total_exact === false ? '≥' : ''}` +
+          `${(data.total || 0).toLocaleString()} reads (downsampled evenly across the view) — zoom in to see all`)
       }
+      if (hiddenReads > 0 && !needsScroll) {
+        warnings.push(`${hiddenReads} read${hiddenReads > 1 ? 's' : ''} hidden \u2014 increase track height to show all`)
+      } else if (needsScroll) {
+        warnings.push(`${totalRows} rows · Shift+scroll or drag scrollbar to navigate`)
+      }
+      onWarning(warnings.length ? warnings.join('\n') : null)
     }
-  }, [data, visibleReads, loading, width, height, region, refSeq, scrollRow, track.color, track.scaleMax, track.scaleMin,
+  }, [data, error, visibleReads, loading, width, height, region, refSeq, scrollRow, track.color, track.scaleMax, track.scaleMin,
       track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea,
-      track.showNucleotides, track.useArrows, track.logScale,
+      track.windowing, track.showNucleotides, track.useArrows, track.logScale,
       track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize,
-      track.showFwdStrand, track.showRevStrand, track.autoScaleVisible, track.linkScale, tracks, theme])
+      track.showFwdStrand, track.showRevStrand, track.autoScaleVisible, track.linkScale, liveVersion, tracks, theme])
 
   // Scrollbar drag handler
   const onMouseDown = useCallback((e) => {
@@ -468,18 +476,6 @@ function drawFilledArea(ctx, xs, ys, baseY, color, smooth) {
   ctx.closePath()
   ctx.fillStyle = color
   ctx.fill()
-}
-
-function smoothVals(values, radius) {
-  if (radius <= 0 || values.length === 0) return values
-  const out = new Array(values.length)
-  for (let i = 0; i < values.length; i++) {
-    let sum = 0, count = 0
-    const lo = Math.max(0, i - radius), hi = Math.min(values.length - 1, i + radius)
-    for (let j = lo; j <= hi; j++) { sum += values[j]; count++ }
-    out[i] = sum / count
-  }
-  return out
 }
 
 function drawLabel(ctx, text, x, y, theme, muted = false) {
