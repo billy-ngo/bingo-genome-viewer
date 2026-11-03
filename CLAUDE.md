@@ -48,6 +48,8 @@ bingoviewer/      Pip-installable package shipped to PyPI
   __init__.py     __version__
   server/         BYTE-IDENTICAL MIRROR of app/backend (source .py files)
   frontend_dist/  Pre-built React bundle (committed)
+tests/            Backend unit tests (unittest) and a synthetic BAM writer;
+                  not shipped in the wheel
 ```
 
 **Ignore the empty top-level `frontend/` directory** — it is a legacy stub with
@@ -105,10 +107,18 @@ npx vite build --outDir ../../bingoviewer/frontend_dist --emptyOutDir
 
 ## Testing
 
-There is no automated test suite. Verify changes by driving the app against the
-example files in `Test data/` (and via `bingo` in an editable install). The
-reference genome used during development is *Southlakia epibionticum* ML1
-(`Se.gb`, ~864 kbp circular bacterial genome, GenBank).
+Backend unit tests (standard-library `unittest`, synthetic BAMs from
+`tests/bam_synth.py`) run from the repository root:
+
+```bash
+python -B -m unittest discover -s tests -v
+```
+
+They also check that `bingoviewer/server` is a byte-identical copy of
+`app/backend`. There are no frontend tests: verify UI changes by driving the
+app against the example files in `Test data/` (and via `bingo` in an editable
+install). The reference genome used during development is *Southlakia
+epibionticum* ML1 (`Se.gb`, ~864 kbp circular bacterial genome, GenBank).
 
 ## Code conventions
 
@@ -129,7 +139,11 @@ threads and starve every other endpoint. `/stats` does the same under its own
 key per track and `slot` (`lock_if_current(..., gen_key=...)`), so stats and
 coverage/read requests never cancel each other; the frontend sends one slot
 per asker and page. Liveness endpoints (`/health`, `/api/heartbeat`) are
-`async` so they never wait for the thread pool.
+`async` so they never wait for the thread pool. Other `async` endpoints must
+not do slow work on the event loop: saving uploads and parsing genome files
+(`/api/genome/load`, `/load-path`, `/add-chromosomes`) go through
+`run_in_threadpool`, and a merge parses its file (`GenomeReader.open_file`)
+outside `genome_lock`, which only the quick `add_opened` holds.
 
 **Chromosome names (backend).** `AppState.resolve_track_chrom` maps a genome
 chromosome to a BAM/BigWig contig through a cached `ChromMap`
@@ -137,11 +151,19 @@ chromosome to a BAM/BigWig contig through a cached `ChromMap`
 exact-length aliases that must cover most of the unmatched sequence. The
 `.version` rule pairs only names whose base is unique on both sides
 (`BamReader._resolve_chrom` checks the BAM side), and the alias coverage test
-is judged per genome source file (`GenomeReader.chromosome_sources`). Change
-the genome only through `load_genome` / `add_chromosomes`, which bump the
+is judged per genome source file (`GenomeReader.chromosome_sources`). For a
+BAM the ChromMap is the whole answer: a chromosome it pairs with nothing
+resolves to `None` and the data endpoints answer with no data, never with
+`BamReader._resolve_chrom`'s own guess (which sees only the BAM's names).
+Change the genome only through `load_genome` / `add_chromosomes`, which bump the
 genome version that invalidates the cache. `/api/genome/add-chromosomes`
 returns each track's new `target_chromosomes` and `compatibility` under
-`tracks`, which the frontend applies with `updateTrack`. Those targets come
+`tracks`, which the frontend applies with `TrackContext.applyMerge`. It keeps
+them for tracks not in the list yet (a load response still on its way, or a
+track waiting in a compatibility dialog): `withPairing` gives a load response
+or a dialog entry the newer pairing, `commitTrack` applies it, and both
+dialogs judge their tracks again on `pairingVersion`. `applyMerge` also makes
+every track fetch its data again (`invalidateTrackData`). Those targets come
 from `AppState.merged_target_chromosomes`, which starts from where the track
 was shown (`remember_targets`, recorded by every track load and merge). It
 never uses `get_target_chromosomes`' fallbacks (closest size, every
@@ -166,7 +188,11 @@ added to *both* the defaults in `TrackContext.commitTrack`
 (`app/frontend/src/store/TrackContext.jsx`) *and* to `collectSession` and the
 restore mapping (`app/frontend/src/components/ui/SessionManager.jsx`), or it
 won't survive session export/restore. If a default changes meaning, bump
-`SESSION_VERSION` and migrate older sessions in the restore mapping.
+`SESSION_VERSION` and migrate older sessions in the restore mapping (v4 turned
+the bin-based `outlineSmooth` into `smoothBp`). A track's `visible` is the
+user's alone: per-chromosome hiding goes through `targetChromosomes`, and the
+genome annotation track is shown again only when a genome is loaded
+(`addGenomeAnnotationTrack`; merges pass `revive: false`).
 
 ### Coverage data and Y-axis scaling (keep these consistent)
 - **Bin shape.** Every coverage reader (BigWig/bedGraph/WIG, BAM) returns bins
@@ -185,20 +211,29 @@ won't survive session export/restore. If a default changes meaning, bump
   peak heights) or `'mean'`. The auto axis is `computeAutoScale` in
   `hooks/useTrackData.js`. By default it fits the visible region; overlay and
   link groups share one axis, and members that are hidden or have no data on
-  the chromosome don't count. SVG/PNG export (`components/ui/ExportImage.jsx`)
-  must reproduce the screen exactly.
+  the chromosome don't count. The peak outline / smooth fill smooths over
+  `track.smoothBp` bp on each side (`smoothRadiusBins` turns it into bins), the
+  same stretch of genome at every zoom. SVG/PNG export
+  (`components/ui/ExportImage.jsx`) must reproduce the screen exactly: a PNG/JPG
+  is the SVG drawn at the export size, so draw anything new into the SVG
+  (peak rank labels share `placePeakLabels` with `PeakRankOverlay`).
 - **Fetch planning.** Coverage requests are planned by `utils/fetchPlan.js`:
   the range is clamped to the chromosome (a fixed-size last bin stays whole),
   and a fixed `track.binSize` gives genome-aligned bins, coarsened to at most
-  5,000 per view.
+  5,000 per view. Auto bins follow the canvas width, so a resize fetches them
+  again.
 - **BAM coverage.** BAM coverage comes from `readers/bam_coverage.py`, an exact
-  per-base depth index built in a background thread at load time. It returns
+  per-base depth index built at load time in a child process (the file run as
+  a script, standard library only; a thread where no process can start), so
+  the CPU-bound scan never holds the server's interpreter lock. The child
+  streams the final depth over a pipe (`_MSG`). It returns
   `pending` bins until it is ready, always with the state its snapshot was
   taken under (`coverage()` returns `(bins, state)`), so pending bins are only
   ever reported as 'building'. A malformed or cut-off record fails the build,
   and coverage falls back to the live pileup. Don't reintroduce per-request
   read counting; the only exception is `BamReader._live_coverage`, the bounded
-  fallback for references too large for the index.
+  fallback for references too large for the index, which uses the read
+  view's raw scanner (`BamRecords.scan(..., visit=...)`), not bamnostic.
 - **BAM read view.** `BamReader.get_reads` scans the `.bai` chunks itself
   (`readers/bam_records.py`, struct + zlib) and decodes only the reads it
   returns. It reports the exact `total` and samples evenly above 5,000 reads.
