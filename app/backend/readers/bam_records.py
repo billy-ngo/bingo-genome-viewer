@@ -227,12 +227,17 @@ class BamRecords:
 
     def scan(self, tid: int, beg: int, end: int, skip_flags: int, is_current=None,
              max_records: int | None = None, max_leading: int | None = None,
-             keep: int = 0) -> RegionScan:
+             keep: int = 0, visit=None) -> RegionScan:
         """Find every alignment of reference ``tid`` overlapping [beg, end) that
         has none of ``skip_flags``. Overlap uses the true reference end
         (pos + the M/D/N/=/X lengths of the CIGAR, or of the CG tag behind a
         kSmN placeholder; pos + 1 without a CIGAR). The records themselves are
         kept while there are at most ``keep`` of them.
+
+        With ``visit``, each such alignment is handed to visit(data, off, pos)
+        (the record is data[off:off + 4 + block_size]) instead of being
+        listed; when it returns False the scan stops there, as when a budget
+        is spent.
 
         The chunks start at the first record reaching beg's 16 kb window, so
         the scan also passes over the records that start left of beg (up to
@@ -313,6 +318,14 @@ class BamRecords:
                                 elif _ref_end(data, off) <= beg:
                                     off += 4 + bs
                                     continue
+                            if visit is not None:
+                                if not visit(data, off, pos):
+                                    res.complete = False
+                                    res.scanned_to = pos
+                                    done = True
+                                    break
+                                off += 4 + bs
+                                continue
                             vofs.append((seg_coff << 16) | (off - seg_start) if off >= seg_start else head_vo)
                             starts.append(pos)
                             keys.append(crc32(data[off + 36:off + 35 + l_rn], (pos * 0x9E3779B1 ^ flag) & 0xFFFFFFFF))
@@ -428,7 +441,7 @@ def _cg_cigar(rec, p: int, rec_end: int):
     return None
 
 
-def _cigar_words(rec, off: int) -> tuple:
+def cigar_words(rec, off: int) -> tuple:
     """Raw CIGAR words of the record at rec[off:], the real CIGAR from the CG
     tag when the stored one is the kSmN placeholder of a read with more than
     65,535 operations (as htslib and bamnostic do)."""
@@ -447,7 +460,7 @@ def _ref_end(rec, off: int) -> int:
     its CIGAR, at least pos + 1 (htslib's bam_endpos)."""
     pos, = struct.unpack_from("<i", rec, off + 8)
     rlen = 0
-    for c in _cigar_words(rec, off):
+    for c in cigar_words(rec, off):
         if _REF_OPS >> (c & 0xF) & 1:
             rlen += c >> 4
     return pos + (rlen or 1)
@@ -469,6 +482,6 @@ def decode_record(rec: bytes) -> tuple:
         seq = seq[:l_seq].decode("ascii")
     else:
         seq = ""
-    cigar = [(c >> 4, _CIGAR_CHARS[c & 0xF]) for c in (_cigar_words(rec, 0) if n_cig else ())]
+    cigar = [(c >> 4, _CIGAR_CHARS[c & 0xF]) for c in (cigar_words(rec, 0) if n_cig else ())]
     rlen = sum(n for n, op in cigar if op in "MDN=X")
     return pos, pos + (rlen or 1), flag, mapq, name, cigar, seq

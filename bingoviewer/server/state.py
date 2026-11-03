@@ -237,21 +237,30 @@ class AppState:
                 self._chrom_maps[track_id] = (version, cmap)
         return cmap
 
-    def resolve_track_chrom(self, track_id: str, chrom: str) -> str:
-        """Name to ask a track's reader for when the genome shows ``chrom``.
+    def resolve_track_chrom(self, track_id: str, chrom: str) -> Optional[str]:
+        """Name to ask a track's reader for when the genome shows ``chrom``,
+        or None when the track has no data there.
 
         For BAM and BigWig tracks, the contig the track's ChromMap pairs with
         ``chrom``: by name ('chr' prefix, case and '.version' variants too), or
         by a unique exact length — e.g. a GenBank genome whose LOCUS name
         differs from the accession (CP124550.1) its BigWigs and BAMs were
-        aligned to, which otherwise drew those tracks blank. Other readers
+        aligned to, which otherwise drew those tracks blank. For a BAM the
+        ChromMap is the whole answer: a chromosome it pairs with nothing gives
+        None. BamReader's own '.version' rule sees only the BAM's names, so
+        with k141_9.0 alone in the BAM it would answer a request for the
+        genome's k141_9.1 or k141_9.2 with k141_9.0's reads. Other readers
         resolve exact / 'chr'-prefix / case / single-sequence matches
         themselves, so ``chrom`` is passed through."""
         cmap = self.chrom_map(track_id)
         if cmap is None:
             return chrom
         name = cmap.names.get(chrom)
-        return name if name is not None else cmap.aliases.get(chrom, chrom)
+        if name is None:
+            name = cmap.aliases.get(chrom)
+        if name is None and (self.tracks.get(track_id) or {}).get("file_format") != "bam":
+            name = chrom
+        return name
 
     def _genome_changed(self):
         """Forget what was computed against the previous genome (caller holds
@@ -291,18 +300,55 @@ class AppState:
         }
         self.readers[track_id] = None  # served directly from genome reader
 
-    def add_chromosomes(self, file_path: str):
-        """Merge another file's chromosomes into the loaded genome."""
-        # genome_lock: concurrent /sequence and /features requests can't read
-        # mid-mutation while sub-readers are being appended.
-        with self._genome_lock:
-            self.genome.add_chromosomes_from(file_path)
-            with self._state_lock:
-                self._genome_changed()
-                # A GenBank file merged into a FASTA genome brings features:
-                # the client then shows the annotation track, so serve it.
-                if self.genome.is_annotated():
-                    self._add_genome_annotations_track()
+    @staticmethod
+    def open_genome_file(file_path: str) -> tuple:
+        """Parse a genome file for add_chromosomes (slow; takes no lock)."""
+        from readers.genome_reader import GenomeReader
+        return GenomeReader.open_file(file_path)
+
+    def add_chromosomes(self, file_path: str, opened: Optional[tuple] = None, genome=None):
+        """Merge another file's chromosomes into the loaded genome: ``genome``
+        (default: the one loaded now), refused if it has been replaced
+        meanwhile. ``opened`` is the file as open_genome_file parsed it; when
+        it is not given the file is parsed here. Either way the parse runs
+        outside genome_lock, which only the quick merge itself holds, so
+        /sequence and /features requests are not held up for it."""
+        from readers.genome_reader import GenomeReader
+        genome = self.genome if genome is None else genome
+        if opened is None:
+            opened = GenomeReader.open_file(file_path)
+        merged = False
+        try:
+            # genome_lock: concurrent /sequence and /features requests can't
+            # read mid-mutation while sub-readers are being appended.
+            with self._genome_lock:
+                if genome is None or self.genome is not genome:
+                    raise ValueError("The genome was replaced while chromosomes were being added")
+                genome.add_opened(opened)
+                merged = True
+                with self._state_lock:
+                    self._genome_changed()
+                    # A GenBank file merged into a FASTA genome brings features:
+                    # the client then shows the annotation track, so serve it.
+                    if genome.is_annotated():
+                        self._add_genome_annotations_track()
+        except Exception:
+            if not merged:
+                GenomeReader.discard(opened)  # (add_opened closes a file it refuses)
+            raise
+
+    def merge_file(self, file_path: str, opened: tuple, genome) -> tuple:
+        """merge_snapshot, then add_chromosomes(file_path, opened, genome),
+        back to back; returns the snapshot. ``opened`` is closed if the merge
+        does not happen."""
+        from readers.genome_reader import GenomeReader
+        try:
+            snapshot = self.merge_snapshot()
+        except Exception:
+            GenomeReader.discard(opened)
+            raise
+        self.add_chromosomes(file_path, opened, genome)
+        return snapshot
 
     def load_track(self, file_path: str, name: str, index_path: str = None) -> dict:
         # Detect compound extensions (.vcf.gz / .wig.gz / .bedgraph.gz / .bdg.gz)

@@ -69,8 +69,10 @@ async def load_genome(file: UploadFile = File(...)):
     dest = _unique_dest(file.filename)
     loaded = False
     try:
-        _save_upload(file, dest)
-        app_state.load_genome(str(dest))
+        # In the worker pool: saving and parsing a large genome would stall
+        # the event loop, and every request with it (heartbeats included).
+        await run_in_threadpool(_save_upload, file, dest)
+        await run_in_threadpool(app_state.load_genome, str(dest))
         loaded = True
         genome = app_state.genome
         return {
@@ -137,13 +139,18 @@ async def add_chromosomes(file: UploadFile = File(...)):
     dest = _unique_dest(file.filename)
     merged = False
     try:
-        _save_upload(file, dest)
-        # In the worker pool, as the track load endpoints do: against a draft
-        # assembly each track's pairing walks thousands of chromosomes.
-        snapshot = await run_in_threadpool(app_state.merge_snapshot)
-        # Merges under genome_lock (concurrent /sequence and /features requests
-        # can't read mid-mutation) and invalidates the tracks' chromosome maps.
-        app_state.add_chromosomes(str(dest))
+        # Everything slow runs in the worker pool, so the event loop (and every
+        # request with it, heartbeats included) never waits for it: saving
+        # and parsing the file, and the tracks' pairings, which against a draft
+        # assembly walk thousands of chromosomes. The file is parsed before the
+        # snapshot, so the merge right after it is quick.
+        genome = app_state.genome
+        await run_in_threadpool(_save_upload, file, dest)
+        opened = await run_in_threadpool(app_state.open_genome_file, str(dest))
+        # The snapshot, then the merge under genome_lock (concurrent /sequence
+        # and /features requests can't read mid-mutation), which invalidates
+        # the tracks' chromosome maps.
+        snapshot = await run_in_threadpool(app_state.merge_file, str(dest), opened, genome)
         merged = True
         genome = app_state.genome
         tracks = await run_in_threadpool(_track_pairings, snapshot)
@@ -191,7 +198,7 @@ async def load_genome_from_path(path: str = Form(...)):
     except OSError as e:
         raise HTTPException(status_code=400, detail=f"Cannot read file: {resolved.name}. {e}")
     try:
-        app_state.load_genome(str(resolved))
+        await run_in_threadpool(app_state.load_genome, str(resolved))
         genome = app_state.genome
         return {
             "name": genome.name,

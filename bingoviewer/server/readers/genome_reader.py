@@ -29,8 +29,12 @@ class GenomeReader:
             except Exception:
                 pass
 
-    def _add_file(self, file_path: str):
-        fmt = self._detect_format(file_path)
+    @classmethod
+    def open_file(cls, file_path: str) -> tuple:
+        """Parse a genome file — the slow part of loading or merging one, which
+        needs no lock: (format, reader, sequence names, label). Raises
+        ValueError for a file with no sequences."""
+        fmt = cls._detect_format(file_path)
         if fmt == "genbank":
             from readers.genbank_reader import GenBankReader
             reader = GenBankReader(file_path)
@@ -42,9 +46,19 @@ class GenomeReader:
         label = Path(file_path).name
         if not names:
             # e.g. a FASTA file named .gb, whose GenBank parse finds nothing
-            self._close(reader)
+            cls._close(reader)
             raise ValueError(f"No sequences found in {label}"
                              + (": is it a GenBank file?" if fmt == "genbank" else ""))
+        return fmt, reader, names, label
+
+    def _add_file(self, file_path: str):
+        self.add_opened(self.open_file(file_path))
+
+    def add_opened(self, opened: tuple):
+        """Merge a file parsed by open_file into this genome (quick). Names
+        already in the genome stay with the file they came from; a file that
+        adds none raises ValueError, and its reader is closed."""
+        fmt, reader, names, label = opened
         if self._sub_readers and all(n in self._chrom_index for n in names):
             # A merged file that adds nothing, e.g. the same file twice.
             self._close(reader)
@@ -63,6 +77,11 @@ class GenomeReader:
         already in the genome stay with the file they came from; a file that
         adds none, or has no sequences, raises ValueError."""
         self._add_file(file_path)
+
+    @classmethod
+    def discard(cls, opened: tuple):
+        """Close the reader of a file parsed by open_file but never merged."""
+        cls._close(opened[1])
 
     def _served(self, idx: int, reader) -> list[str]:
         """The names of the GenBank sub-reader ``idx``'s records that the
