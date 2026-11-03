@@ -207,13 +207,21 @@ def get_reads(track_id: str, chrom: str, start: int, end: int):
         truncated = bool(res.get("truncated"))
         total = res.get("total", len(reads))
         total_exact = bool(res.get("total_exact", True))
+        scanned_to = res.get("scanned_to")
     else:
-        reads, truncated, total, total_exact = res, False, len(res), True
+        reads, truncated, total, total_exact, scanned_to = res, False, len(res), True, None
 
     # "total" counts every read overlapping the window; "reads" may be a
-    # uniform sample of them (truncated=True).
-    return {"chrom": chrom, "start": start, "end": end, "reads": reads,
-            "total": total, "total_exact": total_exact, "truncated": truncated}
+    # uniform sample of them (truncated=True). A scan stopped by a record
+    # budget (total_exact=False: "total" is a lower bound) also says how far
+    # it got: every overlapping read starting before "scanned_to" was found,
+    # so only [start, scanned_to) is fully scanned (none of the window when
+    # scanned_to <= start). Absent when the scan completed.
+    out = {"chrom": chrom, "start": start, "end": end, "reads": reads,
+           "total": total, "total_exact": total_exact, "truncated": truncated}
+    if scanned_to is not None:
+        out["scanned_to"] = scanned_to
+    return out
 
 
 @router.get("/{track_id}/variants")
