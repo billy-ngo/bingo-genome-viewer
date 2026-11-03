@@ -284,7 +284,9 @@ export function useTrackData(track, region, canvasWidth) {
 
     if (withinOverscan) {
       const zoomRatio = viewLen / (f.viewLen || viewLen)
-      if (zoomRatio > 0.8 && zoomRatio < 1.2) {
+      // Reads are fetched for exactly the view, with its counts (total, read
+      // limit): a small zoom-in still needs them for the new view.
+      if (zoomRatio > 0.8 && zoomRatio < 1.2 && (!readMode || (start === f.start && end === f.end))) {
         // Same zoom, within the fetched range — nothing to load. A newer fetch
         // still pending (e.g. for a pan that was abandoned by panning back) is
         // for a view we no longer show: cancel it so it can't overwrite this

@@ -198,7 +198,7 @@ function incompleteDataNotes(tracks, allTracks, chrom) {
       } else if (d.reads && d.total_exact === false) {
         const n = d.reads.length
         const sample = n < (d.total || 0)
-          ? `; the ${n.toLocaleString()} reads shown are an even sample of the ${d.total.toLocaleString()} found`
+          ? `; the pileup is an even sample of ${n.toLocaleString()} of the ${d.total.toLocaleString()} reads found`
           : ''
         notes.push(`${t.name}: read limit reached — the shaded part of the pileup was not scanned${sample}`)
       } else if (d.reads && d.truncated) {

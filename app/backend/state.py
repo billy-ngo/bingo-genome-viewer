@@ -160,6 +160,11 @@ class AppState:
     def genome_lock(self) -> threading.Lock:
         return self._genome_lock
 
+    @property
+    def genome_version(self) -> int:
+        """Bumped whenever the genome is replaced or extended (remember_targets)."""
+        return self._genome_version
+
     def next_request(self, key: str) -> int:
         """Register a new data request under ``key`` and return its generation.
         Coverage/read requests use their track id; /stats requests use one key
@@ -585,22 +590,35 @@ class AppState:
         return all_names
 
     # ── Target chromosomes across add_chromosomes ────────────────
-    def remember_targets(self, track_id: str, targets: list) -> None:
+    def remember_targets(self, track_id: str, targets: list,
+                         version: Optional[int] = None) -> bool:
         """Record the target chromosomes a data track was given (by its load or
         by add-chromosomes), i.e. where the client shows it. A merge starts
-        from them (merged_target_chromosomes)."""
+        from them (merged_target_chromosomes). With ``version``, the
+        genome_version they were computed against, they are recorded only if
+        the genome has not changed since; False asks the caller to compute
+        them again (a track load that a merge overtook)."""
         with self._state_lock:
+            if version is not None and version != self._genome_version:
+                return False
             if track_id in self.tracks:
                 self._targets[track_id] = list(targets)
+            return True
+
+    def remembered_tracks(self) -> set:
+        """The data tracks given target chromosomes since the genome was loaded."""
+        with self._state_lock:
+            return {t for t in self._targets if t in self.tracks}
 
     def merge_snapshot(self) -> tuple:
         """What merged_target_chromosomes needs from before a merge: the
-        genome's chromosome names, and per data track (by id) the chromosomes
-        it is shown on and those its ChromMap pairs (None when it has no map).
-        A track given no targets since the genome was replaced (loaded against
-        the previous one) is left out: where the client shows it is unknown."""
+        genome's chromosome names, per data track (by id) the chromosomes it
+        is shown on and those its ChromMap pairs (None when it has no map),
+        and the ids of the tracks given targets so far. A track given no
+        targets since the genome was replaced (loaded against the previous
+        one) is left out: where the client shows it is unknown."""
         if self.genome is None:
-            return set(), {}
+            return set(), {}, set()
         old_names = {c["name"] for c in self.genome.chromosomes}
         with self._state_lock:
             given = {t: list(s) for t, s in self._targets.items() if t in self.tracks}
@@ -611,7 +629,7 @@ class AppState:
             except Exception:
                 continue
             per_track[track_id] = (shown, None if cmap is None else set(cmap.names) | set(cmap.aliases))
-        return old_names, per_track
+        return old_names, per_track, set(given)
 
     def merged_target_chromosomes(self, track_id: str, shown: list, old_names: set,
                                   mapped_before: Optional[set]) -> list:

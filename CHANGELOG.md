@@ -100,7 +100,8 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   - panning back into an already loaded range during a slow request no longer
     leaves half the view blank;
   - a BAM track shows reads in every view of 50 kb or less. A small zoom in from
-    the coverage view used to leave it on coverage.
+    the coverage view used to leave it on coverage, and a small zoom within
+    the read view kept the previous view's reads and counts.
 - **Fixed Y scale:**
   - values below 1 are accepted;
   - unticking Auto keeps each track's current axis instead of jumping to 100.
@@ -133,6 +134,16 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
     there, and a notice says so. An example is an added accession taking over
     from a GenBank LOCUS name.
   - A track left without any matching chromosome is named in a warning.
+    Starting another merge, from the Load Files panel or by dropping a file on
+    the page, clears the notices and warnings of the previous one.
+  - A track that finishes loading while chromosomes are being added is paired
+    with the merged genome. When genome and track files are dropped together,
+    the Add as Chromosome prompt waits until the tracks are loaded.
+  - A chromosome name already in the genome is listed once. The sequence that
+    a merged file has under that name is ignored, as it always was (the first
+    file's is the one shown), and a file that adds no new chromosome, such as
+    the same file twice, is refused with a message. The chromosome menu used to
+    list such a name twice.
   - Tracks loaded by file path get the same compatibility check as uploads.
 
 ### Fixed — nucleotide strip
@@ -174,7 +185,7 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
 - `POST /api/genome/add-chromosomes` also returns `tracks`. For each loaded
   track it gives the target chromosomes after the merge (where the track was
   shown, plus the added chromosomes it pairs with) and its compatibility with
-  the merged genome.
+  the merged genome. It answers 400 for a file that adds no new chromosome.
 - Sessions are saved as version 3, which adds bin size, windowing and
   link-group ids. Older sessions restore with fit-to-visible auto scale on.
 - The health and heartbeat endpoints answer even while track requests are

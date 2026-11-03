@@ -25,24 +25,33 @@ class GenomeReader:
         if fmt == "genbank":
             from readers.genbank_reader import GenBankReader
             reader = GenBankReader(file_path)
+            names = [info["name"] for info in reader.chromosomes]
         else:
             from pyfaidx import Fasta
             reader = Fasta(file_path)
+            names = list(reader.keys())
+        if self._sub_readers and all(n in self._chrom_index for n in names):
+            # A merged file that adds nothing, e.g. the same file twice.
+            close = getattr(reader, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    pass
+            raise ValueError(f"No new chromosomes in {Path(file_path).name}: "
+                             "every sequence in it is already in the genome")
         idx = len(self._sub_readers)
         self._sub_readers.append((fmt, reader))
         # Build explicit chromosome→reader index
         # Skip duplicates: first file's chromosome takes precedence
-        if fmt == "genbank":
-            for info in reader.chromosomes:
-                if info["name"] not in self._chrom_index:
-                    self._chrom_index[info["name"]] = idx
-        else:
-            for key in reader.keys():
-                if key not in self._chrom_index:
-                    self._chrom_index[key] = idx
+        for name in names:
+            if name not in self._chrom_index:
+                self._chrom_index[name] = idx
 
     def add_chromosomes_from(self, file_path: str):
-        """Load another file and merge its chromosomes into this genome."""
+        """Load another file and merge its chromosomes into this genome. Names
+        already in the genome stay with the file they came from; a file that
+        adds none raises ValueError."""
         self._add_file(file_path)
 
     @property
@@ -59,14 +68,18 @@ class GenomeReader:
 
     @property
     def chromosomes(self) -> list[dict]:
-        result = []
-        for fmt, reader in self._sub_readers:
+        """Each chromosome once, in file order. A name found in several files
+        is listed from the first, whose sequence is the one served."""
+        result, seen = [], set()
+        for idx, (fmt, reader) in enumerate(self._sub_readers):
             if fmt == "genbank":
-                result.extend(reader.chromosomes)
+                infos = reader.chromosomes
             else:
-                result.extend(
-                    [{"name": k, "length": len(reader[k])} for k in reader.keys()]
-                )
+                infos = [{"name": k, "length": len(reader[k])} for k in reader.keys()]
+            for info in infos:
+                if info["name"] not in seen and self._chrom_index.get(info["name"]) == idx:
+                    seen.add(info["name"])
+                    result.append(info)
         return result
 
     def get_sequence(self, chrom: str, start: int, end: int) -> str:
@@ -97,10 +110,11 @@ class GenomeReader:
     def annotated_chromosomes(self) -> list[str]:
         """Return chromosome names that carry annotation features (GenBank)."""
         result = []
-        for fmt, reader in self._sub_readers:
+        for idx, (fmt, reader) in enumerate(self._sub_readers):
             if fmt == "genbank":
-                result.extend(c["name"] for c in reader.chromosomes)
-        return result
+                result.extend(c["name"] for c in reader.chromosomes
+                              if self._chrom_index.get(c["name"]) == idx)
+        return list(dict.fromkeys(result))
 
     @property
     def feature_types(self) -> list[str]:

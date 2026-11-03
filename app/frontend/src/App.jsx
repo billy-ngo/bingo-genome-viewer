@@ -105,11 +105,25 @@ function BrowserApp() {
   const [dropTrackMismatch, setDropTrackMismatch] = useState(null) // { tracks: [...] }
   const [dropNotices, setDropNotices] = useState([]) // [{ text, title, tone }] — shown above the drop toast
   const dropNoticeTimer = useRef(null)
+  const dropStatusTimer = useRef(null)
+  const [mergeSignal, setMergeSignal] = useState(0) // merges started from a drop, for FileLoader
   const appDragCounter = useRef(0)
 
   useAutoSave(labelWidth)
 
-  useEffect(() => () => { if (dropNoticeTimer.current) clearTimeout(dropNoticeTimer.current) }, [])
+  useEffect(() => () => {
+    if (dropNoticeTimer.current) clearTimeout(dropNoticeTimer.current)
+    if (dropStatusTimer.current) clearTimeout(dropStatusTimer.current)
+  }, [])
+
+  /** Show a drop-toast message (null hides it), for `ms` when given. It
+   *  replaces the previous message along with its timer, so an earlier
+   *  message's timer never cuts a later one short. */
+  const flashDropStatus = useCallback((status, ms) => {
+    if (dropStatusTimer.current) { clearTimeout(dropStatusTimer.current); dropStatusTimer.current = null }
+    setDropStatus(status)
+    if (status && ms) dropStatusTimer.current = setTimeout(() => { dropStatusTimer.current = null; setDropStatus(null) }, ms)
+  }, [])
 
   /** Show notices above the drop toast: length-only chromosome pairings
    *  (lengthPairingNotice) and, with tone 'warning', tracks a merge left
@@ -122,6 +136,13 @@ function BrowserApp() {
     setDropNotices(list)
     const ms = list.some(n => n.tone === 'warning') ? 10000 : PAIRING_NOTICE_MS
     dropNoticeTimer.current = setTimeout(() => { dropNoticeTimer.current = null; setDropNotices([]) }, ms)
+  }, [])
+
+  /** A merge is starting, here or in FileLoader: a pairing notice still up
+   *  from a track load may no longer hold. */
+  const clearDropNotices = useCallback(() => {
+    if (dropNoticeTimer.current) { clearTimeout(dropNoticeTimer.current); dropNoticeTimer.current = null }
+    setDropNotices([])
   }, [])
 
   // Heartbeat — keeps the backend server alive while this tab is open.
@@ -257,23 +278,27 @@ function BrowserApp() {
     if (largeBam.length || largeIdx.length) {
       const names = [...largeBam, ...largeIdx].map(f => f.name).join(', ')
       const sizeMb = [...largeBam, ...largeIdx].reduce((s, f) => s + f.size, 0) / (1024 * 1024)
-      setDropStatus({
+      flashDropStatus({
         error: `${names} (${sizeMb.toFixed(0)} MB) — large files load faster via the Path button. ` +
           `Click \u{1F4C2} Path in the toolbar and paste the file path instead of uploading.`
-      })
-      setTimeout(() => setDropStatus(null), 10000)
+      }, 10000)
       return
     }
 
     if (unknownFiles.length && !genomeFiles.length && !trackFiles.length && !indexFiles.length) {
-      setDropStatus({ error: `Unsupported file${unknownFiles.length > 1 ? 's' : ''}: ${unknownFiles.map(f => f.name).join(', ')}` })
-      setTimeout(() => setDropStatus(null), 4000)
+      flashDropStatus({ error: `Unsupported file${unknownFiles.length > 1 ? 's' : ''}: ${unknownFiles.map(f => f.name).join(', ')}` }, 4000)
       return
     }
 
     try {
+      // Genome files dropped while a genome is loaded: the user is asked what
+      // to do with them once the tracks dropped with them are loaded, as in
+      // FileLoader. A merge pairs only the tracks already added, so a track
+      // still uploading, or waiting in the compatibility dialog (drawn over
+      // the prompt), would keep its targets from before the merge.
+      const promptFiles = genomeFiles.length > 0 && genome ? genomeFiles : null
       if (genomeFiles.length > 0 && !genome) {
-        setDropStatus({ msg: `Loading genome: ${genomeFiles[0].name}...` })
+        flashDropStatus({ msg: `Loading genome: ${genomeFiles[0].name}...` })
         const res = await genomeApi.load(genomeFiles[0])
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
@@ -290,18 +315,14 @@ function BrowserApp() {
             featureTypes: info.feature_types || [],
           })
         }
-      } else if (genomeFiles.length > 0 && genome) {
-        // Genome already loaded — prompt user
-        setDropPrompt({ files: genomeFiles })
       }
 
       if (trackFiles.length > 0) {
         if (!genome && genomeFiles.length === 0) {
-          setDropStatus({ error: 'Load a genome file first (.fasta, .gb, .genbank)' })
-          setTimeout(() => setDropStatus(null), 4000)
+          flashDropStatus({ error: 'Load a genome file first (.fasta, .gb, .genbank)' }, 4000)
           return
         }
-        setDropStatus({ msg: `Loading ${trackFiles.length} track${trackFiles.length > 1 ? 's' : ''}...` })
+        flashDropStatus({ msg: `Loading ${trackFiles.length} track${trackFiles.length > 1 ? 's' : ''}...` })
         const compatible = []
         const incompatible = []
         const errors = []
@@ -316,37 +337,39 @@ function BrowserApp() {
             }
           } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
         }
+        if (promptFiles) setDropPrompt({ files: promptFiles })
         showDropNotices([lengthPairingNotice(compatible)])
         if (errors.length) {
-          setDropStatus({ error: errors.join('; ') })
-          setTimeout(() => setDropStatus(null), 5000)
+          flashDropStatus({ error: errors.join('; ') }, 5000)
           return
         }
         if (incompatible.length > 0) {
           setDropTrackMismatch({ tracks: incompatible })
         }
+      } else if (promptFiles) {
+        setDropPrompt({ files: promptFiles })
       }
 
       if (unknownFiles.length) {
-        setDropStatus({ error: `Skipped unsupported: ${unknownFiles.map(f => f.name).join(', ')}` })
-        setTimeout(() => setDropStatus(null), 4000)
+        flashDropStatus({ error: `Skipped unsupported: ${unknownFiles.map(f => f.name).join(', ')}` }, 4000)
+      } else if (promptFiles && !trackFiles.length) {
+        flashDropStatus(null)            // nothing is loaded until the prompt is answered
       } else {
-        setDropStatus({ msg: 'Files loaded' })
-        setTimeout(() => setDropStatus(null), 2000)
+        flashDropStatus({ msg: 'Files loaded' }, 2000)
       }
     } catch (err) {
-      setDropStatus({ error: err.message || 'Drop failed' })
-      setTimeout(() => setDropStatus(null), 5000)
+      flashDropStatus({ error: err.message || 'Drop failed' }, 5000)
     }
-  }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, showDropNotices])
+  }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, showDropNotices, flashDropStatus])
 
   const onDropPromptChromosome = useCallback(async () => {
     if (!dropPrompt) return
     const files = dropPrompt.files
     setDropPrompt(null)
-    // A pairing notice still up from a track load may no longer hold.
-    if (dropNoticeTimer.current) { clearTimeout(dropNoticeTimer.current); dropNoticeTimer.current = null }
-    setDropNotices([])
+    // A pairing notice still up from a track load, here or in FileLoader,
+    // may no longer hold.
+    clearDropNotices()
+    setMergeSignal(s => s + 1)
     try {
       const errors = []
       // The loaded tracks and chromosomes before the merge, to tell what it changed.
@@ -354,7 +377,7 @@ function BrowserApp() {
       const oldChroms = new Set((genome?.chromosomes || []).map(c => c.name))
       let pairings = null
       for (const file of files) {
-        setDropStatus({ msg: `Adding chromosomes from ${file.name}...` })
+        flashDropStatus({ msg: `Adding chromosomes from ${file.name}...` })
         try {
           const res = await genomeApi.addChromosomes(file)
           const info = res.data
@@ -381,24 +404,21 @@ function BrowserApp() {
       const warning = lostPairingWarning(lost)
       showDropNotices([warning && { text: warning, tone: 'warning' }, movedTracksNotice(moved), lengthPairingNotice(paired)])
       if (errors.length) {
-        setDropStatus({ error: errors.join('; ') })
-        setTimeout(() => setDropStatus(null), 5000)
+        flashDropStatus({ error: errors.join('; ') }, 5000)
       } else {
-        setDropStatus({ msg: `Added chromosomes from ${files.length} file${files.length > 1 ? 's' : ''}` })
-        setTimeout(() => setDropStatus(null), 3000)
+        flashDropStatus({ msg: `Added chromosomes from ${files.length} file${files.length > 1 ? 's' : ''}` }, 3000)
       }
     } catch (err) {
-      setDropStatus({ error: err.message || 'Failed to add chromosomes' })
-      setTimeout(() => setDropStatus(null), 5000)
+      flashDropStatus({ error: err.message || 'Failed to add chromosomes' }, 5000)
     }
-  }, [dropPrompt, tracks, genome, setGenome, updateTrack, addGenomeAnnotationTrack, showDropNotices])
+  }, [dropPrompt, tracks, genome, setGenome, updateTrack, addGenomeAnnotationTrack, showDropNotices, clearDropNotices, flashDropStatus])
 
   const onDropPromptTrack = useCallback(async () => {
     if (!dropPrompt) return
     const files = dropPrompt.files
     setDropPrompt(null)
     try {
-      setDropStatus({ msg: `Loading ${files.length} track${files.length > 1 ? 's' : ''}...` })
+      flashDropStatus({ msg: `Loading ${files.length} track${files.length > 1 ? 's' : ''}...` })
       const errors = []
       const incompatible = []
       const compatible = []
@@ -414,20 +434,17 @@ function BrowserApp() {
       }
       showDropNotices([lengthPairingNotice(compatible)])
       if (errors.length) {
-        setDropStatus({ error: errors.join('; ') })
-        setTimeout(() => setDropStatus(null), 5000)
+        flashDropStatus({ error: errors.join('; ') }, 5000)
       } else if (incompatible.length) {
         setDropTrackMismatch({ tracks: incompatible })
-        setDropStatus(null)
+        flashDropStatus(null)
       } else {
-        setDropStatus({ msg: `Added ${files.length} track${files.length > 1 ? 's' : ''}` })
-        setTimeout(() => setDropStatus(null), 3000)
+        flashDropStatus({ msg: `Added ${files.length} track${files.length > 1 ? 's' : ''}` }, 3000)
       }
     } catch (err) {
-      setDropStatus({ error: err.message || 'Failed to load tracks' })
-      setTimeout(() => setDropStatus(null), 5000)
+      flashDropStatus({ error: err.message || 'Failed to load tracks' }, 5000)
     }
-  }, [dropPrompt, uploadTrack, commitTrack, showDropNotices])
+  }, [dropPrompt, uploadTrack, commitTrack, showDropNotices, flashDropStatus])
 
   const onDropMismatchSkip = useCallback(async () => {
     if (!dropTrackMismatch) return
@@ -440,9 +457,8 @@ function BrowserApp() {
     for (const t of dropTrackMismatch.tracks) commitTrack(t)
     setDropTrackMismatch(null)
     showDropNotices([lengthPairingNotice(dropTrackMismatch.tracks)])
-    setDropStatus({ msg: `Added ${dropTrackMismatch.tracks.length} track${dropTrackMismatch.tracks.length > 1 ? 's' : ''}` })
-    setTimeout(() => setDropStatus(null), 3000)
-  }, [dropTrackMismatch, commitTrack, showDropNotices])
+    flashDropStatus({ msg: `Added ${dropTrackMismatch.tracks.length} track${dropTrackMismatch.tracks.length > 1 ? 's' : ''}` }, 3000)
+  }, [dropTrackMismatch, commitTrack, showDropNotices, flashDropStatus])
 
   const onLabelResizeStart = useCallback((e) => {
     e.preventDefault()
@@ -591,7 +607,7 @@ function BrowserApp() {
         </div>
       </div>
 
-      <FileLoader />
+      <FileLoader mergeSignal={mergeSignal} onMergeStart={clearDropNotices} />
       <NavigationBar />
 
       <div style={S.trackArea} ref={containerRef} data-tour="track-area">

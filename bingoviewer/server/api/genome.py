@@ -64,22 +64,30 @@ def _track_pairings(snapshot: tuple) -> dict:
     shown before (``snapshot``, AppState.merge_snapshot; see
     merged_target_chromosomes), and its compatibility against the genome as it
     is now, by track id. The targets are remembered as the track's new ones.
-    A track loaded since the snapshot is left as its load gave it."""
-    old_names, per_track = snapshot
+    A track whose load was finishing during the merge, given its targets
+    since the snapshot, may have had them computed against the genome before
+    it: it is paired as a track loaded now would be."""
+    old_names, per_track, given = snapshot
     out = {}
-    for track_id, (shown, mapped) in per_track.items():
+
+    def pair(track_id, targets):
         if track_id not in app_state.tracks:
-            continue
+            return
         try:
             pairing = {
-                "target_chromosomes": app_state.merged_target_chromosomes(track_id, shown, old_names, mapped),
+                "target_chromosomes": targets(),
                 "compatibility": app_state.check_track_compatibility(track_id),
             }
         except Exception:
-            continue          # the merge itself succeeded; leave this track as it was
+            return            # the merge itself succeeded; leave this track as it was
         if track_id in app_state.tracks:          # not removed meanwhile
             app_state.remember_targets(track_id, pairing["target_chromosomes"])
             out[track_id] = pairing
+
+    for track_id, (shown, mapped) in per_track.items():
+        pair(track_id, lambda: app_state.merged_target_chromosomes(track_id, shown, old_names, mapped))
+    for track_id in app_state.remembered_tracks() - given:
+        pair(track_id, lambda: app_state.get_target_chromosomes(track_id))
     return out
 
 
@@ -93,7 +101,8 @@ async def add_chromosomes(file: UploadFile = File(...)):
     length; see AppState.merged_target_chromosomes) and its
     ``compatibility`` against the merged genome, so the client can show
     tracks on the added chromosomes they have data for and learn of a
-    pairing the merge changed."""
+    pairing the merge changed. Sequence names already in the genome stay with
+    the file they came from; a file that adds none is refused (400)."""
     if app_state.genome is None:
         raise HTTPException(status_code=400, detail="No genome loaded")
     dest = _unique_dest(file.filename)

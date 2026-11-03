@@ -259,7 +259,9 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
       shadeUnscanned()
       if (data.reads?.length) {
-        ctx.fillText('All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
+        ctx.fillText(showFwd || showRev
+          ? `No ${showFwd ? 'forward' : 'reverse'}-strand reads here — the ${showFwd ? 'reverse' : 'forward'} strand is hidden in Track Settings`
+          : 'All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
       } else if (limited) {
         // The scan stopped before it could show a read here.
         const msg = 'Too many reads to scan here'
@@ -395,9 +397,9 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
           '(downsampled evenly across the view) — zoom in to see all')
       }
       if (hiddenReads > 0 && !needsScroll) {
-        warnings.push(`${hiddenReads} read${hiddenReads > 1 ? 's' : ''} hidden \u2014 increase track height to show all`)
+        warnings.push(`${hiddenReads.toLocaleString()} read${hiddenReads > 1 ? 's' : ''} hidden\u2014 increase track height to show all`)
       } else if (needsScroll) {
-        warnings.push(`${totalRows} rows · Shift+scroll or drag scrollbar to navigate`)
+        warnings.push(`${totalRows.toLocaleString()} rows· Shift+scroll or drag scrollbar to navigate`)
       }
       onWarning(warnings.length ? warnings.join('\n') : null)
     }

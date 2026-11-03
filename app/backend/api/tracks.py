@@ -49,6 +49,22 @@ def _save_upload(file: UploadFile) -> Path:
     return dest
 
 
+async def _pairing(track_id: str) -> tuple:
+    """A newly loaded track's compatibility and target chromosomes, the
+    targets remembered as where the client shows it. Computed again when the
+    genome changed meanwhile (a merge finishing as the track loads), so they
+    are those of the genome a later merge starts from."""
+    for attempt in range(3):
+        version = app_state.genome_version
+        # In the worker pool: on a draft assembly both checks walk thousands of
+        # chromosomes, which would stall the event loop (heartbeats included).
+        compatibility = await run_in_threadpool(app_state.check_track_compatibility, track_id)
+        targets = await run_in_threadpool(app_state.get_target_chromosomes, track_id)
+        if app_state.remember_targets(track_id, targets, version if attempt < 2 else None):
+            break
+    return compatibility, targets
+
+
 @router.post("/load")
 async def load_track(
     file: UploadFile = File(...),
@@ -96,11 +112,7 @@ async def load_track(
 
         display_name = _clean_name(name) if name else clean_filename
         track = app_state.load_track(str(dest), display_name)
-        # In the worker pool: on a draft assembly both checks walk thousands of
-        # chromosomes, which would stall the event loop (heartbeats included).
-        compatibility = await run_in_threadpool(app_state.check_track_compatibility, track["id"])
-        target_chromosomes = await run_in_threadpool(app_state.get_target_chromosomes, track["id"])
-        app_state.remember_targets(track["id"], target_chromosomes)   # where the client shows it
+        compatibility, target_chromosomes = await _pairing(track["id"])
 
         # Suggest BigWig conversion for large text-based coverage files
         hint = None
@@ -240,10 +252,7 @@ async def load_track_from_path(
     try:
         display_name = _clean_name(name) if name else p.name
         track = app_state.load_track(path, display_name, index_path=resolved_index)
-        # Off the event loop, as in load_track above.
-        compatibility = await run_in_threadpool(app_state.check_track_compatibility, track["id"])
-        target_chromosomes = await run_in_threadpool(app_state.get_target_chromosomes, track["id"])
-        app_state.remember_targets(track["id"], target_chromosomes)
+        compatibility, target_chromosomes = await _pairing(track["id"])
 
         hint = None
         ext = p.suffix.lower()
