@@ -249,11 +249,14 @@ class BamReader:
 
         Matches exact names first, then with/without a leading 'chr', then
         case-insensitively, then by accession base (strip a trailing
-        '.version'). Returns the original name unchanged when nothing matches
-        (bamnostic.fetch then raises KeyError, which the callers turn into an
-        empty result) — it NEVER silently remaps to a different contig, which
-        previously made single-contig BAMs serve the wrong data under any
-        requested name.
+        '.version') when exactly one contig has that base: in names such as
+        supercont1.1 ... supercont1.14 the suffix is an index, not a
+        version, and supercont1.15 must not resolve to supercont1.1 (the
+        rule state._match_chromosomes applies). Returns the original name
+        unchanged when nothing matches (the callers then find no such contig
+        and return an empty result) — it NEVER silently remaps to a different
+        contig, which previously made single-contig BAMs serve the wrong data
+        under any requested name.
         """
         names = [c["name"] for c in self.chromosomes]
         if chrom in names:
@@ -265,11 +268,14 @@ class BamReader:
                 return name
 
         chrom_base = chrom.rsplit(".", 1)[0] if "." in chrom else chrom
+        match = None
         for name in names:
             name_base = name.rsplit(".", 1)[0] if "." in name else name
             if name_base == chrom_base:
-                return name
-        return chrom
+                if match is not None:
+                    return chrom            # several contigs share the base: ambiguous
+                match = name
+        return chrom if match is None else match
 
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> dict:
         """Binned read depth over [start, end): exact mean / max / min per bin.

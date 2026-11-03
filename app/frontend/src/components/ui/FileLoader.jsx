@@ -8,8 +8,12 @@
  *
  * BAM files require a .bai index — when both are selected together the
  * index is automatically paired and uploaded alongside the BAM.
+ *
+ * Every interactive track load (uploads, the path box, the large-file path
+ * dialog) checks the track against the genome first, and names any genome
+ * chromosome it pairs with a differently named contig by length alone.
  */
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { genomeApi, tracksApi } from '../../api/client'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks, cleanName } from '../../store/TrackContext'
@@ -19,6 +23,92 @@ function isTrackMismatch(info) {
   return c && c.status !== 'ok' && c.status !== 'no_genome'
 }
 import { useTheme } from '../../store/ThemeContext'
+
+/** How long a length-pairing notice stays up (like the conversion hints). */
+export const PAIRING_NOTICE_MS = 8000
+
+function shortName(name, max = 32) {
+  return name.length > max ? `${name.slice(0, max - 1)}\u2026` : name
+}
+
+/**
+ * A notice naming the genome chromosomes that tracks show with a differently
+ * named contig because their lengths match exactly, from objects carrying a
+ * `compatibility` (track load responses, tracks, pairingChanges().paired):
+ * `{ text, title }`, or null when there are none. That is how a GenBank LOCUS
+ * name finds the accession its BAMs and BigWigs were aligned to, but between
+ * unrelated assemblies the same match can be a coincidence, so the pairing is
+ * never made silently. `text` names the first pair (and how many more there
+ * are), `title` lists them in full.
+ */
+export function lengthPairingNotice(infos) {
+  const pairs = new Map()
+  let total = 0
+  for (const info of infos || []) {
+    const c = info?.compatibility
+    for (const a of c?.aliases || []) pairs.set(`${a.genome}\u0000${a.track}`, a)
+    total = Math.max(total, c?.aliases_total || 0)   // set when not all are listed
+  }
+  if (!pairs.size) return null
+  const list = [...pairs.values()]
+  const fmt = (a, short) => `${short ? shortName(a.genome) : a.genome} \u2194 ${short ? shortName(a.track) : a.track}` +
+    ` (${(a.length || 0).toLocaleString()} bp)`
+  const more = Math.max(list.length, total) - 1
+  const tail = more > 0 ? ` and ${more.toLocaleString()} more` : ''
+  return {
+    text: `Matched by length: ${fmt(list[0], true)}${tail}`,
+    title: ['Genome chromosome \u2194 track contig, paired because their lengths match exactly:',
+      ...list.slice(0, 10).map(a => fmt(a, false)),
+      ...(more > 9 ? [`and ${(more - 9).toLocaleString()} more`] : [])].join('\n'),
+  }
+}
+
+/**
+ * Give the loaded tracks the pairing an add-chromosomes response computed
+ * against the merged genome (`res.data.tracks`: per track id, its
+ * target_chromosomes and compatibility), so each one shows on the added
+ * chromosomes it has data for.
+ */
+export function applyTrackPairings(pairings, updateTrack) {
+  for (const [id, p] of Object.entries(pairings || {})) {
+    updateTrack(id, { targetChromosomes: p.target_chromosomes || null, compatibility: p.compatibility })
+  }
+}
+
+/**
+ * What merging chromosomes changed for the tracks `before` (as they were
+ * before the merge), given the latest add-chromosomes `pairings` and the
+ * genome's chromosome names before the merge (`oldChroms`, a Set):
+ *  - lost: tracks that matched the genome and now report a mismatch (with
+ *    their new compatibility), for lostPairingWarning;
+ *  - paired: the length-only pairings new to added chromosomes, in the shape
+ *    lengthPairingNotice takes.
+ * A track restored from a session carries no compatibility; it counts as
+ * having matched, since nothing told the user otherwise.
+ */
+export function pairingChanges(before, pairings, oldChroms) {
+  const lost = []
+  const fresh = []
+  for (const t of before) {
+    const p = pairings?.[t.id]
+    if (!p) continue
+    if (!isTrackMismatch(t) && isTrackMismatch(p)) lost.push({ ...t, compatibility: p.compatibility })
+    const had = new Set((t.compatibility?.aliases || []).map(a => `${a.genome}\u0000${a.track}`))
+    for (const a of p.compatibility?.aliases || []) {
+      if (!oldChroms.has(a.genome) && !had.has(`${a.genome}\u0000${a.track}`)) fresh.push(a)
+    }
+  }
+  return { lost, paired: fresh.length ? [{ compatibility: { aliases: fresh } }] : [] }
+}
+
+/** The warning for tracks a merge left without a match (pairingChanges), or null. */
+export function lostPairingWarning(lost) {
+  if (!lost.length) return null
+  const names = lost.map(t => t.name).join(', ')
+  const why = lost[0].compatibility?.message
+  return `After adding chromosomes, ${names} ${lost.length > 1 ? 'no longer match' : 'no longer matches'} the genome` +
+    (why ? ` (${lost.length > 1 ? `${lost[0].name}: ` : ''}${why})` : '') + '.'
+}
 
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`
@@ -130,10 +220,12 @@ function classifyFiles(files) {
 export default function FileLoader() {
   const { theme } = useTheme()
   const { genome, setGenome, navigateTo } = useBrowser()
-  const { addTrack, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, error: trackError, setError } = useTracks()
+  const { tracks, addTrack, uploadTrack, commitTrack, discardTrack, updateTrack, addGenomeAnnotationTrack, error: trackError, setError } = useTracks()
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(null)
   const [status, setStatus] = useState(null)
+  const [notice, setNotice] = useState(null) // { text, title } — length-only chromosome pairings
+  const noticeTimer = useRef(null)
   const [progress, setProgress] = useState(null) // { percent, loaded, total, label }
   const [prompt, setPrompt] = useState(null) // { files: File[] }
   const [trackMismatch, setTrackMismatch] = useState(null) // { tracks: [...] }
@@ -215,9 +307,23 @@ export default function FileLoader() {
     finally { setLoading(false) }
   }
 
+  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
+
+  /** Show a lengthPairingNotice (if any) for PAIRING_NOTICE_MS. */
+  function showNotice(n) {
+    if (!n) return
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    setNotice(n)
+    noticeTimer.current = setTimeout(() => { noticeTimer.current = null; setNotice(null) }, PAIRING_NOTICE_MS)
+  }
+
   async function addChromosomeFiles(files) {
     setLoading(true); setErr(null); setProgress(null)
     const errors = []
+    // The loaded tracks and chromosomes before the merge, to tell what it changed.
+    const before = tracks.filter(t => t.track_type !== 'genome_annotations')
+    const oldChroms = new Set((genome?.chromosomes || []).map(c => c.name))
+    let pairings = null
     for (const file of files) {
       setStatus(`Adding chromosomes from ${file.name}...`)
       try {
@@ -227,6 +333,12 @@ export default function FileLoader() {
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
         setGenome(info)
+        // Each track's targets and compatibility against the merged genome:
+        // tracks appear on the added chromosomes they have data for.
+        if (info.tracks) {
+          applyTrackPairings(info.tracks, updateTrack)
+          pairings = info.tracks
+        }
         // Ensure annotation track exists when the merged genome has annotations
         if (info.is_annotated) {
           addGenomeAnnotationTrack({
@@ -239,7 +351,13 @@ export default function FileLoader() {
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
     setLoading(false)
-    if (errors.length) { setErr(errors.join('; ')); setStatus(null) }
+    const { lost, paired } = pairingChanges(before, pairings, oldChroms)
+    const warning = lostPairingWarning(lost)
+    showNotice(lengthPairingNotice(paired))
+    if (errors.length || warning) {
+      setErr([...errors, ...(warning ? [warning] : [])].join('; '))
+    }
+    if (errors.length) setStatus(null)
     else {
       setStatus(`Added chromosomes from ${files.length} file${files.length > 1 ? 's' : ''}.`)
       setTimeout(() => setStatus(null), 3000)
@@ -272,6 +390,7 @@ export default function FileLoader() {
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
     setLoading(false); setProgress(null)
+    showNotice(lengthPairingNotice(compatible))
     if (errors.length) { setErr(errors.join('; ')); setStatus(null) }
     else if (compatible.length > 0 && incompatible.length === 0) {
       const msg = `Added ${compatible.length} track${compatible.length > 1 ? 's' : ''}.`
@@ -405,12 +524,20 @@ export default function FileLoader() {
         const res = await tracksApi.loadPath(path, name, indexPath && indexPath.trim())
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
-        commitTrack(info)
-        setStatus(`Track loaded: ${info.name}`)
-        if (info.hint) {
-          setTimeout(() => { setStatus(info.hint); setTimeout(() => setStatus(null), 8000) }, 2000)
+        if (isTrackMismatch(info)) {
+          // The same check as uploads: ask before adding a track that may
+          // not belong to this genome (Load Anyway / Skip).
+          setTrackMismatch(prev => ({ tracks: [...(prev?.tracks || []), info] }))
+          setStatus(null)
         } else {
-          setTimeout(() => setStatus(null), 3000)
+          commitTrack(info)
+          showNotice(lengthPairingNotice([info]))
+          setStatus(`Track loaded: ${info.name}`)
+          if (info.hint) {
+            setTimeout(() => { setStatus(info.hint); setTimeout(() => setStatus(null), 8000) }, 2000)
+          } else {
+            setTimeout(() => setStatus(null), 3000)
+          }
         }
       } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null) }
       finally { setLoading(false) }
@@ -548,6 +675,7 @@ export default function FileLoader() {
     if (!trackMismatch) return
     for (const t of trackMismatch.tracks) commitTrack(t)
     setTrackMismatch(null)
+    showNotice(lengthPairingNotice(trackMismatch.tracks))
     setStatus(`Added ${trackMismatch.tracks.length} track${trackMismatch.tracks.length > 1 ? 's' : ''}.`)
     setTimeout(() => setStatus(null), 3000)
   }
@@ -634,6 +762,7 @@ export default function FileLoader() {
       )}
 
       {!loading && status && <span style={{ color: '#81c784', fontSize: 11 }}>{status}</span>}
+      {notice && <span style={{ color: '#ffb74d', fontSize: 11 }} title={notice.title}>{notice.text}</span>}
       {(err || trackError) && <span style={{ color: '#ef9a9a', fontSize: 11 }}>{err || trackError}</span>}
 
       {/* Prompt dialog for genome files when genome already loaded */}

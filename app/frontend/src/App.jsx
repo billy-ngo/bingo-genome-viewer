@@ -10,7 +10,9 @@ import { TrackProvider, useTracks, cleanName } from './store/TrackContext'
 import { ThemeProvider, useTheme } from './store/ThemeContext'
 import { PeakProvider } from './store/PeakContext'
 import { genomeApi } from './api/client'
-import FileLoader from './components/ui/FileLoader'
+import FileLoader, {
+  lengthPairingNotice, applyTrackPairings, pairingChanges, lostPairingWarning, PAIRING_NOTICE_MS,
+} from './components/ui/FileLoader'
 import TrackSettings from './components/ui/TrackSettings'
 import ThemeSettings from './components/ui/ThemeSettings'
 import ExportImage from './components/ui/ExportImage'
@@ -85,7 +87,7 @@ function SkeletonTrack({ theme, labelWidth }) {
 function BrowserApp() {
   const { theme } = useTheme()
   const { genome, region, setGenome, navigateTo } = useBrowser()
-  const { tracks, reorderTracks, addTrack, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, restoreAnnotationTracks } = useTracks()
+  const { tracks, reorderTracks, addTrack, uploadTrack, commitTrack, discardTrack, updateTrack, addGenomeAnnotationTrack, restoreAnnotationTracks } = useTracks()
   const containerRef = useRef(null)
   const [containerWidth, setContainerWidth] = useState(800)
   const [showSettings, setShowSettings] = useState(false)
@@ -101,9 +103,26 @@ function BrowserApp() {
   const [dropStatus, setDropStatus] = useState(null)
   const [dropPrompt, setDropPrompt] = useState(null) // { files: File[] }
   const [dropTrackMismatch, setDropTrackMismatch] = useState(null) // { tracks: [...] }
+  const [dropNotices, setDropNotices] = useState([]) // [{ text, title, tone }] — shown above the drop toast
+  const dropNoticeTimer = useRef(null)
   const appDragCounter = useRef(0)
 
   useAutoSave(labelWidth)
+
+  useEffect(() => () => { if (dropNoticeTimer.current) clearTimeout(dropNoticeTimer.current) }, [])
+
+  /** Show notices above the drop toast: length-only chromosome pairings
+   *  (lengthPairingNotice) and, with tone 'warning', tracks a merge left
+   *  without a match. They have a timer of their own, so the drop toast's
+   *  messages and timers never cut them short. Falsy items are skipped. */
+  const showDropNotices = useCallback((items) => {
+    const list = items.filter(Boolean)
+    if (!list.length) return
+    if (dropNoticeTimer.current) clearTimeout(dropNoticeTimer.current)
+    setDropNotices(list)
+    const ms = list.some(n => n.tone === 'warning') ? 10000 : PAIRING_NOTICE_MS
+    dropNoticeTimer.current = setTimeout(() => { dropNoticeTimer.current = null; setDropNotices([]) }, ms)
+  }, [])
 
   // Heartbeat — keeps the backend server alive while this tab is open.
   // The server tracks tabs individually by UUID so that closing one tab
@@ -297,6 +316,7 @@ function BrowserApp() {
             }
           } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
         }
+        showDropNotices([lengthPairingNotice(compatible)])
         if (errors.length) {
           setDropStatus({ error: errors.join('; ') })
           setTimeout(() => setDropStatus(null), 5000)
@@ -318,7 +338,7 @@ function BrowserApp() {
       setDropStatus({ error: err.message || 'Drop failed' })
       setTimeout(() => setDropStatus(null), 5000)
     }
-  }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack])
+  }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, showDropNotices])
 
   const onDropPromptChromosome = useCallback(async () => {
     if (!dropPrompt) return
@@ -326,6 +346,10 @@ function BrowserApp() {
     setDropPrompt(null)
     try {
       const errors = []
+      // The loaded tracks and chromosomes before the merge, to tell what it changed.
+      const before = tracks.filter(t => t.track_type !== 'genome_annotations')
+      const oldChroms = new Set((genome?.chromosomes || []).map(c => c.name))
+      let pairings = null
       for (const file of files) {
         setDropStatus({ msg: `Adding chromosomes from ${file.name}...` })
         try {
@@ -333,6 +357,12 @@ function BrowserApp() {
           const info = res.data
           if (info.name) info.name = cleanName(info.name)
           setGenome(info)
+          // Each track's targets and compatibility against the merged genome:
+          // tracks appear on the added chromosomes they have data for.
+          if (info.tracks) {
+            applyTrackPairings(info.tracks, updateTrack)
+            pairings = info.tracks
+          }
           // Ensure annotation track exists when the merged genome has annotations
           if (info.is_annotated) {
             addGenomeAnnotationTrack({
@@ -344,6 +374,9 @@ function BrowserApp() {
           }
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
       }
+      const { lost, paired } = pairingChanges(before, pairings, oldChroms)
+      const warning = lostPairingWarning(lost)
+      showDropNotices([warning && { text: warning, tone: 'warning' }, lengthPairingNotice(paired)])
       if (errors.length) {
         setDropStatus({ error: errors.join('; ') })
         setTimeout(() => setDropStatus(null), 5000)
@@ -355,7 +388,7 @@ function BrowserApp() {
       setDropStatus({ error: err.message || 'Failed to add chromosomes' })
       setTimeout(() => setDropStatus(null), 5000)
     }
-  }, [dropPrompt, setGenome, addGenomeAnnotationTrack])
+  }, [dropPrompt, tracks, genome, setGenome, updateTrack, addGenomeAnnotationTrack, showDropNotices])
 
   const onDropPromptTrack = useCallback(async () => {
     if (!dropPrompt) return
@@ -365,6 +398,7 @@ function BrowserApp() {
       setDropStatus({ msg: `Loading ${files.length} track${files.length > 1 ? 's' : ''}...` })
       const errors = []
       const incompatible = []
+      const compatible = []
       // Mirror the primary drop path: check genome compatibility before
       // committing, so an incompatible track routes to the confirmation dialog
       // here too (previously this path committed unconditionally).
@@ -372,9 +406,10 @@ function BrowserApp() {
         try {
           const info = await uploadTrack(file, undefined)
           if (isTrackMismatch(info)) incompatible.push(info)
-          else commitTrack(info)
+          else { commitTrack(info); compatible.push(info) }
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
       }
+      showDropNotices([lengthPairingNotice(compatible)])
       if (errors.length) {
         setDropStatus({ error: errors.join('; ') })
         setTimeout(() => setDropStatus(null), 5000)
@@ -389,7 +424,7 @@ function BrowserApp() {
       setDropStatus({ error: err.message || 'Failed to load tracks' })
       setTimeout(() => setDropStatus(null), 5000)
     }
-  }, [dropPrompt, uploadTrack, commitTrack])
+  }, [dropPrompt, uploadTrack, commitTrack, showDropNotices])
 
   const onDropMismatchSkip = useCallback(async () => {
     if (!dropTrackMismatch) return
@@ -401,9 +436,10 @@ function BrowserApp() {
     if (!dropTrackMismatch) return
     for (const t of dropTrackMismatch.tracks) commitTrack(t)
     setDropTrackMismatch(null)
+    showDropNotices([lengthPairingNotice(dropTrackMismatch.tracks)])
     setDropStatus({ msg: `Added ${dropTrackMismatch.tracks.length} track${dropTrackMismatch.tracks.length > 1 ? 's' : ''}` })
     setTimeout(() => setDropStatus(null), 3000)
-  }, [dropTrackMismatch, commitTrack])
+  }, [dropTrackMismatch, commitTrack, showDropNotices])
 
   const onLabelResizeStart = useCallback((e) => {
     e.preventDefault()
@@ -861,18 +897,35 @@ function BrowserApp() {
         </div>
       )}
 
-      {/* Drop status toast */}
-      {dropStatus && (
+      {/* Drop status toast, with any pairing notices above it */}
+      {(dropStatus || dropNotices.length > 0) && (
         <div style={{
           position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 10001, padding: '8px 20px', borderRadius: 6,
-          background: dropStatus.error ? '#c62828' : theme.panelBg,
-          border: `1px solid ${dropStatus.error ? '#e53935' : theme.borderAccent}`,
-          color: dropStatus.error ? '#fff' : '#81c784',
-          fontSize: 12, fontWeight: 600,
-          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+          zIndex: 10001, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
         }}>
-          {dropStatus.error || dropStatus.msg}
+          {dropNotices.map((n, i) => (
+            <div key={i} title={n.title} style={{
+              padding: '8px 20px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+              ...(n.tone === 'warning'
+                ? { background: '#c62828', border: '1px solid #e53935', color: '#fff' }
+                : { background: theme.panelBg, border: '1px solid rgba(255,183,77,0.5)', color: '#ffb74d' }),
+            }}>
+              {n.text}
+            </div>
+          ))}
+          {dropStatus && (
+            <div style={{
+              padding: '8px 20px', borderRadius: 6,
+              background: dropStatus.error ? '#c62828' : theme.panelBg,
+              border: `1px solid ${dropStatus.error ? '#e53935' : theme.borderAccent}`,
+              color: dropStatus.error ? '#fff' : '#81c784',
+              fontSize: 12, fontWeight: 600,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+            }}>
+              {dropStatus.error || dropStatus.msg}
+            </div>
+          )}
         </div>
       )}
 

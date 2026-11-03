@@ -10,6 +10,7 @@ from pathlib import Path
 class GenomeReader:
     def __init__(self, file_path: str):
         self.file_path = file_path
+        # One per file: the primary file, then each add_chromosomes_from file.
         self._sub_readers: list[tuple] = []  # [(format, reader), ...]
         self._chrom_index: dict[str, int] = {}  # chrom name → index in _sub_readers
         self._add_file(file_path)
@@ -47,6 +48,14 @@ class GenomeReader:
     @property
     def name(self) -> str:
         return Path(self.file_path).stem
+
+    @property
+    def chromosome_sources(self) -> dict[str, int]:
+        """The file each chromosome came from: 0 for the primary file, then
+        1, 2, ... for the add_chromosomes_from files in the order added. A
+        name found in several files belongs to the first, whose sequence is
+        the one served."""
+        return dict(self._chrom_index)
 
     @property
     def chromosomes(self) -> list[dict]:

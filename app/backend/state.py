@@ -36,13 +36,19 @@ def _accession_base(name: str) -> str:
     return name.rsplit(".", 1)[0] if "." in name else name
 
 
-def _match_chromosomes(genome_chroms: list[dict], track_chroms: list[dict]) -> ChromMap:
+def _match_chromosomes(genome_chroms: list[dict], track_chroms: list[dict],
+                       sources: Optional[dict[str, int]] = None) -> ChromMap:
     """Line a track's contigs up with the genome's chromosomes, in one pass
     over each list.
 
     By name first, with the rules BamReader._resolve_chrom uses: the exact
     name, else the first contig equal ignoring a leading 'chr' and case, else
-    the first equal ignoring a trailing '.version'.
+    the contig equal ignoring a trailing '.version' (CP124550 -> CP124550.1,
+    NZ_X.1 -> NZ_X.2). That last rule applies only when the name without its
+    last '.suffix' is unique among the track's contigs and among the genome's
+    chromosomes: in names like supercont1.15, <contig>.<chunk> or bin.3.7 the
+    suffix is an index that many contigs share the rest with, and the rule
+    used to draw supercont1.1's data on every supercontig the track lacks.
 
     Then exact-length aliases for the rest, e.g. a GenBank genome whose LOCUS
     name differs from the accession (CP124550.1) its BigWigs and BAMs were
@@ -52,13 +58,19 @@ def _match_chromosomes(genome_chroms: list[dict], track_chroms: list[dict]) -> C
           track's contigs;
       (b) G has no name match, and T is not the name match of any other
           chromosome;
-      (c) the aliases explain the track rather than coincide with it: they
-          cover at least half the length of the genome chromosomes without a
-          name match, or at least half that of the track's unmatched contigs.
-          Two unrelated draft assemblies of a few hundred contigs each share
-          some exact contig length more often than not, but such coincidences
-          cover a small fraction of either side. If (c) fails, the track gets
-          no aliases at all.
+      (c) the aliases explain the track rather than coincide with it. This is
+          judged for each genome source file on its own (``sources`` maps a
+          chromosome to its file: the primary genome file, or one merged in
+          by add_chromosomes; without it the genome is one file): the aliases
+          of a file's chromosomes must cover at least half the length of that
+          file's chromosomes without a name match, or at least half that of
+          the track's unmatched contigs. Two unrelated draft assemblies of a
+          few hundred contigs each share some exact contig length more often
+          than not, but such coincidences cover a small fraction of either
+          side. A file whose aliases fail (c) loses them and the other files
+          keep theirs, so merging an unrelated assembly (e.g. a host draft)
+          into the genome cannot cancel the alias that explains the file it
+          was merged into.
     """
     genome: dict[str, int] = {}
     for c in genome_chroms:
@@ -68,14 +80,16 @@ def _match_chromosomes(genome_chroms: list[dict], track_chroms: list[dict]) -> C
         track.setdefault(c["name"], int(c.get("length") or 0))
 
     by_norm: dict[str, str] = {}
-    by_base: dict[str, str] = {}
     for t in track:                                  # header order: first match wins
         by_norm.setdefault(_norm_name(t), t)
-        by_base.setdefault(_accession_base(t), t)
+    t_base = {t: _accession_base(t) for t in track}
+    t_base_count = Counter(t_base.values())
+    by_base = {b: t for t, b in t_base.items() if t_base_count[b] == 1}
+    g_base_count = Counter(_accession_base(g) for g in genome)
     names: dict[str, str] = {}
     for g in genome:
         t = g if g in track else by_norm.get(_norm_name(g))
-        if t is None:
+        if t is None and g_base_count[_accession_base(g)] == 1:
             t = by_base.get(_accession_base(g))
         if t is not None:
             names[g] = t
@@ -91,11 +105,18 @@ def _match_chromosomes(genome_chroms: list[dict], track_chroms: list[dict]) -> C
         if t is not None and t not in claimed:
             aliases[g] = t
     if aliases:
-        aliased = sum(genome[g] for g in aliases)    # the same on both sides
-        g_open = sum(length for g, length in genome.items() if g not in names)
+        src = sources or {}
+        aliased: Counter = Counter()                 # per file; the same length on both sides
+        g_open: Counter = Counter()                  # per file
+        for g, length in genome.items():
+            if g in aliases:
+                aliased[src.get(g)] += length
+            if g not in names:
+                g_open[src.get(g)] += length
         t_open = sum(length for t, length in track.items() if t not in claimed)
-        if 2 * aliased < g_open and 2 * aliased < t_open:
-            aliases = {}
+        weak = {f for f, a in aliased.items() if 2 * a < g_open[f] and 2 * a < t_open}
+        if weak:
+            aliases = {g: t for g, t in aliases.items() if src.get(g) not in weak}
     return ChromMap(names, aliases)
 
 
@@ -195,7 +216,8 @@ class AppState:
         if genome is not None and reader is not None and info \
                 and info.get("file_format") in self._TRUE_LENGTH_FORMATS:
             try:
-                cmap = _match_chromosomes(genome.chromosomes, reader.chromosomes)
+                cmap = _match_chromosomes(genome.chromosomes, reader.chromosomes,
+                                          genome.chromosome_sources)
             except Exception:
                 cmap = None
         with self._state_lock:

@@ -3,6 +3,7 @@ Genome API — upload and query reference genomes (FASTA, GenBank).
 
 Endpoints:
   POST /api/genome/load        Upload a genome file
+  POST /api/genome/add-chromosomes  Merge another genome file's chromosomes into the loaded genome
   POST /api/genome/load-path   Re-open a genome from an existing file path (session restore)
   GET  /api/genome/chromosomes List loaded chromosomes
   GET  /api/genome/sequence    Fetch a subsequence by region
@@ -15,6 +16,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from starlette.concurrency import run_in_threadpool
 from state import app_state
 
 router = APIRouter(prefix="/api/genome", tags=["genome"])
@@ -57,9 +59,34 @@ async def load_genome(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _track_pairings() -> dict:
+    """Each loaded data track's target chromosomes and compatibility against
+    the genome as it is now, by track id."""
+    out = {}
+    for track_id in list(app_state.tracks):
+        if track_id == "genome_annotations":
+            continue
+        try:
+            pairing = {
+                "target_chromosomes": app_state.get_target_chromosomes(track_id),
+                "compatibility": app_state.check_track_compatibility(track_id),
+            }
+        except Exception:
+            continue          # the merge itself succeeded; leave this track as it was
+        if track_id in app_state.tracks:          # not removed meanwhile
+            out[track_id] = pairing
+    return out
+
+
 @router.post("/add-chromosomes")
 async def add_chromosomes(file: UploadFile = File(...)):
-    """Merge chromosomes from an additional genome file into the current genome."""
+    """Merge chromosomes from an additional genome file into the current genome.
+
+    Besides the merged genome, the response carries ``tracks``: for every
+    loaded data track, its ``target_chromosomes`` and ``compatibility``
+    against the merged genome (as /api/tracks/load returns them), so the
+    client can show tracks on the added chromosomes they have data for and
+    learn of a pairing the merge changed."""
     if app_state.genome is None:
         raise HTTPException(status_code=400, detail="No genome loaded")
     dest = _unique_dest(file.filename)
@@ -70,6 +97,9 @@ async def add_chromosomes(file: UploadFile = File(...)):
         # can't read mid-mutation) and invalidates the tracks' chromosome maps.
         app_state.add_chromosomes(str(dest))
         genome = app_state.genome
+        # In the worker pool, as the track load endpoints do: against a draft
+        # assembly each track's check walks thousands of chromosomes.
+        tracks = await run_in_threadpool(_track_pairings)
         return {
             "name": genome.name,
             "file_path": genome.file_path,
@@ -77,6 +107,7 @@ async def add_chromosomes(file: UploadFile = File(...)):
             "is_annotated": genome.is_annotated(),
             "annotated_chromosomes": genome.annotated_chromosomes,
             "feature_types": genome.feature_types,
+            "tracks": tracks,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
