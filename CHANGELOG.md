@@ -6,7 +6,7 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
-## [2.14.0] — 2026-11-02
+## [2.14.0] — 2026-11-03
 
 ### Fixed — Y-axis (scale bar) accuracy
 - **The zoomed-out Y axis no longer understates the data.** Zoomed out, each
@@ -46,7 +46,9 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   reads whose CIGAR is stored in the `CG` tag are counted along their real
   alignment. References over 32 Mbp, too large for the index, get exact
   coverage computed per view for up to 500,000 reads; past that point the view
-  is shaded as pending.
+  is shaded as pending. A BAM that turns out to be truncated or corrupt (for
+  example a record with an impossible size) is reported as such instead of
+  being drawn with wrong coverage.
 - **The read view of deep BAMs covers the whole window, and is faster.** At
   ≤ 50 kb zoom it used to stop after the first 5,000 reads, which left most of
   the view empty. Now every read is shown when 5,000 or fewer overlap the
@@ -57,7 +59,13 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   - alignments stored without a sequence, such as secondary alignments;
   - ultra-long reads with a `CG`-tag CIGAR.
 
-  Unmapped mates placed at a position are hidden, as in IGV.
+  Unmapped mates placed at a position are hidden, as in IGV. A view too deep
+  to scan within a few seconds (over a million reads, or a very deep stretch
+  just left of it) is drawn as far as the scan got. The rest is shaded and the
+  warning says where the reads stop, instead of the view looking empty.
+- **Read pileup scrolling.** Shift+scroll no longer logs browser console
+  errors, a pileup that fits no longer scrolls its top row out of view, and
+  scrolling to the end puts the last row at the bottom edge.
 - **Linked and overlaid tracks:**
   - hidden members, and members with no data on the current chromosome, no
     longer set the shared axis;
@@ -76,7 +84,9 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   - variant markers sit on the centre of their base.
 - **SVG/PNG export** uses exactly the on-screen axis, layout and windowing. It
   leaves out overlay members that are hidden, unticked under Include tracks,
-  or have no data on the chromosome.
+  or have no data on the chromosome. BAM coverage that is still being computed
+  is shaded in the export as on screen, and the Export dialog lists the tracks
+  whose data is incomplete.
 - **Exact tooltip statistics.** The selected-region tooltip shows the true
   mean, max and sum of the signal (forward/reverse for strand data). It used to
   show an "Avg cov" that changed with the zoom level. The gene tooltip's
@@ -89,19 +99,33 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
     leaves half the view blank.
 - **Fixed Y scale:**
   - values below 1 are accepted;
-  - unticking Auto keeps each track's current axis instead of jumping to 100;
+  - unticking Auto keeps each track's current axis instead of jumping to 100.
+    Tracks not on screen (hidden, on another chromosome or not loaded yet)
+    keep Auto, and Track Settings says so;
   - a selection that mixes auto and fixed tracks shows as mixed instead of
-    "Auto".
+    "Auto";
+  - the clipping warning judges what is drawn. A track drawn only as a
+    smoothed curve (Smooth fill, or Peak outline without bars) warns "Curve
+    clipped" when the curve is cut, and no longer warns about bars it does not
+    draw.
 - **Contig naming.**
   - A BigWig or BAM contig whose name differs from the genome's chromosome
     only by a `chr` prefix, letter case or a `.version` suffix now counts as a
-    match. Such tracks used to be reported as mismatched.
+    match. Such tracks used to be reported as mismatched. The `.version` rule
+    applies only where it is unambiguous, so `supercont1.15` is never drawn
+    with the data of `supercont1.1`, as BAM tracks used to be.
   - A contig named differently altogether is matched by exact length when
     that length is unique on both sides and the matches account for most of
     the unmatched sequence. An example is a GenBank LOCUS name versus the
-    accession `CP124550.1`. Such tracks used to stay blank.
+    accession `CP124550.1`. Such tracks used to stay blank. A notice names
+    the pairs matched this way, and the load response lists them.
   - Unrelated assemblies that merely share a contig length are not matched.
-  - The load response lists the pairs matched by length.
+    This is judged for each genome file separately, so merging an unrelated
+    assembly with **Add as Chromosome** cannot undo a match.
+  - After **Add as Chromosome**, loaded tracks also show on the added
+    chromosomes they have data for (they used to stay hidden there). A track
+    that no longer matches the merged genome is named in a warning.
+  - Tracks loaded by file path get the same compatibility check as uploads.
 
 ### Fixed — nucleotide strip
 - The reference sequence strip no longer drops out while you scroll at base
@@ -132,9 +156,13 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
 
 ### Changed
 - `GET /api/tracks/{id}/reads` reports the exact number of overlapping reads
-  in `total`, with `truncated` when the reads returned are a sample.
+  in `total`, with `truncated` when the reads returned are a sample. When a
+  view is too deep to scan in full, `total_exact` is false and `scanned_to`
+  gives the position up to which the pileup is complete.
   `/coverage` and `/reads` answer 409 to a request that a newer one for the
   same track has superseded.
+- `POST /api/genome/add-chromosomes` also returns `tracks`: each loaded
+  track's target chromosomes and compatibility against the merged genome.
 - Sessions are saved as version 3, which adds bin size, windowing and
   link-group ids. Older sessions restore with fit-to-visible auto scale on.
 - The health and heartbeat endpoints answer even while track requests are

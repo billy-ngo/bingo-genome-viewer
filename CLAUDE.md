@@ -134,9 +134,14 @@ per asker and page. Liveness endpoints (`/health`, `/api/heartbeat`) are
 **Chromosome names (backend).** `AppState.resolve_track_chrom` maps a genome
 chromosome to a BAM/BigWig contig through a cached `ChromMap`
 (`_match_chromosomes` in `state.py`): name rules first, then unique
-exact-length aliases that must cover most of the unmatched sequence. Change
+exact-length aliases that must cover most of the unmatched sequence. The
+`.version` rule pairs only names whose base is unique on both sides
+(`BamReader._resolve_chrom` checks the BAM side), and the alias coverage test
+is judged per genome source file (`GenomeReader.chromosome_sources`). Change
 the genome only through `load_genome` / `add_chromosomes`, which bump the
-genome version that invalidates the cache.
+genome version that invalidates the cache. `/api/genome/add-chromosomes`
+returns each track's new `target_chromosomes` and `compatibility` under
+`tracks`, which the frontend applies with `updateTrack`.
 
 **JavaScript / React.** Functional components with hooks only (no classes).
 Keep render-time logic minimal; put expensive computation in `useMemo`.
@@ -172,17 +177,25 @@ won't survive session export/restore. If a default changes meaning, bump
   5,000 per view.
 - **BAM coverage.** BAM coverage comes from `readers/bam_coverage.py`, an exact
   per-base depth index built in a background thread at load time. It returns
-  `pending` bins until it is ready. Don't reintroduce per-request read
-  counting; the only exception is `BamReader._live_coverage`, the bounded
+  `pending` bins until it is ready, always with the state its snapshot was
+  taken under (`coverage()` returns `(bins, state)`), so pending bins are only
+  ever reported as 'building'. A malformed or cut-off record fails the build,
+  and coverage falls back to the live pileup. Don't reintroduce per-request
+  read counting; the only exception is `BamReader._live_coverage`, the bounded
   fallback for references too large for the index.
 - **BAM read view.** `BamReader.get_reads` scans the `.bai` chunks itself
   (`readers/bam_records.py`, struct + zlib) and decodes only the reads it
   returns. It reports the exact `total` and samples evenly above 5,000 reads.
-  Don't route it through bamnostic's `fetch()`, which judges overlap by
-  sequence length and misses reads in sparse regions.
+  Two record budgets bound a scan to about 3 s: `MAX_READS_SCANNED` for
+  records starting in the view and `MAX_LEADING_SCANNED` for those left of
+  it. When one runs out, `total_exact` is false and `scanned_to` marks how far
+  the pileup is complete; `ReadTrack` shades the rest. Don't route it through
+  bamnostic's `fetch()`, which judges overlap by sequence length and misses
+  reads in sparse regions.
 - **Exact numbers.** For tooltips and other exact figures, use
   `GET /api/tracks/{id}/stats` (`utils/signalStats.js`), never the displayed
-  bins: those depend on zoom and windowing.
+  bins: those depend on zoom and windowing. Its cached rows are shared by
+  every asker and carry no display name; label them from your own track.
 
 ### Track types (frontend)
 `annotations`/`genome_annotations` → `AnnotationTrack`; `reads` → `ReadTrack`
