@@ -309,7 +309,19 @@ function BrowserApp() {
         : (genomeFiles.length > 1 ? genomeFiles.slice(1) : null)
       if (genomeFiles.length > 0 && !genome) {
         flashDropStatus({ msg: `Loading genome: ${genomeFiles[0].name}...` })
-        const res = await genomeApi.load(genomeFiles[0])
+        let res
+        try {
+          res = await genomeApi.load(genomeFiles[0])
+        } catch (err) {
+          // Nothing else can be loaded without it, nor added to it: name the
+          // files that were not, after the reason.
+          const rest = [...genomeFiles.slice(1), ...trackFiles]
+          flashDropStatus({
+            error: `${genomeFiles[0].name}: ${err.response?.data?.detail || err.message}` +
+              (rest.length ? `; not loaded: ${rest.map(f => f.name).join(', ')}` : ''),
+          }, rest.length ? 8000 : 5000)
+          return
+        }
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
         setGenome(info)
@@ -368,7 +380,7 @@ function BrowserApp() {
         flashDropStatus({ msg: 'Files loaded' }, 2000)
       }
     } catch (err) {
-      flashDropStatus({ error: err.message || 'Drop failed' }, 5000)
+      flashDropStatus({ error: err.response?.data?.detail || err.message || 'Drop failed' }, 5000)
     }
   }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, showDropNotices, flashDropStatus])
 
@@ -809,6 +821,8 @@ function BrowserApp() {
       {dropPrompt && (() => {
         const plural = dropPrompt.files.length > 1
         const names = dropPrompt.files.map(f => f.name).join(', ')
+        // A GenBank file can be loaded as a track of its annotations; a FASTA file can't.
+        const trackable = dropPrompt.files.some(f => ['.gb', '.gbk', '.genbank'].includes(getFileExt(f.name)))
         return (
           <div style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
@@ -837,13 +851,15 @@ function BrowserApp() {
                     color: theme.btnText, padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
                   }}
                 >Skip</button>
-                <button
-                  onClick={onDropPromptTrack}
-                  style={{
-                    background: theme.btnBg, border: `1px solid ${theme.borderStrong}`, borderRadius: 4,
-                    color: theme.btnText, padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                  }}
-                >Add as Track{plural ? 's' : ''}</button>
+                {trackable && (
+                  <button
+                    onClick={onDropPromptTrack}
+                    style={{
+                      background: theme.btnBg, border: `1px solid ${theme.borderStrong}`, borderRadius: 4,
+                      color: theme.btnText, padding: '5px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                    }}
+                  >Add as Track{plural ? 's' : ''}</button>
+                )}
                 <button
                   onClick={onDropPromptChromosome}
                   style={{

@@ -205,6 +205,13 @@ export function needsSplitLayout(track, region, tracks) {
   return false
 }
 
+/** True when the request `req` (useTrackData's) fetches reads covering
+ *  chrom:start-end: read requests are for exactly their view. */
+function readsCover(req, chrom, start, end) {
+  return !!req && req.type === 'reads' && req.viewLen <= READ_DETAIL_THRESHOLD &&
+    req.chrom === chrom && req.start <= start && req.end >= end
+}
+
 /** Classify a fetch error as transient (worth retrying) or permanent. */
 function isTransientError(err) {
   if (!err) return false
@@ -227,6 +234,7 @@ export function useTrackData(track, region, canvasWidth) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const abortRef = useRef(null)     // controller of the newest fetch, shared by its retries and polls
+  const newestReqRef = useRef(null) // that fetch's request
   // The data on screen: { trackId, chrom, start, end, viewLen, binSize,
   // readMode (reads rather than coverage), complete, controller (of the fetch
   // that produced it), req (its request), and while incomplete: pollFails
@@ -309,10 +317,17 @@ export function useTrackData(track, region, canvasWidth) {
       // further move, so dragging cannot postpone it indefinitely. In the read
       // view it is restarted: the reads on screen cover the view (only their
       // counts are for the larger one), so a wheel gesture makes one request,
-      // for where it ends.
+      // for where it ends. A read request still pending for a view that does
+      // not cover this one (the zoom before a drag) would replace those reads
+      // with reads that leave part of the view empty: it is cancelled.
       const big = zoomRatio < 1 / BIG_ZOOM_RATIO || zoomRatio > BIG_ZOOM_RATIO
       if (!zoomDebounceRef.current || big || readMode) {
         if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
+        if (readMode && abortRef.current && abortRef.current !== f.controller &&
+            !readsCover(newestReqRef.current, chrom, start, end)) {
+          if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
+          abortRef.current.abort()
+        }
         zoomDebounceRef.current = setTimeout(() => {
           zoomDebounceRef.current = null
           fetchLatest()
@@ -358,6 +373,7 @@ export function useTrackData(track, region, canvasWidth) {
     if (pollTimerRef.current) { clearTimeout(pollTimerRef.current); pollTimerRef.current = null }
     const controller = new AbortController()
     abortRef.current = controller
+    newestReqRef.current = req
 
     // Only show loading spinner on first load — never blank existing data.
     if (!hasDataRef.current) setLoading(true)
@@ -384,6 +400,7 @@ export function useTrackData(track, region, canvasWidth) {
     if (abortRef.current) abortRef.current.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    newestReqRef.current = f.req
     fetchedRef.current = { ...f, controller, pollFails: 0, pollStopped: false }
     schedulePoll(controller, f.req)
   }

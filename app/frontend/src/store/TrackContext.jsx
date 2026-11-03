@@ -46,19 +46,15 @@ export function TrackProvider({ children }) {
   /** Upload a track file to the backend without adding to UI state.
    *  For BAM files, pass the matching .bai as indexFile.
    *  onProgress receives { loaded, total, percent }.
-   *  Returns the track info including a `compatibility` field. */
+   *  Returns the track info including a `compatibility` field. A failure is
+   *  thrown for the caller to report with the file's name (FileLoader, the
+   *  page drop); it is not kept in `error`, where it would outlast that. */
   const uploadTrack = useCallback(async (file, name, indexFile, onProgress) => {
-    try {
-      const res = await tracksApi.load(file, name, indexFile, onProgress)
-      const info = res.data
-      if (info.name) info.name = cleanName(info.name)
-      setError(null)
-      return info
-    } catch (e) {
-      const msg = e.response?.data?.detail || e.message || String(e)
-      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
-      throw e
-    }
+    const res = await tracksApi.load(file, name, indexFile, onProgress)
+    const info = res.data
+    if (info.name) info.name = cleanName(info.name)
+    setError(null)
+    return info
   }, [])
 
   /** Add a previously uploaded track to the UI state. */

@@ -153,9 +153,13 @@ class BigWigReader:
         self._chrom_sizes: dict[str, int] = {}
         self._uncompress_buf_size = 0
         self._full_index_offset = 0
-        self._parse_header()
-        self._parse_chrom_tree()
-        self._has_neg = self._chrom_signs()
+        try:
+            self._parse_header()
+            self._parse_chrom_tree()
+            self._has_neg = self._chrom_signs()
+        except Exception:
+            self._fh.close()   # so a rejected upload can be deleted (on Windows)
+            raise
 
     def close(self):
         self._fh.close()

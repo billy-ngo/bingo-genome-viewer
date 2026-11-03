@@ -171,12 +171,23 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
 - Dropping two genome files on the page when no genome is loaded loads the
   first and asks what to do with the others, as Load Files does. The others
   used to be ignored without a message.
+- When the first genome file fails to load, dropped on the page or chosen in
+  Load Files, the message names it with the reason, and names the other files
+  dropped or chosen with it as not loaded. A page drop used to say only
+  "Upload failed". Load Files used to load the track files without a genome
+  and offer to add the other genome files to one.
 - A file with no sequences, such as a FASTA file saved as `.gb`, is refused
   with a message that says so, whether loaded as the genome or added to it. A
-  rejected upload is deleted from the server's upload folder, and its message
-  names the file instead of the upload's path.
+  rejected upload is deleted from the server's upload folder (on Windows, a
+  file that was not a BigWig used to stay there), and its message names the
+  file instead of the upload's path.
+- The prompt for genome files offers **Add as Track** only for GenBank files;
+  a FASTA file cannot be a track.
 - Status messages after loading or adding files no longer disappear early
-  because an earlier message's timer ran out.
+  because an earlier message's timer ran out. A load that ends in the track
+  compatibility dialog no longer leaves "Processing…" on screen, and a track
+  that fails to load from a page drop no longer leaves an unnamed error in the
+  Load Files panel.
 
 ### Added
 - **Bin size** (Track Settings). **Auto** is the default (about one bin per

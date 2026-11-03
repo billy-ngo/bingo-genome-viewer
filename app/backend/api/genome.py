@@ -53,10 +53,15 @@ def _discard_upload(dest: Path, error: Exception) -> str:
     """Delete an upload that did not become part of the genome, with the
     index pyfaidx wrote beside it (best effort: on Windows a reader that
     failed may still hold it open). Returns ``error``'s message, naming the
-    file instead of the upload's path."""
+    file instead of the upload's path or folder, as str() or (in an OSError)
+    repr() shows them."""
     if dest.parent.parent == _upload_dir:      # its own folder (_unique_dest)
         shutil.rmtree(dest.parent, ignore_errors=True)
-    return str(error).replace(str(dest), dest.name)
+    message = str(error)
+    for path in (str(dest), str(dest.parent)):
+        for shown in (path, repr(path)[1:-1]):
+            message = message.replace(shown, dest.name)
+    return message
 
 
 @router.post("/load")

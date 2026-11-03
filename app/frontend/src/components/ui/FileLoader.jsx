@@ -172,6 +172,7 @@ function formatBytes(bytes) {
 }
 
 const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
+const GENBANK_EXTS = new Set(['.gb', '.gbk', '.genbank'])   // the genome files that can be a track
 const TRACK_EXTS = new Set([
   '.bam', '.bw', '.bigwig',
   '.wig', '.wig.gz',
@@ -355,6 +356,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
     }
   }
 
+  /** Upload `file` as the genome; true when it loaded. */
   async function loadGenomeFile(file) {
     setLoading(true); setErr(null); setProgress(null)
     setStatus(`Uploading genome: ${file.name}...`)
@@ -380,7 +382,8 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
         })
       }
       setStatus(`Genome loaded: ${info.name}`, 3000)
-    } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null); setProgress(null) }
+      return true
+    } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null); setProgress(null); return false }
     finally { setLoading(false) }
   }
 
@@ -491,7 +494,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
       const msg = `Added ${compatible.length} track${compatible.length > 1 ? 's' : ''}.`
       if (hints.length) setStatus(msg, 2000, [hints.join(' '), 8000])
       else setStatus(msg, 3000)
-    } else if (incompatible.length === 0) { setStatus(null) }
+    } else setStatus(null)          // the rest waits in the compatibility dialog
     if (incompatible.length > 0) setTrackMismatch({ tracks: incompatible })
   }
 
@@ -544,7 +547,14 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
 
     // Case 1: No genome loaded — auto-load first genome file
     if (genomeFiles.length > 0 && !genome) {
-      await loadGenomeFile(genomeFiles[0])
+      if (!(await loadGenomeFile(genomeFiles[0]))) {
+        // Nothing else can be loaded without it, nor added to it: name the
+        // files that were not, after the reason.
+        const rest = [...genomeFiles.slice(1), ...trackEntries.map(t => t.file)]
+        if (rest.length) setErr(e => `${e}; not loaded: ${rest.map(f => f.name).join(', ')}`)
+        if (inputRef.current) inputRef.current.value = ''
+        return
+      }
       // Remaining genome files → prompt to add as chromosomes
       if (genomeFiles.length > 1) {
         if (trackEntries.length > 0) await loadTrackEntries(trackEntries)
@@ -766,6 +776,8 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
 
   const fileNames = prompt ? prompt.files.map(f => f.name).join(', ') : ''
   const plural = prompt && prompt.files.length > 1
+  // A GenBank file can be loaded as a track of its annotations; a FASTA file can't.
+  const promptTrackable = prompt && prompt.files.some(f => GENBANK_EXTS.has(getFileExt(f.name)))
 
   return (
     <div style={S.panel} data-tour="file-loader">
@@ -863,9 +875,11 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
             </div>
             <div style={S.promptBtns}>
               <button style={S.promptBtn} onClick={handlePromptSkip}>Skip</button>
-              <button style={S.promptBtn} onClick={handlePromptTrack}>
-                Add as Track{plural ? 's' : ''}
-              </button>
+              {promptTrackable && (
+                <button style={S.promptBtn} onClick={handlePromptTrack}>
+                  Add as Track{plural ? 's' : ''}
+                </button>
+              )}
               <button style={S.promptBtnPrimary} onClick={handlePromptChromosome}>
                 Add as Chromosome{plural ? 's' : ''}
               </button>
