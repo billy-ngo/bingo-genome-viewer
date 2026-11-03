@@ -20,6 +20,15 @@ class GenomeReader:
         ext = Path(file_path).suffix.lower()
         return "genbank" if ext in (".gb", ".gbk", ".genbank") else "fasta"
 
+    @staticmethod
+    def _close(reader):
+        close = getattr(reader, "close", None)
+        if close is not None:
+            try:
+                close()
+            except Exception:
+                pass
+
     def _add_file(self, file_path: str):
         fmt = self._detect_format(file_path)
         if fmt == "genbank":
@@ -30,16 +39,17 @@ class GenomeReader:
             from pyfaidx import Fasta
             reader = Fasta(file_path)
             names = list(reader.keys())
+        label = Path(file_path).name
+        if not names:
+            # e.g. a FASTA file named .gb, whose GenBank parse finds nothing
+            self._close(reader)
+            raise ValueError(f"No sequences found in {label}"
+                             + (": is it a GenBank file?" if fmt == "genbank" else ""))
         if self._sub_readers and all(n in self._chrom_index for n in names):
             # A merged file that adds nothing, e.g. the same file twice.
-            close = getattr(reader, "close", None)
-            if close is not None:
-                try:
-                    close()
-                except Exception:
-                    pass
-            raise ValueError(f"No new chromosomes in {Path(file_path).name}: "
-                             "every sequence in it is already in the genome")
+            self._close(reader)
+            raise ValueError(f"No new chromosomes in {label}: every sequence "
+                             "name in it is already in the genome")
         idx = len(self._sub_readers)
         self._sub_readers.append((fmt, reader))
         # Build explicit chromosome→reader index
@@ -51,8 +61,13 @@ class GenomeReader:
     def add_chromosomes_from(self, file_path: str):
         """Load another file and merge its chromosomes into this genome. Names
         already in the genome stay with the file they came from; a file that
-        adds none raises ValueError."""
+        adds none, or has no sequences, raises ValueError."""
         self._add_file(file_path)
+
+    def _served(self, idx: int, reader) -> list[str]:
+        """The names of the GenBank sub-reader ``idx``'s records that the
+        genome serves from it: not those an earlier file holds."""
+        return [c["name"] for c in reader.chromosomes if self._chrom_index.get(c["name"]) == idx]
 
     @property
     def name(self) -> str:
@@ -112,24 +127,24 @@ class GenomeReader:
         result = []
         for idx, (fmt, reader) in enumerate(self._sub_readers):
             if fmt == "genbank":
-                result.extend(c["name"] for c in reader.chromosomes
-                              if self._chrom_index.get(c["name"]) == idx)
+                result.extend(self._served(idx, reader))
         return list(dict.fromkeys(result))
 
     @property
     def feature_types(self) -> list[str]:
-        """Return sorted list of all feature types across all annotated sub-readers."""
+        """Sorted feature types of the GenBank records the genome serves."""
         types: set[str] = set()
-        for fmt, reader in self._sub_readers:
+        for idx, (fmt, reader) in enumerate(self._sub_readers):
             if fmt == "genbank":
-                types.update(reader.feature_types)
+                types.update(reader.feature_types_of(self._served(idx, reader)))
         return sorted(types)
 
     def search_features(self, q_lower: str, limit: int = 50) -> list[dict]:
-        """Search GenBank annotations across all sub-readers for a gene/feature."""
+        """Search the annotations of the GenBank records the genome serves for
+        a gene/feature."""
         results = []
-        for fmt, reader in self._sub_readers:
+        for idx, (fmt, reader) in enumerate(self._sub_readers):
             if fmt == "genbank" and hasattr(reader, "search_features"):
-                results.extend(reader.search_features(q_lower, limit))
+                results.extend(reader.search_features(q_lower, limit, set(self._served(idx, reader))))
         results.sort(key=lambda r: (-r["relevance"], r["start"]))
         return results[:limit]

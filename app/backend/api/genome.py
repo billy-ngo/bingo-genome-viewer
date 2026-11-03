@@ -33,19 +33,40 @@ def _clean_name(raw: str) -> str:
 
 def _unique_dest(filename: str) -> Path:
     """A collision-proof, path-safe destination in the upload dir: the cleaned
-    basename prefixed with a short unique token, so two same-named genome
-    uploads don't overwrite each other and directory components are stripped."""
-    base = Path(_clean_name(filename or "genome")).name or "genome"
-    return _upload_dir / f"{uuid.uuid4().hex[:8]}_{base}"
+    basename in a folder of its own with a short unique name, so two
+    same-named genome uploads don't overwrite each other, directory
+    components are stripped, and the genome's name and messages keep the
+    user's file name. The caller creates the folder."""
+    base = Path(_clean_name(filename or "genome")).name
+    if base in ("", ".", ".."):
+        base = "genome"
+    return _upload_dir / uuid.uuid4().hex[:8] / base
+
+
+def _save_upload(file: UploadFile, dest: Path):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with dest.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+
+def _discard_upload(dest: Path, error: Exception) -> str:
+    """Delete an upload that did not become part of the genome, with the
+    index pyfaidx wrote beside it (best effort: on Windows a reader that
+    failed may still hold it open). Returns ``error``'s message, naming the
+    file instead of the upload's path."""
+    if dest.parent.parent == _upload_dir:      # its own folder (_unique_dest)
+        shutil.rmtree(dest.parent, ignore_errors=True)
+    return str(error).replace(str(dest), dest.name)
 
 
 @router.post("/load")
 async def load_genome(file: UploadFile = File(...)):
     dest = _unique_dest(file.filename)
+    loaded = False
     try:
-        with dest.open("wb") as f:
-            shutil.copyfileobj(file.file, f)
+        _save_upload(file, dest)
         app_state.load_genome(str(dest))
+        loaded = True
         genome = app_state.genome
         return {
             "name": genome.name,
@@ -56,7 +77,7 @@ async def load_genome(file: UploadFile = File(...)):
             "feature_types": genome.feature_types,
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e) if loaded else _discard_upload(dest, e))
 
 
 def _track_pairings(snapshot: tuple) -> dict:
@@ -65,9 +86,10 @@ def _track_pairings(snapshot: tuple) -> dict:
     merged_target_chromosomes), and its compatibility against the genome as it
     is now, by track id. The targets are remembered as the track's new ones.
     A track whose load was finishing during the merge, given its targets
-    since the snapshot, may have had them computed against the genome before
-    it: it is paired as a track loaded now would be."""
-    old_names, per_track, given = snapshot
+    since the snapshot but against the genome before the merge, is paired
+    from them in the same way; given them against the merged genome, it is
+    left out: its load answers with them."""
+    old_names, per_track, given, version = snapshot
     out = {}
 
     def pair(track_id, targets):
@@ -86,8 +108,10 @@ def _track_pairings(snapshot: tuple) -> dict:
 
     for track_id, (shown, mapped) in per_track.items():
         pair(track_id, lambda: app_state.merged_target_chromosomes(track_id, shown, old_names, mapped))
-    for track_id in app_state.remembered_tracks() - given:
-        pair(track_id, lambda: app_state.get_target_chromosomes(track_id))
+    for track_id, (shown, recorded) in app_state.remembered_targets().items():
+        if track_id not in given and recorded == version:
+            # Its ChromMap before the merge was not taken: drop none of shown.
+            pair(track_id, lambda: app_state.merged_target_chromosomes(track_id, shown, old_names, None))
     return out
 
 
@@ -106,15 +130,16 @@ async def add_chromosomes(file: UploadFile = File(...)):
     if app_state.genome is None:
         raise HTTPException(status_code=400, detail="No genome loaded")
     dest = _unique_dest(file.filename)
+    merged = False
     try:
-        with dest.open("wb") as f:
-            shutil.copyfileobj(file.file, f)
+        _save_upload(file, dest)
         # In the worker pool, as the track load endpoints do: against a draft
         # assembly each track's pairing walks thousands of chromosomes.
         snapshot = await run_in_threadpool(app_state.merge_snapshot)
         # Merges under genome_lock (concurrent /sequence and /features requests
         # can't read mid-mutation) and invalidates the tracks' chromosome maps.
         app_state.add_chromosomes(str(dest))
+        merged = True
         genome = app_state.genome
         tracks = await run_in_threadpool(_track_pairings, snapshot)
         return {
@@ -127,7 +152,7 @@ async def add_chromosomes(file: UploadFile = File(...)):
             "tracks": tracks,
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e) if merged else _discard_upload(dest, e))
 
 
 @router.post("/load-path")

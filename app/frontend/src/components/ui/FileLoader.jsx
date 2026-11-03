@@ -275,7 +275,7 @@ function classifyFiles(files) {
 /**
  * `mergeSignal` counts the merges started from a page drop (App), and
  * `onMergeStart` is called when one starts here: either way the pairing
- * notices and warning on screen, here or in App's drop toast, may no longer
+ * notices and errors on screen, here or in App's drop toast, may no longer
  * hold.
  */
 export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
@@ -284,7 +284,8 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
   const { tracks, addTrack, uploadTrack, commitTrack, discardTrack, updateTrack, addGenomeAnnotationTrack, error: trackError, setError } = useTracks()
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(null)
-  const [status, setStatus] = useState(null)
+  const [status, setStatusLine] = useState(null)
+  const statusTimer = useRef(null)
   const [notices, setNotices] = useState([]) // [{ text, title }] — length-only chromosome pairings, tracks a merge moved
   const noticeTimer = useRef(null)
   const [progress, setProgress] = useState(null) // { percent, loaded, total, label }
@@ -338,6 +339,22 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
     },
   }
 
+  /** Set the status line (null hides it). With `ms` it is hidden after that
+   *  long, or replaced by `next` ([text, ms]) when given. It replaces the
+   *  previous line along with its timer, so an earlier line's timer never
+   *  cuts a later one short. */
+  function setStatus(text, ms, next) {
+    if (statusTimer.current) { clearTimeout(statusTimer.current); statusTimer.current = null }
+    setStatusLine(text)
+    if (text && ms) {
+      statusTimer.current = setTimeout(() => {
+        statusTimer.current = null
+        if (next) setStatus(next[0], next[1])
+        else setStatusLine(null)
+      }, ms)
+    }
+  }
+
   async function loadGenomeFile(file) {
     setLoading(true); setErr(null); setProgress(null)
     setStatus(`Uploading genome: ${file.name}...`)
@@ -362,13 +379,15 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
           featureTypes: info.feature_types || [],
         })
       }
-      setStatus(`Genome loaded: ${info.name}`)
-      setTimeout(() => setStatus(null), 3000)
+      setStatus(`Genome loaded: ${info.name}`, 3000)
     } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null); setProgress(null) }
     finally { setLoading(false) }
   }
 
-  useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
+  useEffect(() => () => {
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    if (statusTimer.current) clearTimeout(statusTimer.current)
+  }, [])
 
   /** Show notices (lengthPairingNotice, movedTracksNotice; falsy ones are
    *  skipped) for PAIRING_NOTICE_MS. */
@@ -437,10 +456,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
       setErr([...errors, ...(warning ? [warning] : [])].join('; '))
     }
     if (errors.length) setStatus(null)
-    else {
-      setStatus(`Added chromosomes from ${files.length} file${files.length > 1 ? 's' : ''}.`)
-      setTimeout(() => setStatus(null), 3000)
-    }
+    else setStatus(`Added chromosomes from ${files.length} file${files.length > 1 ? 's' : ''}.`, 3000)
   }
 
   async function loadTrackEntries(entries) {
@@ -473,13 +489,8 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
     if (errors.length) { setErr(errors.join('; ')); setStatus(null) }
     else if (compatible.length > 0 && incompatible.length === 0) {
       const msg = `Added ${compatible.length} track${compatible.length > 1 ? 's' : ''}.`
-      if (hints.length) {
-        setStatus(msg)
-        setTimeout(() => { setStatus(hints.join(' ')); setTimeout(() => setStatus(null), 8000) }, 2000)
-      } else {
-        setStatus(msg)
-        setTimeout(() => setStatus(null), 3000)
-      }
+      if (hints.length) setStatus(msg, 2000, [hints.join(' '), 8000])
+      else setStatus(msg, 3000)
     } else if (incompatible.length === 0) { setStatus(null) }
     if (incompatible.length > 0) setTrackMismatch({ tracks: incompatible })
   }
@@ -590,8 +601,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
             featureTypes: info.feature_types || [],
           })
         }
-        setStatus(`Genome loaded: ${info.name}`)
-        setTimeout(() => setStatus(null), 3000)
+        setStatus(`Genome loaded: ${info.name}`, 3000)
       } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null) }
       finally { setLoading(false) }
     } else if (isTrack || isGenome) {
@@ -611,12 +621,8 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
         } else {
           commitTrack(info)
           showNotice(lengthPairingNotice([info]))
-          setStatus(`Track loaded: ${info.name}`)
-          if (info.hint) {
-            setTimeout(() => { setStatus(info.hint); setTimeout(() => setStatus(null), 8000) }, 2000)
-          } else {
-            setTimeout(() => setStatus(null), 3000)
-          }
+          if (info.hint) setStatus(`Track loaded: ${info.name}`, 2000, [info.hint, 8000])
+          else setStatus(`Track loaded: ${info.name}`, 3000)
         }
       } catch (e) { setErr(e.response?.data?.detail || e.message); setStatus(null) }
       finally { setLoading(false) }
@@ -755,8 +761,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
     for (const t of trackMismatch.tracks) commitTrack(t)
     setTrackMismatch(null)
     showNotice(lengthPairingNotice(trackMismatch.tracks))
-    setStatus(`Added ${trackMismatch.tracks.length} track${trackMismatch.tracks.length > 1 ? 's' : ''}.`)
-    setTimeout(() => setStatus(null), 3000)
+    setStatus(`Added ${trackMismatch.tracks.length} track${trackMismatch.tracks.length > 1 ? 's' : ''}.`, 3000)
   }
 
   const fileNames = prompt ? prompt.files.map(f => f.name).join(', ') : ''

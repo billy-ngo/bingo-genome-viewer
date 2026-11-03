@@ -159,6 +159,25 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   The server now drops a request as soon as a newer one for the same track
   arrives.
 
+### Fixed — genome files
+- An uploaded genome keeps its file name. Since 2.12.1 the header, the
+  annotation track and messages showed it with an 8-character prefix (for
+  example `e1e78f0c_Se`).
+- Adding a GenBank file to a FASTA genome shows the GenBank file's
+  annotations. The annotation track used to say "Track not found".
+- Genome search no longer finds genes in a merged GenBank record that the
+  genome does not show because its name was already taken. The feature-type
+  filter no longer lists types that only such records have.
+- Dropping two genome files on the page when no genome is loaded loads the
+  first and asks what to do with the others, as Load Files does. The others
+  used to be ignored without a message.
+- A file with no sequences, such as a FASTA file saved as `.gb`, is refused
+  with a message that says so, whether loaded as the genome or added to it. A
+  rejected upload is deleted from the server's upload folder, and its message
+  names the file instead of the upload's path.
+- Status messages after loading or adding files no longer disappear early
+  because an earlier message's timer ran out.
+
 ### Added
 - **Bin size** (Track Settings). **Auto** is the default (about one bin per
   pixel) and shows the bin size currently drawn. You can also choose a fixed

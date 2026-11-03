@@ -306,9 +306,12 @@ export function useTrackData(track, region, canvasWidth) {
       // Zoom changed but still within overscan — schedule a resolution refetch,
       // keeping the current data on screen. Big jumps (gene search, typed
       // locus) refetch at pan speed; the timer is not restarted by every
-      // further move, so dragging cannot postpone it indefinitely.
+      // further move, so dragging cannot postpone it indefinitely. In the read
+      // view it is restarted: the reads on screen cover the view (only their
+      // counts are for the larger one), so a wheel gesture makes one request,
+      // for where it ends.
       const big = zoomRatio < 1 / BIG_ZOOM_RATIO || zoomRatio > BIG_ZOOM_RATIO
-      if (!zoomDebounceRef.current || big) {
+      if (!zoomDebounceRef.current || big || readMode) {
         if (zoomDebounceRef.current) clearTimeout(zoomDebounceRef.current)
         zoomDebounceRef.current = setTimeout(() => {
           zoomDebounceRef.current = null

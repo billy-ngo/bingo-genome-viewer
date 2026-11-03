@@ -397,9 +397,9 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
           '(downsampled evenly across the view) — zoom in to see all')
       }
       if (hiddenReads > 0 && !needsScroll) {
-        warnings.push(`${hiddenReads.toLocaleString()} read${hiddenReads > 1 ? 's' : ''} hidden\u2014 increase track height to show all`)
+        warnings.push(`${hiddenReads.toLocaleString()} read${hiddenReads > 1 ? 's' : ''} hidden \u2014 increase track height to show all`)
       } else if (needsScroll) {
-        warnings.push(`${totalRows.toLocaleString()} rows· Shift+scroll or drag scrollbar to navigate`)
+        warnings.push(`${totalRows.toLocaleString()} rows · Shift+scroll or drag scrollbar to navigate`)
       }
       onWarning(warnings.length ? warnings.join('\n') : null)
     }

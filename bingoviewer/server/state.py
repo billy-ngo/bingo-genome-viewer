@@ -143,6 +143,7 @@ class AppState:
         # or by add-chromosomes), i.e. where the client shows it: a merge
         # starts from these. Forgotten when the genome is replaced.
         self._targets: dict[str, list[str]] = {}
+        self._targets_version: dict[str, int] = {}   # the genome_version each was recorded under
 
     # ── Thread-safety helpers ────────────────────────────────────
     def track_lock(self, track_id: str) -> threading.Lock:
@@ -162,7 +163,8 @@ class AppState:
 
     @property
     def genome_version(self) -> int:
-        """Bumped whenever the genome is replaced or extended (remember_targets)."""
+        """Bumped whenever the genome is replaced or extended (remember_targets,
+        merge_snapshot)."""
         return self._genome_version
 
     def next_request(self, key: str) -> int:
@@ -272,16 +274,22 @@ class AppState:
             self.genome = new_genome
             self._genome_changed()
             self._targets.clear()
+            self._targets_version.clear()
             if self.genome.is_annotated():
-                track_id = "genome_annotations"
-                self.tracks[track_id] = {
-                    "id": track_id,
-                    "name": f"{self.genome.name} (annotations)",
-                    "file_path": file_path,
-                    "track_type": "genome_annotations",
-                    "file_format": "genbank",
-                }
-                self.readers[track_id] = None  # served directly from genome reader
+                self._add_genome_annotations_track()
+
+    def _add_genome_annotations_track(self):
+        """List the genome's GenBank features as the 'genome_annotations'
+        track, served by the genome reader (caller holds _state_lock)."""
+        track_id = "genome_annotations"
+        self.tracks[track_id] = {
+            "id": track_id,
+            "name": f"{self.genome.name} (annotations)",
+            "file_path": self.genome.file_path,
+            "track_type": "genome_annotations",
+            "file_format": "genbank",
+        }
+        self.readers[track_id] = None  # served directly from genome reader
 
     def add_chromosomes(self, file_path: str):
         """Merge another file's chromosomes into the loaded genome."""
@@ -291,6 +299,10 @@ class AppState:
             self.genome.add_chromosomes_from(file_path)
             with self._state_lock:
                 self._genome_changed()
+                # A GenBank file merged into a FASTA genome brings features:
+                # the client then shows the annotation track, so serve it.
+                if self.genome.is_annotated():
+                    self._add_genome_annotations_track()
 
     def load_track(self, file_path: str, name: str, index_path: str = None) -> dict:
         # Detect compound extensions (.vcf.gz / .wig.gz / .bedgraph.gz / .bdg.gz)
@@ -603,24 +615,29 @@ class AppState:
                 return False
             if track_id in self.tracks:
                 self._targets[track_id] = list(targets)
+                self._targets_version[track_id] = self._genome_version
             return True
 
-    def remembered_tracks(self) -> set:
-        """The data tracks given target chromosomes since the genome was loaded."""
+    def remembered_targets(self) -> dict:
+        """By data track id, the target chromosomes it was given since the
+        genome was loaded and the genome_version they were recorded under."""
         with self._state_lock:
-            return {t for t in self._targets if t in self.tracks}
+            return {t: (list(s), self._targets_version.get(t))
+                    for t, s in self._targets.items() if t in self.tracks}
 
     def merge_snapshot(self) -> tuple:
         """What merged_target_chromosomes needs from before a merge: the
         genome's chromosome names, per data track (by id) the chromosomes it
         is shown on and those its ChromMap pairs (None when it has no map),
-        and the ids of the tracks given targets so far. A track given no
-        targets since the genome was replaced (loaded against the previous
-        one) is left out: where the client shows it is unknown."""
+        the ids of the tracks given targets so far, and the genome_version.
+        A track given no targets since the genome was replaced (loaded
+        against the previous one) is left out: where the client shows it is
+        unknown."""
         if self.genome is None:
-            return set(), {}, set()
+            return set(), {}, set(), self._genome_version
         old_names = {c["name"] for c in self.genome.chromosomes}
         with self._state_lock:
+            version = self._genome_version
             given = {t: list(s) for t, s in self._targets.items() if t in self.tracks}
         per_track = {}
         for track_id, shown in given.items():
@@ -629,7 +646,7 @@ class AppState:
             except Exception:
                 continue
             per_track[track_id] = (shown, None if cmap is None else set(cmap.names) | set(cmap.aliases))
-        return old_names, per_track, set(given)
+        return old_names, per_track, set(given), version
 
     def merged_target_chromosomes(self, track_id: str, shown: list, old_names: set,
                                   mapped_before: Optional[set]) -> list:
@@ -689,6 +706,7 @@ class AppState:
         with self._state_lock:
             self._chrom_maps.pop(track_id, None)
             self._targets.pop(track_id, None)
+            self._targets_version.pop(track_id, None)
             for key in [k for k in self._request_gen if k == track_id or k.startswith(track_id + "|")]:
                 del self._request_gen[key]
 

@@ -38,8 +38,15 @@ class GenBankReader:
     @property
     def feature_types(self) -> list[str]:
         """Return sorted list of all feature types found across all records."""
+        return self.feature_types_of(self._records)
+
+    def feature_types_of(self, chroms) -> list[str]:
+        """feature_types, of the records named in ``chroms`` only."""
         types: set[str] = set()
-        for record in self._records.values():
+        for chrom in chroms:
+            record = self._records.get(chrom)
+            if record is None:
+                continue
             for feat in record.features:
                 if feat.type and feat.type != "source":
                     types.add(feat.type)
@@ -70,14 +77,17 @@ class GenBankReader:
                     index.append((str(nm).lower(), str(nm), chrom, fstart, fend, feat.type))
         return index
 
-    def search_features(self, q_lower: str, limit: int = 50) -> list[dict]:
+    def search_features(self, q_lower: str, limit: int = 50, chroms=None) -> list[dict]:
         """Find genome features whose gene/locus_tag/product/name matches the
-        query. relevance: 3=exact, 2=prefix, 1=substring."""
+        query, in the records named in ``chroms`` when given. relevance:
+        3=exact, 2=prefix, 1=substring."""
         if getattr(self, "_search_index", None) is None:
             self._search_index = self._build_search_index()
         # De-dup by (chrom, start, end) keeping the best relevance.
         best_by_loc: dict[tuple, dict] = {}
         for nm_lower, nm, chrom, start, end, ftype in self._search_index:
+            if chroms is not None and chrom not in chroms:
+                continue
             if q_lower == nm_lower:
                 rel = 3
             elif nm_lower.startswith(q_lower):

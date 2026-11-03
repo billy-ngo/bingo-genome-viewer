@@ -148,10 +148,16 @@ never uses `get_target_chromosomes`' fallbacks (closest size, every
 chromosome): non-BAM readers serve a lone contig under any name, so a
 fallback would draw it on an added chromosome of another organism. A track
 load records its targets only against the `genome_version` it computed them
-for (`api/tracks.py` `_pairing` recomputes otherwise), and a merge also pairs
-the tracks recorded since its `merge_snapshot`, so a load and a merge that
+for (`api/tracks.py` `_pairing` recomputes otherwise), and each record keeps
+that version: a merge also pairs, by the same rule, the tracks recorded since
+its `merge_snapshot` against the genome before it, so a load and a merge that
 overlap still agree. `GenomeReader.chromosomes` lists each name once (the
-first file's); `add_chromosomes_from` refuses a file that adds no new name.
+first file's), and its annotation lookups (`annotated_chromosomes`,
+`feature_types`, `search_features`) skip GenBank records whose name an
+earlier file holds; `add_chromosomes_from` refuses a file that adds no new
+name. Genome uploads go to a folder of their own (`api/genome.py`
+`_unique_dest`), so the file, and the genome's name, keep the user's file
+name.
 
 **JavaScript / React.** Functional components with hooks only (no classes).
 Keep render-time logic minimal; put expensive computation in `useMemo`.

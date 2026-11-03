@@ -145,6 +145,13 @@ function BrowserApp() {
     setDropNotices([])
   }, [])
 
+  /** A merge is starting in FileLoader: it also clears an error in the drop
+   *  toast, as a merge here clears FileLoader's. */
+  const onFileLoaderMergeStart = useCallback(() => {
+    clearDropNotices()
+    setDropStatus(s => (s?.error ? null : s))
+  }, [clearDropNotices])
+
   // Heartbeat — keeps the backend server alive while this tab is open.
   // The server tracks tabs individually by UUID so that closing one tab
   // doesn't prematurely terminate the server while others are still open;
@@ -291,12 +298,15 @@ function BrowserApp() {
     }
 
     try {
-      // Genome files dropped while a genome is loaded: the user is asked what
-      // to do with them once the tracks dropped with them are loaded, as in
-      // FileLoader. A merge pairs only the tracks already added, so a track
-      // still uploading, or waiting in the compatibility dialog (drawn over
-      // the prompt), would keep its targets from before the merge.
-      const promptFiles = genomeFiles.length > 0 && genome ? genomeFiles : null
+      // Genome files dropped while a genome is loaded, or those after the first
+      // when none is: the user is asked what to do with them once the tracks
+      // dropped with them are loaded, as in FileLoader. A merge pairs only the
+      // tracks already added, so a track still uploading, or waiting in the
+      // compatibility dialog (drawn over the prompt), would keep its targets
+      // from before the merge.
+      const promptFiles = genome
+        ? (genomeFiles.length > 0 ? genomeFiles : null)
+        : (genomeFiles.length > 1 ? genomeFiles.slice(1) : null)
       if (genomeFiles.length > 0 && !genome) {
         flashDropStatus({ msg: `Loading genome: ${genomeFiles[0].name}...` })
         const res = await genomeApi.load(genomeFiles[0])
@@ -607,7 +617,7 @@ function BrowserApp() {
         </div>
       </div>
 
-      <FileLoader mergeSignal={mergeSignal} onMergeStart={clearDropNotices} />
+      <FileLoader mergeSignal={mergeSignal} onMergeStart={onFileLoaderMergeStart} />
       <NavigationBar />
 
       <div style={S.trackArea} ref={containerRef} data-tour="track-area">
