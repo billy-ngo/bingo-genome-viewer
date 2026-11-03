@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom'
 import { useTracks, DEFAULT_ANNOTATION_COLORS, makeGroupId } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useBrowser } from '../../store/BrowserContext'
-import { getLiveTrackData, useLiveDataVersion, computeAutoScale, needsSplitLayout } from '../../hooks/useTrackData'
+import { getLiveTrackData, useLiveDataVersion, computeAutoScale, needsSplitLayout, scaleGroup } from '../../hooks/useTrackData'
 import { formatBp, formatValue, coverageAxis } from '../../utils/coverageStats'
 import { MAX_BINS } from '../../utils/fetchPlan'
 import DraggablePanel from './DraggablePanel'
@@ -70,6 +70,9 @@ export default function TrackSettings({ onClose }) {
   const [selected, setSelected] = useState(new Set())
   const [customBin, setCustomBin] = useState(false)
   useEffect(() => { setCustomBin(false) }, [selected])
+  // Selected tracks that the last untick of Auto left on Auto (fixScaleAtCurrent).
+  const [keptAuto, setKeptAuto] = useState([])
+  useEffect(() => { setKeptAuto([]) }, [selected])
 
   function toggle(id) {
     setSelected(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
@@ -151,21 +154,55 @@ export default function TrackSettings({ onClose }) {
   function applyToCoverage(updates) { updateMultipleTracks(coverageLikeIds, updates) }
   function removeSelected() { for (const id of selected) removeTrack(id); setSelected(new Set()) }
 
+  /** The track whose axis `tr` shows: an overlay row's base layer (its first
+   *  member drawn here), otherwise the track itself; null when `tr` is not
+   *  drawn on this chromosome (hidden, or no data on it). */
+  function axisRef(tr) {
+    const chrom = region?.chrom
+    const shown = m => m.visible !== false && (!m.targetChromosomes || !chrom || m.targetChromosomes.includes(chrom))
+    const ref = (tr.overlayGroup && tracks.find(m => m.overlayGroup === tr.overlayGroup && shown(m))) || tr
+    return shown(ref) ? ref : null
+  }
+
+  /** True when the axis `ref` draws comes only from live data for this view:
+   *  every track sharing it (scaleGroup) holds data for this chromosome
+   *  fetched over a range containing [region.start, region.end). A hidden
+   *  track's frozen data, another view's, or a fetch still on its way never
+   *  counts. */
+  function axisIsCurrent(ref) {
+    if (!region) return false
+    return scaleGroup(ref, region, tracks).every(m => {
+      const d = getLiveTrackData(m.id)
+      return !!d && (!d.chrom || d.chrom === region.chrom) && d.start <= region.start && d.end >= region.end
+    })
+  }
+
+  // Of the tracks the last untick left on Auto, those still on Auto and still
+  // not on screen (the hint under Y Scale counts them).
+  const keptAutoNow = keptAuto.filter(id => {
+    const tr = coverageLike.find(t => t.id === id)
+    if (!tr || tr.scaleMax != null || tr.scaleMin != null) return false
+    const ref = axisRef(tr)
+    return !ref || !axisIsCurrent(ref)
+  }).length
+
   /** Turn Auto off at the axis each track draws now, so neither the picture
    *  nor its labels change (the old fixed 100/100 start rarely suited the
    *  data). The axis comes from the renderers' own rule (coverageAxis): linked
    *  and overlaid tracks share their group's axis, so they get the same
-   *  values, and a track drawn only as a smoothed curve gets the curve's. */
+   *  values, and a track drawn only as a smoothed curve gets the curve's.
+   *  Only an axis drawn from data for this view is fixed: a track that is not
+   *  on screen (hidden, not on this chromosome, not loaded yet) keeps Auto,
+   *  and the panel says so. */
   function fixScaleAtCurrent() {
-    const chrom = region?.chrom
-    const shown = m => m.visible !== false && (!m.targetChromosomes || !chrom || m.targetChromosomes.includes(chrom))
+    const kept = []
     for (const tr of coverageLike) {
-      // An overlay row's axis is the one its base layer (first member drawn) shows.
-      const ref = (tr.overlayGroup && tracks.find(m => m.overlayGroup === tr.overlayGroup && shown(m))) || tr
+      const ref = axisRef(tr)
+      if (!ref || !axisIsCurrent(ref)) { kept.push(tr.id); continue }
       const auto = computeAutoScale(ref, region, tracks)
       const d = getLiveTrackData(ref.id)
-      const bins = region && d?.bins?.length && (!d.chrom || d.chrom === chrom) ? d.bins : null
-      let up = auto.max > 0 ? auto.max : 100   // nothing drawn yet, or individual reads
+      const bins = d.bins?.length ? d.bins : null
+      let up = auto.max > 0 ? auto.max : 100   // individual reads: no axis is drawn
       let down = null
       if (bins) {
         // A read track's coverage view never uses the split layout (ReadTrack).
@@ -177,6 +214,7 @@ export default function TrackSettings({ onClose }) {
       if (down == null) down = auto.min < 0 ? -auto.min : up
       updateTrack(tr.id, { scaleMax: scaleAt(up), scaleMin: scaleAt(down) })
     }
+    setKeptAuto(kept)
   }
 
   function onBinSelect(v) {
@@ -416,11 +454,22 @@ export default function TrackSettings({ onClose }) {
                 <label style={S.cbLabel}>
                   <input type="checkbox" checked={commonAutoScale === true}
                     ref={el => { if (el) el.indeterminate = commonAutoScale === null }}
-                    onChange={e => { if (e.target.checked) applyToCoverage({ scaleMax: null, scaleMin: null }); else fixScaleAtCurrent() }}
+                    onChange={e => {
+                      if (e.target.checked) { setKeptAuto([]); applyToCoverage({ scaleMax: null, scaleMin: null }) }
+                      else fixScaleAtCurrent()
+                    }}
                     style={{ cursor: 'pointer' }} />
                   Auto
                 </label>
                 {commonAutoScale === null && <span style={S.hint}>mixed {'—'} tick to make all auto</span>}
+              </div>
+            )}
+            {/* Unticking Auto fixes only axes drawn for this view. */}
+            {hasCoverage && keptAutoNow > 0 && (
+              <div style={S.subRow}>
+                <span style={S.hint}>
+                  {keptAutoNow} selected track{keptAutoNow > 1 ? 's' : ''} not on screen keep{keptAutoNow > 1 ? '' : 's'} Auto
+                </span>
               </div>
             )}
             {/* Fit to the visible region (default) — off fits the whole fetched

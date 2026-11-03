@@ -11,8 +11,8 @@ import { useTheme } from '../../store/ThemeContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTrackData, computeAutoScale, useLiveDataVersion } from '../../hooks/useTrackData'
 import { useReferenceSequence } from '../../hooks/useReferenceSequence'
-import { binHigh, binExtremes, windowingOf, formatValue, coverageStyle, coverageAxis } from '../../utils/coverageStats'
-import { axisRatio, drawPending, LOG_LABEL } from './CoverageTrack'
+import { binHigh, windowingOf, formatValue, coverageStyle, coverageAxis, clipWarnings } from '../../utils/coverageStats'
+import { axisRatio, drawPending, shadePending, LOG_LABEL } from './CoverageTrack'
 
 const READ_DETAIL_THRESHOLD = 50_000
 const NUCL_PX_THRESHOLD = 6
@@ -77,9 +77,11 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
   }, [data?.reads, showFwd, showRev])
 
   // Read-view row geometry, shared by the draw, the Shift+wheel handler and
-  // the scrollbar so they agree on how far the pileup scrolls. Bases (and the
-  // taller rows they need) are drawn only when they fit, not merely because a
-  // reference sequence is loaded: it is fetched for every view up to 2 kb.
+  // the scrollbar so they agree on how far the pileup scrolls: at the last
+  // scroll position the last row ends at the bottom edge, and a pileup whose
+  // rows all fit does not scroll at all. Bases (and the taller rows they need)
+  // are drawn only when they fit, not merely because a reference sequence is
+  // loaded: it is fetched for every view up to 2 kb.
   const pxPerBp = region ? width / (region.end - region.start) : 0
   const showBases = useMemo(
     () => showNucleotides && pxPerBp >= NUCL_PX_THRESHOLD && refSeq != null,
@@ -90,7 +92,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     for (const r of visibleReads || []) if (r.row > maxRow) maxRow = r.row
     const totalRows = maxRow + 1
     const visibleRows = Math.floor(height / (rh + ROW_GAP))
-    return { rh, totalRows, visibleRows, maxScroll: Math.max(0, totalRows - visibleRows + 1) }
+    return { rh, totalRows, visibleRows, maxScroll: Math.max(0, totalRows - visibleRows) }
   }, [showBases, visibleReads, height])
 
   // Reset scroll when region changes significantly
@@ -105,20 +107,27 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     prevRegionRef.current = region
   }, [region?.chrom, region?.start, region?.end])
 
-  // Scroll handler for the track area (wheel in read detail mode).
-  // Only takes over when Shift is held (or trackpad vertical-only gesture);
-  // otherwise the global useCanvasInteraction handler does horizontal zoom.
-  const onWheel = useCallback((e) => {
-    if (!visibleReads?.length) return
-    if (!e.shiftKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return
-    if (!e.shiftKey) return  // Plain wheel → zoom (handled by useCanvasInteraction)
-    const { maxScroll } = rows
-    if (maxScroll <= 0) return
-    e.preventDefault()
-    e.stopPropagation()
-    // Step from the row drawn now (the draw clamps scrollRow to maxScroll).
-    setScrollRow(prev => Math.max(0, Math.min(maxScroll, Math.min(prev, maxScroll) + Math.sign(e.deltaY) * 3)))
-  }, [visibleReads, rows])
+  // Shift+wheel scrolls the pileup in read detail mode; a plain wheel is left
+  // to the global useCanvasInteraction handler, which zooms. The listener is
+  // attached natively as non-passive, like that one: React registers wheel
+  // listeners as passive, where preventDefault is ignored (and Chrome logs an
+  // error on every tick). It reads the current rows through a ref.
+  const wheelRef = useRef(null)
+  wheelRef.current = { rows, hasReads: !!visibleReads?.length }
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+    function onWheel(e) {
+      const { rows: { maxScroll }, hasReads } = wheelRef.current
+      if (!hasReads || !e.shiftKey || maxScroll <= 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      // Step from the row drawn now (the draw clamps scrollRow to maxScroll).
+      setScrollRow(prev => Math.max(0, Math.min(maxScroll, Math.min(prev, maxScroll) + Math.sign(e.deltaY) * 3)))
+    }
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -215,20 +224,44 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
           warnings.push(`Computing exact coverage\u2026 ${Math.round(100 * (data.coverage_progress || 0))}% (shaded part pending)`)
         }
         if (data.truncated) warnings.push('Coverage incomplete at this zoom (read limit reached) \u2014 zoom in for exact values')
-        const visMax = binExtremes(data.bins, windowing, region.start, region.end).max
-        if (track.scaleMax != null && visMax > track.scaleMax) {
-          warnings.push(`Bars clipped: visible max ${formatValue(visMax)} exceeds scale ${formatValue(track.scaleMax)}`)
-        }
+        // Clipping is judged on what is drawn: the bars, or the curve alone.
+        warnings.push(...clipWarnings(track, data.bins, axis, region, { scaleMax: track.scaleMax != null ? track.scaleMax : null }))
         onWarning(warnings.length ? warnings.join('\n') : null)
       }
       return
     }
 
     // ── Read detail mode (zoomed in) ────────────────────────────
+    const toX = (pos) => ((pos - regionStart) / regionLen) * width
+    // When the backend's read-scan limit is reached (total_exact false), the
+    // pileup is complete only over [start, scanned_to): the rest of the view
+    // was not scanned. It is shaded like coverage not computed yet, so it never
+    // reads as a stretch without reads. (Without scanned_to, i.e. an older
+    // backend, the last read start bounds the complete part.)
+    const limited = data.total_exact === false
+    const scannedTo = !limited ? null
+      : Number.isFinite(data.scanned_to) ? data.scanned_to
+      : (data.reads || []).reduce((m, r) => Math.max(m, r.start), regionStart)
+    const unscannedX = limited ? Math.max(0, toX(Math.max(scannedTo, regionStart))) : width
+    const limitWarning = limited ? readLimitWarning(data, scannedTo, regionStart) : null
+
     if (!data.reads?.length) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
-      ctx.fillText('No reads in region', 8, height / 2 + 4)
-      if (onWarning) onWarning(error ? `Update failed: ${error} — showing last loaded data` : null)
+      if (limited) {
+        // The scan stopped before it could show a read here.
+        if (unscannedX < width) shadePending(ctx, unscannedX, width, height, theme)
+        const msg = 'Too many reads to scan here'
+        const tx = Math.max(8, Math.min(unscannedX + 8, width - ctx.measureText(msg).width - 8))
+        ctx.fillText(msg, tx, height / 2 + 4)
+      } else {
+        ctx.fillText('No reads in region', 8, height / 2 + 4)
+      }
+      if (onWarning) {
+        const warnings = []
+        if (error) warnings.push(`Update failed: ${error} — showing last loaded data`)
+        if (limitWarning) warnings.push(limitWarning)
+        onWarning(warnings.length ? warnings.join('\n') : null)
+      }
       reportAuto(0)
       return
     }
@@ -240,7 +273,6 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       return
     }
 
-    const toX = (pos) => ((pos - regionStart) / regionLen) * width
     const { rh, totalRows, visibleRows, maxScroll } = rows
     const rg = ROW_GAP
 
@@ -327,6 +359,8 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       }
       drawnReads++
     }
+    // The part of the view the read-scan limit left unscanned.
+    if (unscannedX < width) shadePending(ctx, unscannedX, width, height, theme)
 
     // ── Vertical scrollbar ──────────────────────────────────────
     if (needsScroll) {
@@ -347,10 +381,13 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     if (onWarning) {
       const warnings = []
       if (error) warnings.push(`Update failed: ${error} — showing last loaded data`)
-      if (data.truncated) {
-        // The pileup is a uniform sample across the view (never just its left part).
-        warnings.push(`Showing ${data.reads.length.toLocaleString()} of ${data.total_exact === false ? '≥' : ''}` +
-          `${(data.total || 0).toLocaleString()} reads (downsampled evenly across the view) — zoom in to see all`)
+      if (limitWarning) {
+        warnings.push(limitWarning)
+      } else if (data.truncated) {
+        // With an exact total the pileup is an even sample of every read
+        // overlapping the view; past the scan limit it is not (above).
+        warnings.push(`Showing ${data.reads.length.toLocaleString()} of ${(data.total || 0).toLocaleString()} reads ` +
+          '(downsampled evenly across the view) — zoom in to see all')
       }
       if (hiddenReads > 0 && !needsScroll) {
         warnings.push(`${hiddenReads} read${hiddenReads > 1 ? 's' : ''} hidden \u2014 increase track height to show all`)
@@ -403,10 +440,24 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     <canvas
       ref={canvasRef}
       style={{ display: 'block', width: '100%', height }}
-      onWheel={onWheel}
       onMouseDown={onMouseDown}
     />
   )
+}
+
+/** The badge text for a read view the backend's read-scan limit cut short:
+ *  the pileup is complete only up to `scannedTo` (and `total` is a lower
+ *  bound on the reads overlapping the view). */
+function readLimitWarning(data, scannedTo, viewStart) {
+  const n = data.reads?.length || 0
+  if (n === 0 && scannedTo <= viewStart) {
+    return 'Read limit reached: too many reads to scan in this view (shaded part not scanned) — zoom in to see reads'
+  }
+  if (n === 0) {
+    return `Read limit reached: no reads up to ${scannedTo.toLocaleString()} (shaded part not scanned) — zoom in to see all`
+  }
+  return `Read limit reached: reads shown up to ${scannedTo.toLocaleString()} only ` +
+    `(≥${(data.total || 0).toLocaleString()} overlap the view; shaded part not scanned) — zoom in to see all`
 }
 
 /**

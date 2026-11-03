@@ -15,7 +15,7 @@ import { useBrowser } from '../../store/BrowserContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTrackData, computeAutoScale, needsSplitLayout, useLiveDataVersion } from '../../hooks/useTrackData'
-import { binHigh, binLow, binExtremes, windowingOf, formatValue, coverageStyle, coverageAxis } from '../../utils/coverageStats'
+import { binHigh, binLow, windowingOf, formatValue, coverageStyle, coverageAxis, clipWarnings } from '../../utils/coverageStats'
 
 export const LOG_LABEL = ' log₂(x+1)'
 
@@ -241,7 +241,8 @@ export default function CoverageTrack({
     if (!isOverlayLayer) drawAxisLabels(ctx, axis, hasNegative, axisNote, height, theme)
 
     // Warnings: refresh failures, coverage still being computed, and values
-    // clipped by a fixed scale (judged on what is visible, not the overscan).
+    // clipped by a fixed scale (judged on what is drawn — the bars, or the
+    // curve when they are hidden — over the visible region, not the overscan).
     if (onWarning) {
       const warnings = []
       if (error) {
@@ -254,13 +255,7 @@ export default function CoverageTrack({
       if (data.truncated) {
         warnings.push('Coverage incomplete at this zoom (read limit reached) — shaded part not computed; zoom in for exact values')
       }
-      const vis = binExtremes(bins, windowing, region.start, region.end)
-      if (userScaleMax != null && vis.max > userScaleMax) {
-        warnings.push(`Bars clipped: visible max ${formatValue(vis.max)} exceeds scale ${formatValue(userScaleMax)}`)
-      }
-      if (hasNegative && userScaleMin != null && -vis.min > userScaleMin) {
-        warnings.push(`Negative bars clipped: visible min −${formatValue(-vis.min)} exceeds scale −${formatValue(userScaleMin)}`)
-      }
+      warnings.push(...clipWarnings(track, bins, axis, region, { scaleMax: userScaleMax, scaleMin: userScaleMin, split: hasNegative }))
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
   }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea, track.windowing, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
@@ -268,24 +263,39 @@ export default function CoverageTrack({
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }
 
-/** Shade runs of bins that are not computed yet (a BAM's background coverage
- *  index still building), so missing data is never mistaken for zero. */
-export function drawPending(ctx, bins, regionStart, regionLen, width, height, theme) {
+/** Opacity of the shade over data that is not computed (or not scanned) yet. */
+export const PENDING_ALPHA = 0.12
+
+/** Pixel spans [x0, x1] of the runs of consecutive pending bins (not computed
+ *  yet: a BAM's background coverage index still building, or past the live
+ *  fallback's read cap). The SVG export shades the same spans. */
+export function pendingRuns(bins, regionStart, regionLen, width) {
+  const runs = []
   let runStart = null
   for (let i = 0; i <= bins.length; i++) {
     const p = i < bins.length && bins[i].pending
     if (p && runStart == null) runStart = bins[i].start
     if (!p && runStart != null) {
-      const x0 = ((runStart - regionStart) / regionLen) * width
-      const x1 = ((bins[i - 1].end - regionStart) / regionLen) * width
-      ctx.save()
-      ctx.globalAlpha = 0.12
-      ctx.fillStyle = theme.textTertiary || '#888'
-      ctx.fillRect(x0, 0, x1 - x0, height)
-      ctx.restore()
+      runs.push([((runStart - regionStart) / regionLen) * width, ((bins[i - 1].end - regionStart) / regionLen) * width])
       runStart = null
     }
   }
+  return runs
+}
+
+/** Shade the full height of [x0, x1): data that is missing there is not
+ *  known yet, and must never be mistaken for zero. */
+export function shadePending(ctx, x0, x1, height, theme) {
+  ctx.save()
+  ctx.globalAlpha = PENDING_ALPHA
+  ctx.fillStyle = theme.textTertiary || '#888'
+  ctx.fillRect(x0, 0, x1 - x0, height)
+  ctx.restore()
+}
+
+/** Shade the runs of bins that are not computed yet (pendingRuns). */
+export function drawPending(ctx, bins, regionStart, regionLen, width, height, theme) {
+  for (const [x0, x1] of pendingRuns(bins, regionStart, regionLen, width)) shadePending(ctx, x0, x1, height, theme)
 }
 
 /** Centre line of the split (+/−) layout. Like the scale labels it belongs to

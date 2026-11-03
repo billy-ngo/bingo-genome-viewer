@@ -3,15 +3,16 @@
  *
  * Renders all visible tracks to an SVG document matching the on-screen layout,
  * then offers download. Supports coverage bars, annotations, reads, and variants.
+ * The dialog notes exported tracks whose data is incomplete on screen.
  */
 import React, { useState } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
-import { getLiveTrackData, computeAutoScale, needsSplitLayout } from '../../hooks/useTrackData'
+import { getLiveTrackData, computeAutoScale, needsSplitLayout, useLiveDataVersion } from '../../hooks/useTrackData'
 import { binHigh, binLow, windowingOf, formatValue, coverageStyle, coverageAxis } from '../../utils/coverageStats'
 import { rulerTicks } from '../../utils/ruler'
-import { axisRatio, LOG_LABEL, drawCenterLine, drawAxisLabels } from '../tracks/CoverageTrack'
+import { axisRatio, LOG_LABEL, drawCenterLine, drawAxisLabels, pendingRuns, PENDING_ALPHA } from '../tracks/CoverageTrack'
 import NumberInput from './NumberInput'
 
 const FORMATS = ['svg', 'png', 'jpg']
@@ -32,6 +33,12 @@ export default function ExportImage({ onClose }) {
   const [selectedTrackIds, setSelectedTrackIds] = useState(new Set(visibleTracks.map(t => t.id)))
   const [exportWidth, setExportWidth] = useState(1200)
   const [exporting, setExporting] = useState(false)
+  // Re-render as track data lands, so the note on incomplete data stays
+  // current (e.g. while a BAM's coverage index is still being built).
+  useLiveDataVersion(true)
+  const dataNotes = region
+    ? incompleteDataNotes(visibleTracks.filter(t => selectedTrackIds.has(t.id)), tracks, region.chrom)
+    : []
 
   function toggleTrack(id) {
     setSelectedTrackIds(prev => {
@@ -113,6 +120,12 @@ export default function ExportImage({ onClose }) {
               </label>
             ))}
           </div>
+          {dataNotes.length > 0 && (
+            <div style={S.note}>
+              <div>Incomplete data, exported as it is shown on screen:</div>
+              {dataNotes.map((n, i) => <div key={i}>{'• '}{n}</div>)}
+            </div>
+          )}
           {format === 'svg' && (
             <div style={{ padding: '4px 0', fontSize: 10, color: theme.textTertiary }}>
               SVG output is fully vectorized — editable in Illustrator, Inkscape, etc.
@@ -165,6 +178,31 @@ function buildExportUnits(tracks, allTracks = tracks, chrom = null) {
 
 function unitHeight(u) {
   return u.type === 'overlay' ? u.members[0].height : u.track.height
+}
+
+/** One short note per exported track whose data on screen is incomplete:
+ *  coverage still being computed or cut at the read limit (both shaded, on
+ *  screen and in the export), or a read pileup that is a sample of the reads
+ *  or ends at the read-scan limit. */
+function incompleteDataNotes(tracks, allTracks, chrom) {
+  const notes = []
+  for (const unit of buildExportUnits(tracks, allTracks, chrom)) {
+    for (const t of unit.type === 'overlay' ? unit.layers : [unit.track]) {
+      const d = getLiveTrackData(t.id)
+      if (!d || (d.chrom && d.chrom !== chrom)) continue
+      if (d.bins) {
+        if (d.complete === false) {
+          notes.push(`${t.name}: coverage still being computed (${Math.round(100 * (d.coverage_progress || 0))}%) — the shaded part is pending`)
+        }
+        if (d.truncated) notes.push(`${t.name}: coverage incomplete at this zoom (read limit reached) — the shaded part is not computed`)
+      } else if (d.reads && d.total_exact === false) {
+        notes.push(`${t.name}: read limit reached — the shaded part of the pileup was not scanned`)
+      } else if (d.reads && d.truncated) {
+        notes.push(`${t.name}: ${d.reads.length.toLocaleString()} of ${(d.total || 0).toLocaleString()} reads shown (downsampled)`)
+      }
+    }
+  }
+  return notes
 }
 
 /** The split (+/−) layout decision the screen makes for a track: CoverageTrack
@@ -233,8 +271,9 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
       // the on-screen layers. Mirror the on-screen rules: only members drawn there
       // — and ticked under Include tracks — are drawn; all layers use the group
       // host's scale/log settings and the group's split layout, decided like the
-      // screen from the members it draws; the first exported layer carries the
-      // scale labels, and the row shows the host's region highlights.
+      // screen from the members it draws; the screen's base layer shades its
+      // pending bins; the first exported layer carries the scale labels, and
+      // the row shows the host's region highlights.
       const groupHost = unit.members[0]
       const groupHasNeg = unit.onScreen.length > 0 && splitLayout(unit.onScreen[0], region, allTracks)
       unit.layers.forEach((m, mi) => {
@@ -245,6 +284,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
         if (parts.fill) svg += `<g class="track-fill" opacity="${op}">\n${parts.fill}</g>\n`
         if (parts.bars) svg += `<g class="track-bars" opacity="${op}">\n${parts.bars}</g>\n`
         if (parts.outline) svg += `<g class="track-outline" opacity="${op}">\n${parts.outline}</g>\n`
+        if (m.id === unit.onScreen[0].id && parts.pending) svg += `<g class="track-pending">\n${parts.pending}</g>\n`
         if (mi === 0 && parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
       })
       svg += svgRegionHighlights(groupHost, region, trackW, uH)
@@ -262,6 +302,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
           if (parts.fill) svg += `<g class="track-fill">\n${parts.fill}</g>\n`
           if (parts.bars) svg += `<g class="track-bars">\n${parts.bars}</g>\n`
           if (parts.outline) svg += `<g class="track-outline">\n${parts.outline}</g>\n`
+          if (parts.pending) svg += `<g class="track-pending">\n${parts.pending}</g>\n`
           if (parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
         }
       } else if (track.track_type === 'annotations' || track.track_type === 'genome_annotations') {
@@ -375,15 +416,16 @@ function svgFillPath(xs, ys, baseY, fill, smooth) {
   return `<path d="${d}" fill="${fill}" stroke="none"/>\n`
 }
 
-/** Returns { bars, fill, outline, labels } as separate SVG strings for grouping
- *  — the SVG twin of CoverageTrack's drawing (and of ReadTrack's coverage
- *  view): same windowing statistic, split layout, axis (coverageAxis),
- *  clamping, smoothing and labels, so the export matches the screen.
+/** Returns { bars, fill, outline, pending, labels } as separate SVG strings
+ *  for grouping — the SVG twin of CoverageTrack's drawing (and of ReadTrack's
+ *  coverage view): same windowing statistic, split layout, axis
+ *  (coverageAxis), clamping, smoothing, pending shading and labels, so the
+ *  export matches the screen.
  *  forceHasNeg (optional): override the split-layout decision — used for
  *  overlay members so the whole group shares one coordinate system. */
 function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasNeg) {
-  if (!data?.bins?.length) return { bars: '', fill: '', outline: '', labels: '' }
-  let bars = '', fill = '', outline = '', labels = ''
+  if (!data?.bins?.length) return { bars: '', fill: '', outline: '', pending: '', labels: '' }
+  let bars = '', fill = '', outline = '', pending = '', labels = ''
   const windowing = windowingOf(track)
   const hiOf = (b) => binHigh(b, windowing)
   const loOf = (b) => binLow(b, windowing)
@@ -488,7 +530,14 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
     labels += `<text x="2" y="10" fill="${theme.textSecondary}" font-size="10" font-family="Arial, Helvetica, sans-serif">${esc(formatValue(effMax))}${esc(lbl)}</text>\n`
     labels += `<text x="2" y="${h - 2}" fill="${theme.textTertiary}" font-size="10" font-family="Arial, Helvetica, sans-serif">0</text>\n`
   }
-  return { bars, fill, outline, labels }
+  // Bins not computed yet are shaded over the full height, as drawPending
+  // shades them on screen (the same runs, cut to the row), so they never
+  // export as zero coverage.
+  for (const [x0, x1] of pendingRuns(bins, rStart, regionLen, w)) {
+    const a = Math.max(0, x0), b = Math.min(w, x1)
+    if (b > a) pending += `<rect x="${a}" y="0" width="${b - a}" height="${h}" fill="${theme.textTertiary || '#888'}" opacity="${PENDING_ALPHA}"/>\n`
+  }
+  return { bars, fill, outline, pending, labels }
 }
 
 function svgAnnotations(data, region, track, w, h, theme) {
@@ -761,6 +810,7 @@ function makeStyles(t) {
     label: { fontSize: 12, color: t.textSecondary, width: 80, flexShrink: 0 },
     input: { background: t.inputBg, border: `1px solid ${t.borderAccent}`, borderRadius: 4, color: t.textPrimary, padding: '3px 6px', fontSize: 12, width: 80 },
     cb: { fontSize: 12, color: t.textPrimary, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 },
+    note: { fontSize: 10, color: t.textSecondary, lineHeight: 1.5, borderLeft: '2px solid #ffb74d', paddingLeft: 8 },
     fmtBtn: { background: t.panelBg, borderRadius: 4, color: t.textPrimary, cursor: 'pointer', padding: '4px 14px', fontSize: 12, fontWeight: 600 },
     btn: { background: t.btnBg, border: 'none', borderRadius: 4, color: t.btnText, padding: '6px 16px', cursor: 'pointer', fontSize: 12, fontWeight: 600 },
     footer: { display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 16px', borderTop: `1px solid ${t.border}` },

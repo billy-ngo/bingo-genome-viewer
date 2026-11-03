@@ -12,7 +12,8 @@
  *   'mean'           — average signal per bin (peaks flatten when zoomed out).
  *
  * coverageAxis is the one rule for the axis a track then draws; the screen,
- * the SVG export and Track Settings (unticking Auto) all use it.
+ * the SVG export and Track Settings (unticking Auto) all use it. clipWarnings
+ * says what a fixed scale clips, judged on what is drawn (bars or curve).
  */
 
 export const DEFAULT_WINDOWING = 'max'
@@ -127,6 +128,39 @@ export function coverageAxis(track, bins, region, { auto, split = false, grouped
     curveHi,
     curveLo,
   }
+}
+
+/** Warnings for what a fixed scale clips, judged on what is drawn over the
+ *  visible region [region.start, region.end): the bars' statistic when bars
+ *  are drawn; otherwise the drawn curve (Smooth fill, or a peak outline with
+ *  Fill bars off), whose smoothed values in `axis` (coverageAxis's curveHi /
+ *  curveLo) peak lower than the raw bins. `scaleMax` / `scaleMin` are the
+ *  fixed scale (null = Auto); `scaleMin` bounds the lower half of the split
+ *  layout (`split`). Returns the messages, [] when nothing is clipped. */
+export function clipWarnings(track, bins, axis, region, { scaleMax = null, scaleMin = null, split = false }) {
+  if (scaleMax == null && (scaleMin == null || !split)) return []
+  const style = coverageStyle(track)
+  let max = 0, min = 0
+  if (style.bars) {
+    ({ max, min } = binExtremes(bins, windowingOf(track), region.start, region.end))
+  } else if (axis.curveHi) {
+    for (let i = 0; i < bins.length; i++) {
+      if (bins[i].end <= region.start || bins[i].start >= region.end) continue
+      if (axis.curveHi[i] > max) max = axis.curveHi[i]
+      if (axis.curveLo && -axis.curveLo[i] < min) min = -axis.curveLo[i]
+    }
+  } else {
+    return []                     // nothing drawn
+  }
+  const [what, part] = style.bars ? ['Bars', 'bars'] : ['Curve', 'curve']
+  const out = []
+  if (scaleMax != null && max > scaleMax) {
+    out.push(`${what} clipped: visible max ${formatValue(max)} exceeds scale ${formatValue(scaleMax)}`)
+  }
+  if (split && scaleMin != null && -min > scaleMin) {
+    out.push(`Negative ${part} clipped: visible min −${formatValue(-min)} exceeds scale −${formatValue(scaleMin)}`)
+  }
+  return out
 }
 
 /** Compact, precision-preserving number for axis labels and tooltips.
