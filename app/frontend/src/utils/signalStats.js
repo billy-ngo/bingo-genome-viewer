@@ -3,6 +3,10 @@
  * region, from the backend's /stats endpoint. Unlike summarising the drawn
  * bins, the numbers don't depend on the zoom level or the windowing function.
  * Used by the gene hover tooltip and the selected-region tooltip.
+ *
+ * Answers are cached per track and region and shared by every asker, so a row
+ * carries the track's id but no display name: whoever shows it labels it
+ * with its own track object.
  */
 import { tracksApi } from '../api/client'
 
@@ -64,13 +68,13 @@ export function cachedSignalStats(track, chrom, start, end) {
   return cache.get(keyOf(track, chrom, start, end))
 }
 
-/** Resolves to { trackId, name, covered, mean, max, min, sum, fwdSum, revSum,
+/** Resolves to { trackId, covered, mean, max, min, sum, fwdSum, revSum,
  *  strand, complete, truncated, coverageState }, to null when the request
  *  fails, or to undefined when it stayed superseded (HTTP 409) by a newer
  *  request of the same `opts.slot` for the track: its caller ignores that and
- *  waits for the newer request's answer. `covered` is the number of bases with
- *  data and `mean` the mean over those bases; `sum` counts both strands for
- *  strand data (e.g. Tn-seq insertions).
+ *  waits for the newer request's answer. Only `track.id` is used. `covered`
+ *  is the number of bases with data and `mean` the mean over those bases;
+ *  `sum` counts both strands for strand data (e.g. Tn-seq insertions).
  *   - complete false: still being computed (a BAM whose coverage index is
  *     building) — ask again later. Such rows are not cached.
  *   - truncated true: no exact value can be had (a BAM without a coverage
@@ -90,7 +94,7 @@ export function fetchSignalStats(track, chrom, start, end, opts = {}) {
       // here; an unsigned WIG also reports forward/reverse sums (reverse 0).
       const strand = !truncated && s.forward_sum != null && ((s.reverse_sum || 0) < 0 || (s.min ?? 0) < 0)
       const row = {
-        trackId: track.id, name: track.name, covered: s.covered_bp || 0,
+        trackId: track.id, covered: s.covered_bp || 0,
         mean: s.mean, max: s.max, min: s.min,
         sum: strand ? s.forward_sum + Math.abs(s.reverse_sum || 0) : s.sum,
         fwdSum: strand ? s.forward_sum : null,

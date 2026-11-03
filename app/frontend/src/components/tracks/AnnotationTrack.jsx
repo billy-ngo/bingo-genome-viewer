@@ -327,7 +327,8 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
   // passed; tracks still computing are asked again while it stays hovered.
   const hoverFeat = tooltip?.feat || null
   const statsKey = hoverFeat && region ? `${region.chrom}:${hoverFeat.start}-${hoverFeat.end}` : null
-  // { key, rows: [fetchSignalStats rows] | null (loading), waiting: some answer still to come }
+  // { key, rows: [{ track, stats: its fetchSignalStats row }] | null (loading),
+  //   waiting: some answer still to come }
   const [featStats, setFeatStats] = useState(null)
   useEffect(() => {
     if (!hoverFeat || !region) return undefined
@@ -337,10 +338,13 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
     const rows = new Map()   // track id -> latest row (null: the request failed)
     let timer = null
     // Keep tracks with data there, those still computing and those without an
-    // exact answer (each shown as such).
+    // exact answer (each shown as such). Every row stays paired with its own
+    // track, which labels it: the cached rows are shared with the selection
+    // tooltips and carry no name.
     const show = () => setFeatStats({
       key: statsKey,
-      rows: targets.map(t => rows.get(t.id)).filter(r => r && (r.covered > 0 || !r.complete || r.truncated)),
+      rows: targets.map(t => ({ track: t, stats: rows.get(t.id) }))
+        .filter(({ stats: r }) => r && (r.covered > 0 || !r.complete || r.truncated)),
       waiting: targets.some(t => !rows.has(t.id)),
     })
     const ask = (list) => Promise.all(list.map(t => fetchSignalStats(t, chrom, start, end, { signal: controller.signal, slot: 'hover' })))
@@ -416,10 +420,10 @@ export default function AnnotationTrack({ track, width, height, onWarning, onAut
               Track signal in feature (sum · max)
             </span>
           </div>
-          {trackStats.map(ts => (
-            <div key={ts.trackId} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+          {trackStats.map(({ track: t, stats: ts }) => (
+            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
               <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                {ts.name}
+                {t.name}
               </span>
               <span style={{ color: theme.textPrimary, fontWeight: 600, flexShrink: 0 }}>
                 {!ts.complete ? 'computing…'

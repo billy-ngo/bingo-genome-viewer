@@ -21,8 +21,9 @@
  *    and panning back into the already-fetched range aborts a newer fetch for
  *    the abandoned view, so a late response for it can never overwrite the
  *    current one.
- *  - Transient network/server errors (status 0, 5xx) trigger up to 2 silent
- *    retries with exponential backoff before surfacing as `error`.
+ *  - Transient network/server errors (no response, 5xx, 408/409/429) trigger
+ *    up to 2 silent retries with exponential backoff before surfacing as
+ *    `error`.
  *  - Within a chromosome, old data is never cleared on error — it stays on
  *    screen so the viewer never "blanks out" mid-zoom. On a chromosome switch
  *    the previous chromosome's data is dropped immediately, so it can never
@@ -30,7 +31,10 @@
  *  - Coverage that is still being computed (a BAM's background coverage
  *    index) is shown as far as it goes and re-requested until complete: one
  *    poll per track, which pans and resizes inside the fetched range leave
- *    running (and restart if a since-abandoned fetch had stopped it).
+ *    running (and restart if a since-abandoned fetch had stopped it). A poll
+ *    still failing after its retries keeps the error on show and polls again
+ *    after 3, 6, then 10 s; after 5 failed polls in a row (or a permanent
+ *    error) it stops until the next pan or resize inside the fetched range.
  */
 import { useState, useEffect, useRef } from 'react'
 import { tracksApi } from '../api/client'
@@ -43,6 +47,8 @@ const PAN_DEBOUNCE = 100
 const ZOOM_REFETCH_DELAY = 800
 const BIG_ZOOM_RATIO = 4           // zoom jumps beyond this refetch at pan speed
 const INCOMPLETE_POLL_MS = 1500    // re-ask while a BAM coverage index is building
+const POLL_FAIL_BACKOFF_MS = [3000, 6000, 10000]   // next poll after failed poll #1, #2, #3 and on
+const POLL_MAX_FAILS = 5           // failed polls in a row before the poll stops
 const MAX_RETRIES = 2
 const RETRY_BACKOFF_MS = [250, 750]   // delays before retry #1 and #2
 
@@ -221,7 +227,8 @@ export function useTrackData(track, region, canvasWidth) {
   const [error, setError] = useState(null)
   const abortRef = useRef(null)     // controller of the newest fetch, shared by its retries and polls
   // The data on screen: { trackId, chrom, start, end, viewLen, binSize,
-  // complete, controller (of the fetch that produced it), req (its request) }
+  // complete, controller (of the fetch that produced it), req (its request),
+  // and while incomplete: pollFails (failed polls in a row), pollStopped }
   const fetchedRef = useRef(null)
   const debounceRef = useRef(null)
   const zoomDebounceRef = useRef(null)
@@ -283,8 +290,9 @@ export function useTrackData(track, region, canvasWidth) {
           if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null }
           abortRef.current.abort()
         }
-        // A fetch for another view stopped that poll when it started; resume it.
-        if (!f.complete && f.controller.signal.aborted) resumePoll(f)
+        // That poll stopped — a fetch for another view cancelled it when it
+        // started, or it kept failing: resume it.
+        if (!f.complete && (f.controller.signal.aborted || f.pollStopped)) resumePoll(f)
         return
       }
       // Zoom changed but still within overscan — schedule a resolution refetch,
@@ -347,27 +355,45 @@ export function useTrackData(track, region, canvasWidth) {
     attemptFetchOnce(controller, req, 0)
   }
 
-  /** Ask again shortly for incomplete data (the backend is still building a
-   *  BAM's exact coverage). The track's only poll: arming replaces any other. */
-  function schedulePoll(controller, req) {
+  /** Ask again after `delay` for incomplete data (the backend is still
+   *  building a BAM's exact coverage). The track's only poll: arming replaces
+   *  any other. */
+  function schedulePoll(controller, req, delay = INCOMPLETE_POLL_MS) {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current)
     pollTimerRef.current = setTimeout(() => {
       pollTimerRef.current = null
-      if (abortRef.current === controller && !controller.signal.aborted) attemptFetchOnce(controller, req, 1)
-    }, INCOMPLETE_POLL_MS)
+      if (abortRef.current === controller && !controller.signal.aborted) attemptFetchOnce(controller, req, 0, true)
+    }, delay)
   }
 
-  /** Poll again for the incomplete data on screen `f`, whose poll a fetch for
-   *  another view stopped (that fetch has been cancelled since). */
+  /** Poll again for the incomplete data on screen `f`, whose poll stopped: a
+   *  fetch for another view cancelled it (that fetch has been cancelled
+   *  since), or it failed too often. The resumed poll starts afresh. */
   function resumePoll(f) {
     if (abortRef.current) abortRef.current.abort()
     const controller = new AbortController()
     abortRef.current = controller
-    fetchedRef.current = { ...f, controller }
+    fetchedRef.current = { ...f, controller, pollFails: 0, pollStopped: false }
     schedulePoll(controller, f.req)
   }
 
-  function attemptFetchOnce(controller, req, attempt) {
+  /** A poll for the incomplete data on screen failed, retries included; its
+   *  error stays on show. After a transient failure, poll again after a
+   *  growing pause, up to POLL_MAX_FAILS failed polls in a row; then, or at
+   *  once after a permanent error, stop and mark the data so that the next
+   *  pan or resize inside the fetched range resumes the poll. */
+  function pollFailed(controller, req, transient) {
+    const f = fetchedRef.current
+    if (!f || f.controller !== controller || f.complete) return
+    const fails = (f.pollFails || 0) + 1
+    const again = transient && fails < POLL_MAX_FAILS
+    fetchedRef.current = { ...f, pollFails: fails, pollStopped: !again }
+    if (again) schedulePoll(controller, req, POLL_FAIL_BACKOFF_MS[Math.min(fails, POLL_FAIL_BACKOFF_MS.length) - 1])
+  }
+
+  /** `attempt`: retries so far. `poll`: a poll for the incomplete data on
+   *  screen (never served from the cache; see pollFailed for its failures). */
+  function attemptFetchOnce(controller, req, attempt, poll = false) {
     // Bail if a newer fetch has superseded this one or the hook has unmounted.
     if (controller.signal.aborted) return
     const { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize } = req
@@ -388,9 +414,9 @@ export function useTrackData(track, region, canvasWidth) {
 
     const cacheKey = `${track.id}|${type}|${chrom}|${fetchStart}|${fetchEnd}|${bins}`
 
-    // First-attempt only: serve from cache if present.
-    // Retries skip the cache — we already know we want a fresh fetch.
-    if (attempt === 0) {
+    // First attempt of a fetch only: serve from cache if present. Retries and
+    // polls skip the cache — we already know we want a fresh fetch.
+    if (attempt === 0 && !poll) {
       const cached = cache.get(cacheKey)
       if (cached) {
         setData(cached)
@@ -459,7 +485,7 @@ export function useTrackData(track, region, canvasWidth) {
           const delay = RETRY_BACKOFF_MS[attempt] || 1000
           retryTimerRef.current = setTimeout(() => {
             retryTimerRef.current = null
-            attemptFetchOnce(controller, req, attempt + 1)
+            attemptFetchOnce(controller, req, attempt + 1, poll)
           }, delay)
           return
         }
@@ -469,6 +495,7 @@ export function useTrackData(track, region, canvasWidth) {
         const msg = typeof detail === 'string' ? detail : err.message || String(err)
         setError(msg)
         setLoading(false)
+        if (poll) pollFailed(controller, req, isTransientError(err))
       })
   }
 
