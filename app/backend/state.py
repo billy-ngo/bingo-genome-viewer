@@ -139,6 +139,10 @@ class AppState:
         # ChromMaps computed against an older version are recomputed.
         self._genome_version = 0
         self._chrom_maps: dict[str, tuple[int, Optional[ChromMap]]] = {}
+        # The target chromosomes each data track was last given (by its load
+        # or by add-chromosomes), i.e. where the client shows it: a merge
+        # starts from these. Forgotten when the genome is replaced.
+        self._targets: dict[str, list[str]] = {}
 
     # ── Thread-safety helpers ────────────────────────────────────
     def track_lock(self, track_id: str) -> threading.Lock:
@@ -262,6 +266,7 @@ class AppState:
         with self._genome_lock, self._state_lock:
             self.genome = new_genome
             self._genome_changed()
+            self._targets.clear()
             if self.genome.is_annotated():
                 track_id = "genome_annotations"
                 self.tracks[track_id] = {
@@ -579,6 +584,70 @@ class AppState:
         # Fallback: user chose "Load Anyway" — show on all
         return all_names
 
+    # ── Target chromosomes across add_chromosomes ────────────────
+    def remember_targets(self, track_id: str, targets: list) -> None:
+        """Record the target chromosomes a data track was given (by its load or
+        by add-chromosomes), i.e. where the client shows it. A merge starts
+        from them (merged_target_chromosomes)."""
+        with self._state_lock:
+            if track_id in self.tracks:
+                self._targets[track_id] = list(targets)
+
+    def merge_snapshot(self) -> tuple:
+        """What merged_target_chromosomes needs from before a merge: the
+        genome's chromosome names, and per data track (by id) the chromosomes
+        it is shown on and those its ChromMap pairs (None when it has no map).
+        A track given no targets since the genome was replaced (loaded against
+        the previous one) is left out: where the client shows it is unknown."""
+        if self.genome is None:
+            return set(), {}
+        old_names = {c["name"] for c in self.genome.chromosomes}
+        with self._state_lock:
+            given = {t: list(s) for t, s in self._targets.items() if t in self.tracks}
+        per_track = {}
+        for track_id, shown in given.items():
+            try:
+                cmap = self.chrom_map(track_id)
+            except Exception:
+                continue
+            per_track[track_id] = (shown, None if cmap is None else set(cmap.names) | set(cmap.aliases))
+        return old_names, per_track
+
+    def merged_target_chromosomes(self, track_id: str, shown: list, old_names: set,
+                                  mapped_before: Optional[set]) -> list:
+        """A data track's target chromosomes once add_chromosomes has extended
+        the genome, from those it was shown on before (``shown``; the genome's
+        names then, ``old_names``, and the ones its ChromMap paired,
+        ``mapped_before``, from merge_snapshot):
+          - a BAM or BigWig track whose ChromMap pairs some chromosome (by name,
+            or by a unique exact length) goes exactly there: that is where its
+            data is served now, e.g. by name on an added accession instead of by
+            length on a GenBank LOCUS name that the merge made ambiguous;
+          - any other track keeps ``shown``, less the chromosomes it had only
+            through its ChromMap (pairs the merge cancelled, where its data is
+            no longer served), plus the added chromosomes named like one of its
+            contigs.
+        Never the fallbacks of get_target_chromosomes (the closest length
+        within 5%, every chromosome), which are for a track loaded against a
+        genome it does not match: a single-contig track's reader serves its
+        contig under any name, so after a merge they would draw it on an added
+        chromosome of another organism."""
+        if self.genome is None:
+            return []
+        names = [c["name"] for c in self.genome.chromosomes]
+        cmap = self.chrom_map(track_id)
+        if cmap is not None:
+            paired = [n for n in names if n in cmap.names or n in cmap.aliases]
+            if paired:
+                return paired
+        keep = set(shown) - (mapped_before or set())
+        reader = self.readers.get(track_id)
+        try:
+            contigs = {c["name"] for c in reader.chromosomes} if reader is not None else set()
+        except Exception:
+            contigs = set()
+        return [n for n in names if n in keep or (n not in old_names and n in contigs)]
+
     def remove_track(self, track_id: str):
         # Hold the per-track lock during close so we don't close while
         # an in-flight request is mid-read.
@@ -601,6 +670,7 @@ class AppState:
         self.tracks.pop(track_id, None)
         with self._state_lock:
             self._chrom_maps.pop(track_id, None)
+            self._targets.pop(track_id, None)
             for key in [k for k in self._request_gen if k == track_id or k.startswith(track_id + "|")]:
                 del self._request_gen[key]
 

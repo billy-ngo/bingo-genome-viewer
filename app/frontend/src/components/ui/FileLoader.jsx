@@ -65,7 +65,7 @@ export function lengthPairingNotice(infos) {
 
 /**
  * Give the loaded tracks the pairing an add-chromosomes response computed
- * against the merged genome (`res.data.tracks`: per track id, its
+ * for the merged genome (`res.data.tracks`: per track id, its
  * target_chromosomes and compatibility), so each one shows on the added
  * chromosomes it has data for.
  */
@@ -79,26 +79,64 @@ export function applyTrackPairings(pairings, updateTrack) {
  * What merging chromosomes changed for the tracks `before` (as they were
  * before the merge), given the latest add-chromosomes `pairings` and the
  * genome's chromosome names before the merge (`oldChroms`, a Set):
- *  - lost: tracks that matched the genome and now report a mismatch (with
- *    their new compatibility), for lostPairingWarning;
+ *  - lost: tracks shown on some chromosome before and on none now (with their
+ *    new compatibility), for lostPairingWarning: a BAM or BigWig whose only
+ *    pairing was by a length the merge made ambiguous;
+ *  - moved: tracks taken off chromosomes they were shown on but shown on
+ *    others (`{ name, from, to }`), for movedTracksNotice: their data is served
+ *    there now, e.g. by name on an added accession instead of by length on a
+ *    GenBank LOCUS name;
  *  - paired: the length-only pairings new to added chromosomes, in the shape
  *    lengthPairingNotice takes.
- * A track restored from a session carries no compatibility; it counts as
- * having matched, since nothing told the user otherwise.
+ * Judged on the target chromosomes rather than the compatibility status: a
+ * single-contig BED or WIG that matched a one-chromosome genome reports a
+ * mismatch once a merge adds a second chromosome, yet shows the same data.
  */
 export function pairingChanges(before, pairings, oldChroms) {
   const lost = []
+  const moved = []
   const fresh = []
   for (const t of before) {
     const p = pairings?.[t.id]
     if (!p) continue
-    if (!isTrackMismatch(t) && isTrackMismatch(p)) lost.push({ ...t, compatibility: p.compatibility })
+    const next = p.target_chromosomes || []
+    if (t.targetChromosomes) {
+      const now = new Set(next)
+      const was = t.targetChromosomes.filter(c => oldChroms.has(c))
+      const from = was.filter(c => !now.has(c))
+      if (was.length && !next.length) lost.push({ ...t, compatibility: p.compatibility })
+      else if (from.length) moved.push({ name: t.name, from, to: next })
+    }
     const had = new Set((t.compatibility?.aliases || []).map(a => `${a.genome}\u0000${a.track}`))
     for (const a of p.compatibility?.aliases || []) {
       if (!oldChroms.has(a.genome) && !had.has(`${a.genome}\u0000${a.track}`)) fresh.push(a)
     }
   }
-  return { lost, paired: fresh.length ? [{ compatibility: { aliases: fresh } }] : [] }
+  return { lost, moved, paired: fresh.length ? [{ compatibility: { aliases: fresh } }] : [] }
+}
+
+/** Chromosome names for a notice: the first `max`, then how many more. */
+function chromList(names, max = 2) {
+  const listed = names.slice(0, max).map(n => shortName(n, 24)).join(', ')
+  return names.length > max ? `${listed} and ${(names.length - max).toLocaleString()} more` : listed
+}
+
+/**
+ * A notice naming the tracks a merge moved to other chromosomes
+ * (pairingChanges().moved): `{ text, title }`, or null when there are none.
+ */
+export function movedTracksNotice(moved) {
+  if (!moved.length) return null
+  const m = moved[0]
+  return {
+    text: moved.length === 1
+      ? `${shortName(m.name)} now shows on ${chromList(m.to)} instead of ${chromList(m.from)}`
+      : `${moved.length} tracks now show on other chromosomes: ` +
+        `${moved.slice(0, 3).map(x => shortName(x.name, 24)).join(', ')}${moved.length > 3 ? ', …' : ''}`,
+    title: ['Adding chromosomes moved these tracks to the chromosomes their data pairs with now:',
+      ...moved.slice(0, 10).map(x => `${x.name}: ${chromList(x.from, 5)} → ${chromList(x.to, 5)}`),
+      ...(moved.length > 10 ? [`and ${(moved.length - 10).toLocaleString()} more`] : [])].join('\n'),
+  }
 }
 
 /** The warning for tracks a merge left without a match (pairingChanges), or null. */
@@ -224,7 +262,7 @@ export default function FileLoader() {
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(null)
   const [status, setStatus] = useState(null)
-  const [notice, setNotice] = useState(null) // { text, title } — length-only chromosome pairings
+  const [notices, setNotices] = useState([]) // [{ text, title }] — length-only chromosome pairings, tracks a merge moved
   const noticeTimer = useRef(null)
   const [progress, setProgress] = useState(null) // { percent, loaded, total, label }
   const [prompt, setPrompt] = useState(null) // { files: File[] }
@@ -309,16 +347,21 @@ export default function FileLoader() {
 
   useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current) }, [])
 
-  /** Show a lengthPairingNotice (if any) for PAIRING_NOTICE_MS. */
-  function showNotice(n) {
-    if (!n) return
+  /** Show notices (lengthPairingNotice, movedTracksNotice; falsy ones are
+   *  skipped) for PAIRING_NOTICE_MS. */
+  function showNotice(...items) {
+    const list = items.filter(Boolean)
+    if (!list.length) return
     if (noticeTimer.current) clearTimeout(noticeTimer.current)
-    setNotice(n)
-    noticeTimer.current = setTimeout(() => { noticeTimer.current = null; setNotice(null) }, PAIRING_NOTICE_MS)
+    setNotices(list)
+    noticeTimer.current = setTimeout(() => { noticeTimer.current = null; setNotices([]) }, PAIRING_NOTICE_MS)
   }
 
   async function addChromosomeFiles(files) {
     setLoading(true); setErr(null); setProgress(null)
+    // A pairing notice still up from a track load may no longer hold.
+    if (noticeTimer.current) { clearTimeout(noticeTimer.current); noticeTimer.current = null }
+    setNotices([])
     const errors = []
     // The loaded tracks and chromosomes before the merge, to tell what it changed.
     const before = tracks.filter(t => t.track_type !== 'genome_annotations')
@@ -351,9 +394,9 @@ export default function FileLoader() {
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
     setLoading(false)
-    const { lost, paired } = pairingChanges(before, pairings, oldChroms)
+    const { lost, moved, paired } = pairingChanges(before, pairings, oldChroms)
     const warning = lostPairingWarning(lost)
-    showNotice(lengthPairingNotice(paired))
+    showNotice(movedTracksNotice(moved), lengthPairingNotice(paired))
     if (errors.length || warning) {
       setErr([...errors, ...(warning ? [warning] : [])].join('; '))
     }
@@ -762,7 +805,7 @@ export default function FileLoader() {
       )}
 
       {!loading && status && <span style={{ color: '#81c784', fontSize: 11 }}>{status}</span>}
-      {notice && <span style={{ color: '#ffb74d', fontSize: 11 }} title={notice.title}>{notice.text}</span>}
+      {notices.map((n, i) => <span key={i} style={{ color: '#ffb74d', fontSize: 11 }} title={n.title}>{n.text}</span>)}
       {(err || trackError) && <span style={{ color: '#ef9a9a', fontSize: 11 }}>{err || trackError}</span>}
 
       {/* Prompt dialog for genome files when genome already loaded */}

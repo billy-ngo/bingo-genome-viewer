@@ -100,6 +100,7 @@ async def load_track(
         # chromosomes, which would stall the event loop (heartbeats included).
         compatibility = await run_in_threadpool(app_state.check_track_compatibility, track["id"])
         target_chromosomes = await run_in_threadpool(app_state.get_target_chromosomes, track["id"])
+        app_state.remember_targets(track["id"], target_chromosomes)   # where the client shows it
 
         # Suggest BigWig conversion for large text-based coverage files
         hint = None
@@ -242,6 +243,7 @@ async def load_track_from_path(
         # Off the event loop, as in load_track above.
         compatibility = await run_in_threadpool(app_state.check_track_compatibility, track["id"])
         target_chromosomes = await run_in_threadpool(app_state.get_target_chromosomes, track["id"])
+        app_state.remember_targets(track["id"], target_chromosomes)
 
         hint = None
         ext = p.suffix.lower()

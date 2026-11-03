@@ -59,21 +59,26 @@ async def load_genome(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _track_pairings() -> dict:
-    """Each loaded data track's target chromosomes and compatibility against
-    the genome as it is now, by track id."""
+def _track_pairings(snapshot: tuple) -> dict:
+    """Each data track's target chromosomes after a merge, from where it was
+    shown before (``snapshot``, AppState.merge_snapshot; see
+    merged_target_chromosomes), and its compatibility against the genome as it
+    is now, by track id. The targets are remembered as the track's new ones.
+    A track loaded since the snapshot is left as its load gave it."""
+    old_names, per_track = snapshot
     out = {}
-    for track_id in list(app_state.tracks):
-        if track_id == "genome_annotations":
+    for track_id, (shown, mapped) in per_track.items():
+        if track_id not in app_state.tracks:
             continue
         try:
             pairing = {
-                "target_chromosomes": app_state.get_target_chromosomes(track_id),
+                "target_chromosomes": app_state.merged_target_chromosomes(track_id, shown, old_names, mapped),
                 "compatibility": app_state.check_track_compatibility(track_id),
             }
         except Exception:
             continue          # the merge itself succeeded; leave this track as it was
         if track_id in app_state.tracks:          # not removed meanwhile
+            app_state.remember_targets(track_id, pairing["target_chromosomes"])
             out[track_id] = pairing
     return out
 
@@ -83,23 +88,26 @@ async def add_chromosomes(file: UploadFile = File(...)):
     """Merge chromosomes from an additional genome file into the current genome.
 
     Besides the merged genome, the response carries ``tracks``: for every
-    loaded data track, its ``target_chromosomes`` and ``compatibility``
-    against the merged genome (as /api/tracks/load returns them), so the
-    client can show tracks on the added chromosomes they have data for and
-    learn of a pairing the merge changed."""
+    loaded data track, its ``target_chromosomes`` after the merge (where it
+    was shown, plus the added chromosomes it pairs with by name or exact
+    length; see AppState.merged_target_chromosomes) and its
+    ``compatibility`` against the merged genome, so the client can show
+    tracks on the added chromosomes they have data for and learn of a
+    pairing the merge changed."""
     if app_state.genome is None:
         raise HTTPException(status_code=400, detail="No genome loaded")
     dest = _unique_dest(file.filename)
     try:
         with dest.open("wb") as f:
             shutil.copyfileobj(file.file, f)
+        # In the worker pool, as the track load endpoints do: against a draft
+        # assembly each track's pairing walks thousands of chromosomes.
+        snapshot = await run_in_threadpool(app_state.merge_snapshot)
         # Merges under genome_lock (concurrent /sequence and /features requests
         # can't read mid-mutation) and invalidates the tracks' chromosome maps.
         app_state.add_chromosomes(str(dest))
         genome = app_state.genome
-        # In the worker pool, as the track load endpoints do: against a draft
-        # assembly each track's check walks thousands of chromosomes.
-        tracks = await run_in_threadpool(_track_pairings)
+        tracks = await run_in_threadpool(_track_pairings, snapshot)
         return {
             "name": genome.name,
             "file_path": genome.file_path,

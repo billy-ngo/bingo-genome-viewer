@@ -196,7 +196,11 @@ function incompleteDataNotes(tracks, allTracks, chrom) {
         }
         if (d.truncated) notes.push(`${t.name}: coverage incomplete at this zoom (read limit reached) — the shaded part is not computed`)
       } else if (d.reads && d.total_exact === false) {
-        notes.push(`${t.name}: read limit reached — the shaded part of the pileup was not scanned`)
+        const n = d.reads.length
+        const sample = n < (d.total || 0)
+          ? `; the ${n.toLocaleString()} reads shown are an even sample of the ${d.total.toLocaleString()} found`
+          : ''
+        notes.push(`${t.name}: read limit reached — the shaded part of the pileup was not scanned${sample}`)
       } else if (d.reads && d.truncated) {
         notes.push(`${t.name}: ${d.reads.length.toLocaleString()} of ${(d.total || 0).toLocaleString()} reads shown (downsampled)`)
       }

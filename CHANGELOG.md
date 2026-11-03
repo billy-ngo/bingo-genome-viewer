@@ -61,11 +61,13 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
 
   Unmapped mates placed at a position are hidden, as in IGV. A view too deep
   to scan within a few seconds (over a million reads, or a very deep stretch
-  just left of it) is drawn as far as the scan got. The rest is shaded and the
-  warning says where the reads stop, instead of the view looking empty.
+  just left of it) is drawn as far as the scan got. The rest is shaded, instead
+  of the view looking empty. The warning says where the scan stopped and how
+  many reads it found, and whether those drawn are an even sample of them.
 - **Read pileup scrolling.** Shift+scroll no longer logs browser console
   errors, a pileup that fits no longer scrolls its top row out of view, and
-  scrolling to the end puts the last row at the bottom edge.
+  scrolling to the end puts the last row at the bottom edge. Dragging the
+  scrollbar thumb follows the pointer; it used to stop partway down.
 - **Linked and overlaid tracks:**
   - hidden members, and members with no data on the current chromosome, no
     longer set the shared axis;
@@ -96,7 +98,9 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
 - **Data handling:**
   - switching chromosome never draws the previous chromosome's data or axis;
   - panning back into an already loaded range during a slow request no longer
-    leaves half the view blank.
+    leaves half the view blank;
+  - a BAM track shows reads in every view of 50 kb or less. A small zoom in from
+    the coverage view used to leave it on coverage.
 - **Fixed Y scale:**
   - values below 1 are accepted;
   - unticking Auto keeps each track's current axis instead of jumping to 100.
@@ -122,9 +126,13 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
   - Unrelated assemblies that merely share a contig length are not matched.
     This is judged for each genome file separately, so merging an unrelated
     assembly with **Add as Chromosome** cannot undo a match.
-  - After **Add as Chromosome**, loaded tracks also show on the added
-    chromosomes they have data for (they used to stay hidden there). A track
-    that no longer matches the merged genome is named in a warning.
+  - After **Add as Chromosome**, loaded tracks keep the chromosomes they were
+    shown on. They also show on the added chromosomes they pair with by name or
+    exact length; they used to stay hidden there.
+  - A BAM or BigWig track whose data now pairs with other chromosomes moves
+    there, and a notice says so. An example is an added accession taking over
+    from a GenBank LOCUS name.
+  - A track left without any matching chromosome is named in a warning.
   - Tracks loaded by file path get the same compatibility check as uploads.
 
 ### Fixed — nucleotide strip
@@ -158,11 +166,15 @@ The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PAT
 - `GET /api/tracks/{id}/reads` reports the exact number of overlapping reads
   in `total`, with `truncated` when the reads returned are a sample. When a
   view is too deep to scan in full, `total_exact` is false and `scanned_to`
-  gives the position up to which the pileup is complete.
+  gives the position the scan reached. Every overlapping read starting before
+  it was found; `total` counts them, and above 5,000 `reads` is an even
+  sample.
   `/coverage` and `/reads` answer 409 to a request that a newer one for the
   same track has superseded.
-- `POST /api/genome/add-chromosomes` also returns `tracks`: each loaded
-  track's target chromosomes and compatibility against the merged genome.
+- `POST /api/genome/add-chromosomes` also returns `tracks`. For each loaded
+  track it gives the target chromosomes after the merge (where the track was
+  shown, plus the added chromosomes it pairs with) and its compatibility with
+  the merged genome.
 - Sessions are saved as version 3, which adds bin size, windowing and
   link-group ids. Older sessions restore with fit-to-visible auto scale on.
 - The health and heartbeat endpoints answer even while track requests are

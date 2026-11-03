@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom'
 import { useTracks, DEFAULT_ANNOTATION_COLORS, makeGroupId } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { useBrowser } from '../../store/BrowserContext'
-import { getLiveTrackData, useLiveDataVersion, computeAutoScale, needsSplitLayout, scaleGroup } from '../../hooks/useTrackData'
+import { getLiveTrackData, useLiveDataVersion, computeAutoScale, needsSplitLayout, scaleGroup, READ_DETAIL_THRESHOLD } from '../../hooks/useTrackData'
 import { formatBp, formatValue, coverageAxis } from '../../utils/coverageStats'
 import { MAX_BINS } from '../../utils/fetchPlan'
 import DraggablePanel from './DraggablePanel'
@@ -168,12 +168,17 @@ export default function TrackSettings({ onClose }) {
    *  every track sharing it (scaleGroup) holds data for this chromosome
    *  fetched over a range containing [region.start, region.end). A hidden
    *  track's frozen data, another view's, or a fetch still on its way never
-   *  counts. */
+   *  counts. A read track showing reads at this zoom is the exception: it adds
+   *  no bins to the axis before its fetch lands or after, so its reads for
+   *  the previous view are as good as the new ones. */
   function axisIsCurrent(ref) {
     if (!region) return false
+    const readView = region.end - region.start <= READ_DETAIL_THRESHOLD
     return scaleGroup(ref, region, tracks).every(m => {
       const d = getLiveTrackData(m.id)
-      return !!d && (!d.chrom || d.chrom === region.chrom) && d.start <= region.start && d.end >= region.end
+      if (!d || (d.chrom && d.chrom !== region.chrom)) return false
+      if (m.track_type === 'reads' && readView && !d.bins) return true
+      return d.start <= region.start && d.end >= region.end
     })
   }
 
@@ -468,7 +473,7 @@ export default function TrackSettings({ onClose }) {
             {hasCoverage && keptAutoNow > 0 && (
               <div style={S.subRow}>
                 <span style={S.hint}>
-                  {keptAutoNow} selected track{keptAutoNow > 1 ? 's' : ''} not on screen keep{keptAutoNow > 1 ? '' : 's'} Auto
+                  {keptAutoNow} selected track{keptAutoNow > 1 ? 's' : ''} not on screen or still loading keep{keptAutoNow > 1 ? '' : 's'} Auto
                 </span>
               </div>
             )}

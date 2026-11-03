@@ -141,7 +141,12 @@ is judged per genome source file (`GenomeReader.chromosome_sources`). Change
 the genome only through `load_genome` / `add_chromosomes`, which bump the
 genome version that invalidates the cache. `/api/genome/add-chromosomes`
 returns each track's new `target_chromosomes` and `compatibility` under
-`tracks`, which the frontend applies with `updateTrack`.
+`tracks`, which the frontend applies with `updateTrack`. Those targets come
+from `AppState.merged_target_chromosomes`, which starts from where the track
+was shown (`remember_targets`, recorded by every track load and merge). It
+never uses `get_target_chromosomes`' fallbacks (closest size, every
+chromosome): non-BAM readers serve a lone contig under any name, so a
+fallback would draw it on an added chromosome of another organism.
 
 **JavaScript / React.** Functional components with hooks only (no classes).
 Keep render-time logic minimal; put expensive computation in `useMemo`.
@@ -189,7 +194,9 @@ won't survive session export/restore. If a default changes meaning, bump
   Two record budgets bound a scan to about 3 s: `MAX_READS_SCANNED` for
   records starting in the view and `MAX_LEADING_SCANNED` for those left of
   it. When one runs out, `total_exact` is false and `scanned_to` marks how far
-  the pileup is complete; `ReadTrack` shades the rest. Don't route it through
+  the scan got: every overlapping read starting before it was found (`reads`
+  is still an even sample of them above 5,000). `ReadTrack` shades the rest
+  of the data's own range. Don't route it through
   bamnostic's `fetch()`, which judges overlap by sequence length and misses
   reads in sparse regions.
 - **Exact numbers.** For tooltips and other exact figures, use

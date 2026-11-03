@@ -11,7 +11,7 @@ import { ThemeProvider, useTheme } from './store/ThemeContext'
 import { PeakProvider } from './store/PeakContext'
 import { genomeApi } from './api/client'
 import FileLoader, {
-  lengthPairingNotice, applyTrackPairings, pairingChanges, lostPairingWarning, PAIRING_NOTICE_MS,
+  lengthPairingNotice, applyTrackPairings, pairingChanges, lostPairingWarning, movedTracksNotice, PAIRING_NOTICE_MS,
 } from './components/ui/FileLoader'
 import TrackSettings from './components/ui/TrackSettings'
 import ThemeSettings from './components/ui/ThemeSettings'
@@ -344,6 +344,9 @@ function BrowserApp() {
     if (!dropPrompt) return
     const files = dropPrompt.files
     setDropPrompt(null)
+    // A pairing notice still up from a track load may no longer hold.
+    if (dropNoticeTimer.current) { clearTimeout(dropNoticeTimer.current); dropNoticeTimer.current = null }
+    setDropNotices([])
     try {
       const errors = []
       // The loaded tracks and chromosomes before the merge, to tell what it changed.
@@ -374,9 +377,9 @@ function BrowserApp() {
           }
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
       }
-      const { lost, paired } = pairingChanges(before, pairings, oldChroms)
+      const { lost, moved, paired } = pairingChanges(before, pairings, oldChroms)
       const warning = lostPairingWarning(lost)
-      showDropNotices([warning && { text: warning, tone: 'warning' }, lengthPairingNotice(paired)])
+      showDropNotices([warning && { text: warning, tone: 'warning' }, movedTracksNotice(moved), lengthPairingNotice(paired)])
       if (errors.length) {
         setDropStatus({ error: errors.join('; ') })
         setTimeout(() => setDropStatus(null), 5000)

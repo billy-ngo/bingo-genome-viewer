@@ -233,25 +233,37 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
 
     // ── Read detail mode (zoomed in) ────────────────────────────
     const toX = (pos) => ((pos - regionStart) / regionLen) * width
-    // When the backend's read-scan limit is reached (total_exact false), the
-    // pileup is complete only over [start, scanned_to): the rest of the view
-    // was not scanned. It is shaded like coverage not computed yet, so it never
-    // reads as a stretch without reads. (Without scanned_to, i.e. an older
-    // backend, the last read start bounds the complete part.)
+    // When the backend's read-scan limit is reached (total_exact false), every
+    // read overlapping the view and starting before scanned_to was found (the
+    // pileup is an even sample of them when there are more than it returns),
+    // but the rest of the view was not scanned. That part is shaded like
+    // coverage not computed yet, so it never reads as a stretch without reads.
+    // (Without scanned_to, i.e. an older backend, the last read start bounds
+    // the scanned part.) Both the shade and the badge describe the data's own
+    // range: right after a pan or zoom it is still the previous view's.
     const limited = data.total_exact === false
+    const dataStart = Number.isFinite(data.start) ? data.start : regionStart
+    const dataEnd = Number.isFinite(data.end) ? data.end : region.end
     const scannedTo = !limited ? null
       : Number.isFinite(data.scanned_to) ? data.scanned_to
-      : (data.reads || []).reduce((m, r) => Math.max(m, r.start), regionStart)
-    const unscannedX = limited ? Math.max(0, toX(Math.max(scannedTo, regionStart))) : width
-    const limitWarning = limited ? readLimitWarning(data, scannedTo, regionStart) : null
+      : (data.reads || []).reduce((m, r) => Math.max(m, r.start), dataStart)
+    const clampX = (x) => Math.max(0, Math.min(width, x))
+    const unscannedX0 = limited ? clampX(toX(Math.max(scannedTo, dataStart))) : width
+    const unscannedX1 = limited ? clampX(toX(dataEnd)) : width
+    const shadeUnscanned = () => {
+      if (unscannedX1 > unscannedX0) shadePending(ctx, unscannedX0, unscannedX1, height, theme)
+    }
+    const limitWarning = limited ? readLimitWarning(data, scannedTo, dataStart, visibleReads?.length || 0) : null
 
-    if (!data.reads?.length) {
+    if (!data.reads?.length || !visibleReads?.length) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
-      if (limited) {
+      shadeUnscanned()
+      if (data.reads?.length) {
+        ctx.fillText('All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
+      } else if (limited) {
         // The scan stopped before it could show a read here.
-        if (unscannedX < width) shadePending(ctx, unscannedX, width, height, theme)
         const msg = 'Too many reads to scan here'
-        const tx = Math.max(8, Math.min(unscannedX + 8, width - ctx.measureText(msg).width - 8))
+        const tx = Math.max(8, Math.min(unscannedX0 + 8, width - ctx.measureText(msg).width - 8))
         ctx.fillText(msg, tx, height / 2 + 4)
       } else {
         ctx.fillText('No reads in region', 8, height / 2 + 4)
@@ -262,13 +274,6 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
         if (limitWarning) warnings.push(limitWarning)
         onWarning(warnings.length ? warnings.join('\n') : null)
       }
-      reportAuto(0)
-      return
-    }
-    if (!visibleReads?.length) {
-      ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
-      ctx.fillText('All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
-      if (onWarning) onWarning(null)
       reportAuto(0)
       return
     }
@@ -360,7 +365,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       drawnReads++
     }
     // The part of the view the read-scan limit left unscanned.
-    if (unscannedX < width) shadePending(ctx, unscannedX, width, height, theme)
+    shadeUnscanned()
 
     // ── Vertical scrollbar ──────────────────────────────────────
     if (needsScroll) {
@@ -411,7 +416,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     const mx = (e.clientX - rect.left) * (width / rect.width)
     if (mx < width - SCROLLBAR_WIDTH) return // not on scrollbar
 
-    const { maxScroll } = rows
+    const { totalRows, visibleRows, maxScroll } = rows
     if (maxScroll <= 0) return
 
     // Stop propagation so the global useCanvasInteraction pan handler
@@ -419,12 +424,15 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
     e.preventDefault()
     e.stopPropagation()
     // Start from the row drawn now (the draw clamps scrollRow to maxScroll).
-    scrollDragRef.current = { maxScroll, startY: e.clientY, startRow: Math.min(scrollRow, maxScroll) }
+    // The thumb follows the cursor: its travel (the bar less the thumb, as
+    // drawn) spans every scroll position.
+    const travel = Math.max(1, height - Math.max(20, (visibleRows / totalRows) * height))
+    scrollDragRef.current = { maxScroll, travel, startY: e.clientY, startRow: Math.min(scrollRow, maxScroll) }
 
     function onMove(ev) {
       if (!scrollDragRef.current) return
       const dy = ev.clientY - scrollDragRef.current.startY
-      const rowDelta = Math.round((dy / height) * scrollDragRef.current.maxScroll)
+      const rowDelta = Math.round((dy / scrollDragRef.current.travel) * scrollDragRef.current.maxScroll)
       setScrollRow(Math.max(0, Math.min(scrollDragRef.current.maxScroll, scrollDragRef.current.startRow + rowDelta)))
     }
     function onUp() {
@@ -445,25 +453,30 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
   )
 }
 
-/** The badge text for a read view the backend's read-scan limit cut short:
- *  the pileup is complete only up to `scannedTo` (and `total` is a lower
- *  bound on the reads overlapping the view). At or before the view start the
- *  limit was spent on reads just left of the view, before reaching it; zooming
- *  in does not help there (those reads lie in the same 16 kb index window),
- *  while the coverage view still shows the depth. */
-function readLimitWarning(data, scannedTo, viewStart) {
+/** The badge text for a read view the backend's read-scan limit cut short.
+ *  Every read overlapping the view (`viewStart` on) and starting before
+ *  `scannedTo` was found: `total` of them (a lower bound on the reads
+ *  overlapping the view), of which `data.reads` is an even sample when there
+ *  are more than the backend returns, and `drawn` pass the strand filter. At
+ *  or before the view start the limit was spent on reads just left of the
+ *  view, before reaching it; zooming in does not help there (those reads lie
+ *  in the same 16 kb index window), while the coverage view still shows the
+ *  depth. */
+function readLimitWarning(data, scannedTo, viewStart, drawn) {
   const n = data.reads?.length || 0
-  if (scannedTo <= viewStart) {
-    return n === 0
-      ? 'Read limit reached: too many reads just left of this view to scan (shaded part not scanned) — zoom out for coverage'
-      : `Read limit reached: only the ${n.toLocaleString()} read${n > 1 ? 's' : ''} crossing the view start ` +
-        `${n > 1 ? 'are' : 'is'} shown (shaded part not scanned) — zoom out for coverage`
-  }
+  const leading = scannedTo <= viewStart
   if (n === 0) {
-    return `Read limit reached: no reads up to ${scannedTo.toLocaleString()} (shaded part not scanned) — zoom in to see all`
+    return leading
+      ? 'Read limit reached: too many reads just left of this view to scan (shaded part not scanned) — zoom out for coverage'
+      : `Read limit reached: no reads up to ${scannedTo.toLocaleString()} (shaded part not scanned) — zoom in to see all`
   }
-  return `Read limit reached: reads shown up to ${scannedTo.toLocaleString()} only ` +
-    `(≥${(data.total || 0).toLocaleString()} overlap the view; shaded part not scanned) — zoom in to see all`
+  const found = Math.max(n, data.total || 0)
+  const parts = [`${found.toLocaleString()} read${found > 1 ? 's' : ''} found ` +
+    (leading ? 'crossing the view start' : `up to ${scannedTo.toLocaleString()}`)]
+  if (n < found) parts.push(`showing an even sample of ${n.toLocaleString()}`)
+  if (drawn < n) parts.push(`${(n - drawn).toLocaleString()} of ${n < found ? 'the sample' : 'them'} on a hidden strand`)
+  return `Read limit reached: ${parts.join(', ')} (shaded part not scanned) — ` +
+    (leading ? 'zoom out for coverage' : 'zoom in to see all')
 }
 
 /**

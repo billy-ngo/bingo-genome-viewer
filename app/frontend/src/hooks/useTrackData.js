@@ -5,7 +5,8 @@
  * doesn't re-fetch on every pixel. Supports coverage, reads, variants, features.
  *
  * Three fetch strategies:
- * 1. Viewport within overscan, same zoom: skip fetch (cached data is fine)
+ * 1. Viewport within overscan, same zoom: skip fetch (cached data is fine;
+ *    for a read track, only data of the kind this zoom shows: reads or coverage)
  * 2. Viewport within overscan, different zoom: debounced refetch at the new
  *    resolution (immediate-ish for large jumps such as a gene search)
  * 3. Viewport outside overscan: immediate fetch (pan debounce 100ms, or instant if
@@ -42,7 +43,7 @@ import { useBrowser } from '../store/BrowserContext'
 import { planCoverageFetch, OVERSCAN } from '../utils/fetchPlan'
 import { binExtremes, hasNegativeSide, windowingOf } from '../utils/coverageStats'
 
-const READ_DETAIL_THRESHOLD = 50_000
+export const READ_DETAIL_THRESHOLD = 50_000   // a read track shows individual reads up to this view length
 const PAN_DEBOUNCE = 100
 const ZOOM_REFETCH_DELAY = 800
 const BIG_ZOOM_RATIO = 4           // zoom jumps beyond this refetch at pan speed
@@ -227,8 +228,9 @@ export function useTrackData(track, region, canvasWidth) {
   const [error, setError] = useState(null)
   const abortRef = useRef(null)     // controller of the newest fetch, shared by its retries and polls
   // The data on screen: { trackId, chrom, start, end, viewLen, binSize,
-  // complete, controller (of the fetch that produced it), req (its request),
-  // and while incomplete: pollFails (failed polls in a row), pollStopped }
+  // readMode (reads rather than coverage), complete, controller (of the fetch
+  // that produced it), req (its request), and while incomplete: pollFails
+  // (failed polls in a row), pollStopped }
   const fetchedRef = useRef(null)
   const debounceRef = useRef(null)
   const zoomDebounceRef = useRef(null)
@@ -273,8 +275,12 @@ export function useTrackData(track, region, canvasWidth) {
     }
 
     const f = fetchedRef.current
+    // A read track's data must also be of the kind this zoom shows (reads up
+    // to READ_DETAIL_THRESHOLD, coverage beyond): a small zoom-in from
+    // coverage lands inside its overscan, yet needs reads.
+    const readMode = type === 'reads' && viewLen <= READ_DETAIL_THRESHOLD
     const withinOverscan = f && f.trackId === track.id && f.chrom === chrom &&
-      start >= f.start && end <= f.end && f.binSize === binSize
+      start >= f.start && end <= f.end && f.binSize === binSize && f.readMode === readMode
 
     if (withinOverscan) {
       const zoomRatio = viewLen / (f.viewLen || viewLen)
@@ -423,7 +429,7 @@ export function useTrackData(track, region, canvasWidth) {
         setLiveData(track.id, cached)
         setError(null)
         setLoading(false)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, complete: true, controller, req }
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, readMode, complete: true, controller, req }
         hasDataRef.current = true
         return
       }
@@ -457,7 +463,7 @@ export function useTrackData(track, region, canvasWidth) {
         }
         const incomplete = result.complete === false
         if (!incomplete) cache.set(cacheKey, result)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, complete: !incomplete, controller, req }
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, readMode, complete: !incomplete, controller, req }
         hasDataRef.current = true
         setData(result)
         setLiveData(track.id, result)
