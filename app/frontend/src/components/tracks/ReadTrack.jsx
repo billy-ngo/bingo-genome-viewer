@@ -447,11 +447,17 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
 
 /** The badge text for a read view the backend's read-scan limit cut short:
  *  the pileup is complete only up to `scannedTo` (and `total` is a lower
- *  bound on the reads overlapping the view). */
+ *  bound on the reads overlapping the view). At or before the view start the
+ *  limit was spent on reads just left of the view, before reaching it; zooming
+ *  in does not help there (those reads lie in the same 16 kb index window),
+ *  while the coverage view still shows the depth. */
 function readLimitWarning(data, scannedTo, viewStart) {
   const n = data.reads?.length || 0
-  if (n === 0 && scannedTo <= viewStart) {
-    return 'Read limit reached: too many reads to scan in this view (shaded part not scanned) — zoom in to see reads'
+  if (scannedTo <= viewStart) {
+    return n === 0
+      ? 'Read limit reached: too many reads just left of this view to scan (shaded part not scanned) — zoom out for coverage'
+      : `Read limit reached: only the ${n.toLocaleString()} read${n > 1 ? 's' : ''} crossing the view start ` +
+        `${n > 1 ? 'are' : 'is'} shown (shaded part not scanned) — zoom out for coverage`
   }
   if (n === 0) {
     return `Read limit reached: no reads up to ${scannedTo.toLocaleString()} (shaded part not scanned) — zoom in to see all`

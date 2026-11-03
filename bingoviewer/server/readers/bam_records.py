@@ -14,7 +14,9 @@ chunks that end before the linear-index offset of the window start. That
 finds every overlapping alignment, however far left it starts, with no
 lookback. Records are parsed only as far as each step needs: the fixed fields
 (plus the CIGAR for reads that start left of the window) to test overlap, and
-the whole record only for the reads that are returned.
+the whole record only for the reads that are returned. A record's block_size
+is checked as soon as it is read, so a corrupt one fails at once instead of
+making the scan inflate the rest of the file in search of the record's end.
 """
 
 import struct
@@ -35,7 +37,12 @@ _AUX_SIZE = {ord(t): n for t, n in (("A", 1), ("c", 1), ("C", 1), ("s", 2), ("S"
 _FILE_BUFFER = 1 << 18          # consecutive BGZF blocks are served from this read buffer
 _KEEP_BYTES = 64 << 20          # records kept from a scan (decoded without re-reading the file)
 _POLL_BLOCKS = 16               # call is_current() every this many inflated blocks (~1 MB)
+_MAX_RECORD = 1 << 28           # a block_size above this (256 MiB) is corrupt, not a read
 _NO_LIMIT = float("inf")
+_FIXED = struct.Struct("<iiiBBHHHi").unpack_from   # block_size and the fixed fields
+_WORD = struct.Struct("<I").unpack_from
+_SHORT_CIGAR = 32               # scanning sums the CIGARs with fewer operations inline
+_CIGAR_WORDS = [struct.Struct("<%dI" % k).unpack_from for k in range(_SHORT_CIGAR)]
 
 
 def reg2bins(beg: int, end: int) -> list[int]:
@@ -194,7 +201,8 @@ class RegionScan:
     order: its virtual offset, start and sampling key; plus the records
     themselves (bytes) when there were few enough to keep."""
 
-    __slots__ = ("vofs", "starts", "keys", "records", "examined", "complete", "cancelled")
+    __slots__ = ("vofs", "starts", "keys", "records", "examined", "leading", "complete",
+                 "scanned_to", "cancelled")
 
     def __init__(self):
         self.vofs = array("Q")
@@ -202,7 +210,9 @@ class RegionScan:
         self.keys = array("I")
         self.records: list[bytes] | None = None
         self.examined = 0         # records parsed, of any kind
-        self.complete = True      # False: stopped at max_records before the window end
+        self.leading = 0          # of them, records starting left of the window
+        self.complete = True      # False: a record budget ran out before the window end
+        self.scanned_to = None    # then where: every overlapping record starting before it was found
         self.cancelled = False    # True: is_current() returned False; nothing else is valid
 
 
@@ -216,13 +226,23 @@ class BamRecords:
         self.index = BaiIndex(bai_path)
 
     def scan(self, tid: int, beg: int, end: int, skip_flags: int, is_current=None,
-             max_records: int | None = None, keep: int = 0) -> RegionScan:
+             max_records: int | None = None, max_leading: int | None = None,
+             keep: int = 0) -> RegionScan:
         """Find every alignment of reference ``tid`` overlapping [beg, end) that
         has none of ``skip_flags``. Overlap uses the true reference end
         (pos + the M/D/N/=/X lengths of the CIGAR, or of the CG tag behind a
         kSmN placeholder; pos + 1 without a CIGAR). The records themselves are
-        kept while there are at most ``keep`` of them. Stops early, with
-        ``complete`` False, after ``max_records`` records of any kind."""
+        kept while there are at most ``keep`` of them.
+
+        The chunks start at the first record reaching beg's 16 kb window, so
+        the scan also passes over the records that start left of beg (up to
+        16 kb of them, plus long reads), most of which end before it. Two
+        budgets bound it, each counting records of any kind: ``max_records``
+        starting at or after beg and ``max_leading`` starting before it. At
+        the first record past either, the scan stops with ``complete`` False
+        and ``scanned_to`` that record's position: every overlapping
+        alignment that starts before it was found (scanned_to < beg: the
+        window was not reached)."""
         res = RegionScan()
         chunks = self.index.chunks(tid, beg, end)
         if not chunks:
@@ -231,8 +251,9 @@ class BamRecords:
         records = [] if keep else None
         kept_bytes = 0
         limit = _NO_LIMIT if max_records is None else max_records
-        unpack_from, crc32 = struct.unpack_from, zlib.crc32
-        seen = polled = 0
+        lead_limit = _NO_LIMIT if max_leading is None else max_leading
+        unpack_from, fixed, word, crc32 = struct.unpack_from, _FIXED, _WORD, zlib.crc32
+        seen = lead = polled = 0
         with open(self.bam_path, "rb", buffering=_FILE_BUFFER) as fh:
             blocks = _Blocks(fh)
             done = False
@@ -248,51 +269,101 @@ class BamRecords:
                 stop = _NO_LIMIT
                 while off < stop:
                     n = len(data)
-                    if n - off < 4 or n - off < 4 + unpack_from("<i", data, off)[0]:
-                        # The next record is not complete here: inflate the next block.
-                        if off >= n and nxt << 16 >= v:
-                            break                         # the chunk ends at this block's end
-                        if seen >= limit:
-                            res.complete = False
+                    if n - off >= 36:
+                        bs, refid, pos, l_rn, _mq, _bin, n_cig, flag, l_seq = fixed(data, off)
+                        if (bs < 32 + l_rn + 4 * n_cig + ((l_seq + 1) >> 1) + l_seq or bs > _MAX_RECORD
+                                or l_seq < 0 or not l_rn):
+                            raise ValueError("malformed alignment record")
+                        if refid != tid or pos >= end:
+                            done = True                   # sorted: nothing further overlaps
+                            break
+                        if (lead >= lead_limit) if pos < beg else (seen >= limit):
+                            res.complete = False          # a budget is spent: stop at this record
+                            res.scanned_to = pos
                             done = True
                             break
+                        if n - off >= 4 + bs:
+                            if pos >= beg:
+                                seen += 1
+                                if flag & skip_flags:
+                                    off += 4 + bs
+                                    continue
+                            else:                         # starts left of the window: reaches it?
+                                lead += 1
+                                if flag & skip_flags:
+                                    off += 4 + bs
+                                    continue
+                                if n_cig == 1:            # most short reads: one CIGAR word
+                                    c, = word(data, off + 36 + l_rn)
+                                    if pos + (c >> 4) <= beg or not _REF_OPS >> (c & 0xF) & 1:
+                                        off += 4 + bs
+                                        continue
+                                elif n_cig < _SHORT_CIGAR:
+                                    words = _CIGAR_WORDS[n_cig](data, off + 36 + l_rn)
+                                    if n_cig == 2 and words[0] == (l_seq << 4 | 4) and words[1] & 0xF == 3:
+                                        reach = _ref_end(data, off)   # kSmN: the CIGAR is in the CG tag
+                                    else:
+                                        reach = pos
+                                        for c in words:
+                                            if _REF_OPS >> (c & 0xF) & 1:
+                                                reach += c >> 4
+                                    if reach <= beg:
+                                        off += 4 + bs
+                                        continue
+                                elif _ref_end(data, off) <= beg:
+                                    off += 4 + bs
+                                    continue
+                            vofs.append((seg_coff << 16) | (off - seg_start) if off >= seg_start else head_vo)
+                            starts.append(pos)
+                            keys.append(crc32(data[off + 36:off + 35 + l_rn], (pos * 0x9E3779B1 ^ flag) & 0xFFFFFFFF))
+                            if records is not None:
+                                kept_bytes += 4 + bs
+                                if len(vofs) <= keep and kept_bytes <= _KEEP_BYTES:
+                                    records.append(data[off:off + 4 + bs])
+                                else:
+                                    records = None        # too many: decode from the file later
+                            off += 4 + bs
+                            continue
+                        need = 4 + bs
+                    elif n - off >= 4:
+                        # Check the size before inflating more for it: a corrupt
+                        # one must not pull in the rest of the file.
+                        need = 4 + unpack_from("<i", data, off)[0]
+                        if not 36 <= need <= 4 + _MAX_RECORD:
+                            raise ValueError("malformed alignment record")
+                    else:
+                        need = 4
+                    # The next record is not complete here: inflate the next
+                    # block, or as many as a record that spans several needs
+                    # (joined once, so a long record costs linear time).
+                    pending = n - off if off < n else 0
+                    if not pending and nxt << 16 >= v:
+                        break                             # the chunk ends at this block's end
+                    if pending:
+                        head_vo = (seg_coff << 16) | (off - seg_start) if off >= seg_start else head_vo
+                    parts, have = [data[off:]] if pending else [], pending
+                    while True:
                         if is_current is not None and blocks.inflated >= polled + _POLL_BLOCKS:
                             polled = blocks.inflated
                             if not is_current():
                                 res.cancelled = True
                                 return res
-                        if off < n:
-                            head_vo = (seg_coff << 16) | (off - seg_start) if off >= seg_start else head_vo
                         nd, nn = blocks.get(nxt)
-                        if off < n and not nd:
+                        if pending and not nd:
                             raise EOFError("the BAM ends inside an alignment record")
-                        data, seg_start, seg_coff, nxt = data[off:] + nd, n - off, nxt, nn
-                        off, skip = skip, 0
-                        stop = (seg_start + vu if seg_coff == vblk
-                                else seg_start if seg_coff > vblk else _NO_LIMIT)
-                        continue
-                    bs, refid, pos, l_rn, _mq, _bin, n_cig, flag, l_seq = \
-                        unpack_from("<iiiBBHHHi", data, off)
-                    if bs < 32 + l_rn + 4 * n_cig + ((l_seq + 1) >> 1) + l_seq or l_seq < 0 or not l_rn:
-                        raise ValueError("malformed alignment record")
-                    if refid != tid or pos >= end:
-                        done = True                       # sorted: nothing further overlaps
-                        break
-                    seen += 1
-                    if not flag & skip_flags and (pos >= beg or _ref_end(data, off) > beg):
-                        vofs.append((seg_coff << 16) | (off - seg_start) if off >= seg_start else head_vo)
-                        starts.append(pos)
-                        keys.append(crc32(data[off + 36:off + 35 + l_rn], (pos * 0x9E3779B1 ^ flag) & 0xFFFFFFFF))
-                        if records is not None:
-                            kept_bytes += 4 + bs
-                            if len(vofs) <= keep and kept_bytes <= _KEEP_BYTES:
-                                records.append(data[off:off + 4 + bs])
-                            else:
-                                records = None            # too many: decode from the file later
-                    off += 4 + bs
+                        parts.append(nd)
+                        seg_start, seg_coff, nxt = have, nxt, nn
+                        have += len(nd)
+                        if not pending or have >= need:
+                            break
+                    data = parts[0] if len(parts) == 1 else b"".join(parts)
+                    off, skip = skip, 0
+                    stop = (seg_start + vu if seg_coff == vblk
+                            else seg_start if seg_coff > vblk else _NO_LIMIT)
                 if done:
                     break
-        res.examined = seen
+        res.examined = seen + lead
+        res.leading = lead
         res.records = records
         return res
 
@@ -315,12 +386,22 @@ class BamRecords:
                     out.append(data[off:off + 4 + unpack_from("<i", data, off)[0]])
                     continue
                 buf = data[off:]                  # the record continues in the next block(s)
-                while len(buf) < 4 or len(buf) < 4 + unpack_from("<i", buf, 0)[0]:
+                while len(buf) < 4:
                     more, nxt = blocks.get(nxt)
                     if not more:
                         raise EOFError("the BAM ends inside an alignment record")
                     buf += more
-                out.append(buf[:4 + unpack_from("<i", buf, 0)[0]])
+                need = 4 + unpack_from("<i", buf, 0)[0]
+                if not 36 <= need <= 4 + _MAX_RECORD:
+                    raise ValueError("malformed alignment record")
+                parts, have = [buf], len(buf)
+                while have < need:                # joined once: linear in the record's size
+                    more, nxt = blocks.get(nxt)
+                    if not more:
+                        raise EOFError("the BAM ends inside an alignment record")
+                    parts.append(more)
+                    have += len(more)
+                out.append(b"".join(parts)[:need])
         return out
 
 

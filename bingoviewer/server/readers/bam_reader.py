@@ -20,10 +20,16 @@ from readers.bam_coverage import BamCoverageIndex, SKIP_FLAGS
 from readers.bam_records import BamRecords, decode_record
 
 MAX_READS_RETURNED = 5000
-# Bound on the records (of any kind) one read-view request examines: about a
-# second of scanning, four times what the deepest 50 kb view of a ~400 MB ChIP
-# BAM needs.
+# Bounds on the records (of any kind) one read-view request examines, so it
+# answers within about 3 s however deep the BAM. Records starting in the
+# view: about a second of scanning, about five times what the deepest 50 kb
+# view of a ~400 MB ChIP BAM holds. Records starting left of it: the scan
+# begins at the first read reaching the start's 16 kb index window, so it also
+# passes over up to 16 kb of reads that end before the view. Most of those cost
+# only their fixed fields and one CIGAR word, so they get a budget of their
+# own: 1.5-2 s, a whole 16 kb window at ~15,000x of 100 bp reads.
 MAX_READS_SCANNED = 1_000_000
+MAX_LEADING_SCANNED = 2_500_000
 MAX_COVERAGE_READS = 500_000   # cap for the live fallback pileup (index unavailable)
 READ_DETAIL_THRESHOLD = 50_000  # bp
 # Reads hidden in the pileup, matching IGV's defaults and the coverage index.
@@ -243,11 +249,14 @@ class BamReader:
 
         Matches exact names first, then with/without a leading 'chr', then
         case-insensitively, then by accession base (strip a trailing
-        '.version'). Returns the original name unchanged when nothing matches
-        (bamnostic.fetch then raises KeyError, which the callers turn into an
-        empty result) — it NEVER silently remaps to a different contig, which
-        previously made single-contig BAMs serve the wrong data under any
-        requested name.
+        '.version') when exactly one contig has that base: in names such as
+        supercont1.1 ... supercont1.14 the suffix is an index, not a
+        version, and supercont1.15 must not resolve to supercont1.1 (the
+        rule state._match_chromosomes applies). Returns the original name
+        unchanged when nothing matches (the callers then find no such contig
+        and return an empty result) — it NEVER silently remaps to a different
+        contig, which previously made single-contig BAMs serve the wrong data
+        under any requested name.
         """
         names = [c["name"] for c in self.chromosomes]
         if chrom in names:
@@ -259,20 +268,25 @@ class BamReader:
                 return name
 
         chrom_base = chrom.rsplit(".", 1)[0] if "." in chrom else chrom
+        match = None
         for name in names:
             name_base = name.rsplit(".", 1)[0] if "." in name else name
             if name_base == chrom_base:
-                return name
-        return chrom
+                if match is not None:
+                    return chrom            # several contigs share the base: ambiguous
+                match = name
+        return chrom if match is None else match
 
     def get_coverage(self, chrom: str, start: int, end: int, bins: int = 1000) -> dict:
         """Binned read depth over [start, end): exact mean / max / min per bin.
 
         Served from the background coverage index; bins the index has not
-        reached yet come back ``pending``. If the index is unavailable (very
-        large reference, or the scan failed) a bounded live pileup is used
-        instead and the result is flagged ``truncated`` when its read cap was
-        hit — never silently drawn as zero coverage."""
+        reached yet come back ``pending``, with coverage_state 'building'
+        (the state the bins were computed under, even when the build has
+        failed since: asked again, the live fallback answers). If the index
+        is unavailable (very large reference, or the scan failed) a bounded
+        live pileup is used instead and the result is flagged ``truncated``
+        when its read cap was hit — never silently drawn as zero coverage."""
         chrom = self._resolve_chrom(chrom)
         if end - start <= 0:
             return {"bins": [], "meta": {}}
@@ -280,10 +294,10 @@ class BamReader:
         if state in ("building", "ready"):
             if not self._cov.has_contig(chrom):
                 return {"bins": [], "meta": {"coverage_state": state}}   # contig not in this BAM
-            bins_data = self._cov.coverage(chrom, start, end, bins)
+            bins_data, state = self._cov.coverage(chrom, start, end, bins)
             if bins_data:
                 return {"bins": bins_data, "meta": {
-                    "coverage_state": self._cov.state,
+                    "coverage_state": state,
                     "coverage_progress": self._cov.progress,
                 }}
         # Index unavailable (reference too large for it, or the scan failed).
@@ -417,7 +431,8 @@ class BamReader:
 
     def get_reads(self, chrom: str, start: int, end: int, is_current=None) -> dict:
         """Individual read alignments overlapping [start, end), with parsed CIGAR
-        operations. Returns {"reads", "truncated", "total", "total_exact"}.
+        operations. Returns {"reads", "truncated", "total", "total_exact"},
+        plus "scanned_to" when the scan stopped early.
 
         - Every alignment overlapping the window is found, however far left it
           starts: the .bai chunks that can hold one are scanned directly
@@ -426,12 +441,18 @@ class BamReader:
           with more than 65,535 operations.
         - Unmapped, QC-fail and duplicate reads are hidden (IGV defaults);
           secondary and supplementary alignments are shown.
-        - ``total`` is the exact number of overlapping reads (a lower bound,
-          with ``total_exact`` False, only when MAX_READS_SCANNED records were
-          examined before the end of the window). Up to MAX_READS_RETURNED
-          reads are all returned; beyond that exactly MAX_READS_RETURNED are
-          sampled evenly across the view (see _downsample) and ``truncated``
-          says the pileup is a sample.
+        - ``total`` is the exact number of overlapping reads. The scan stops
+          early only when MAX_READS_SCANNED records starting in the window, or
+          MAX_LEADING_SCANNED starting left of it, have been examined. Then
+          ``total_exact`` is False, ``total`` is a lower bound and
+          ``scanned_to`` is how far the scan got: every overlapping alignment
+          starting before it was found, so the pileup over [start, scanned_to)
+          is exact, while reads starting in [scanned_to, end) may be missing
+          (scanned_to <= start: the scan did not reach the window).
+        - Up to MAX_READS_RETURNED reads are all returned; beyond that exactly
+          MAX_READS_RETURNED are sampled evenly across what was scanned (the
+          whole view unless the scan stopped early; see _downsample), and
+          ``truncated`` says the pileup is a sample or stops at scanned_to.
         - ``is_current`` (optional) is polled while scanning. Once it returns
           False a newer request has superseded this one: the scan stops and the
           result is empty and flagged ``cancelled``, never a partial pileup.
@@ -448,7 +469,8 @@ class BamReader:
             scan = self._records.scan(
                 tid, max(0, start), min(end, L) if L else end,
                 skip_flags=0x4 | READ_VIEW_SKIP_FLAGS, is_current=is_current,
-                max_records=MAX_READS_SCANNED, keep=MAX_READS_RETURNED)
+                max_records=MAX_READS_SCANNED, max_leading=MAX_LEADING_SCANNED,
+                keep=MAX_READS_RETURNED)
             total = len(scan.vofs)
             records = None
             if not scan.cancelled:
@@ -482,12 +504,16 @@ class BamReader:
             raise RuntimeError(_fetch_error_msg(self.file_path)) from e
 
         _assign_rows(reads)
-        return {"reads": reads, "truncated": total > len(reads) or not scan.complete,
-                "total": total, "total_exact": scan.complete}
+        out = {"reads": reads, "truncated": total > len(reads) or not scan.complete,
+               "total": total, "total_exact": scan.complete}
+        if not scan.complete:
+            out["scanned_to"] = scan.scanned_to
+        return out
 
 
 def _downsample(starts, keys, width: int, cap: int) -> list[int]:
-    """Indices (ascending) of exactly ``cap`` reads spread evenly over the view.
+    """Indices (ascending) of exactly ``cap`` reads spread evenly over the view
+    (over the part of it a scan stopped early reached).
 
     Reads are bucketed by start position on a ``width``-bp grid aligned to
     absolute coordinates, so the grid stays put while panning at a fixed zoom,
