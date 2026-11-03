@@ -10,11 +10,23 @@ import { useBrowser } from '../../store/BrowserContext'
 import { useTracks, cleanName } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
 import { genomeApi, tracksApi } from '../../api/client'
+import { nearestSmoothStep } from '../../utils/coverageStats'
 
 const SESSION_STORAGE_KEY = 'genomics-viewer-session'
 // v3: fit-to-visible auto scale became the default, link groups carry ids,
 // and tracks gained `windowing` and `binSize`.
-const SESSION_VERSION = 3
+// v4: the peak-outline smoothing radius is in bp (`smoothBp`), not in bins
+// (`outlineSmooth`), and the genome annotation track's `userRemoved` is gone.
+const SESSION_VERSION = 4
+
+/** A v3 track's smoothing radius in bins as one in bp: a bin was about a
+ *  pixel, so a radius of r bins covered about r x (view length / ~1,000 px)
+ *  bp at the saved view. The nearest step Track Settings offers. */
+function smoothBpFromBins(bins, region) {
+  if (!(bins > 0)) return 0
+  const viewLen = region ? region.end - region.start : 50_000
+  return nearestSmoothStep(bins * Math.max(1, viewLen) / 1000)
+}
 
 // ── Public helpers (shared with ExitGuard, etc.) ─────────────────────────
 
@@ -57,7 +69,7 @@ export function collectSession(genome, region, tracks, themeName, customTheme, l
       barWidth: t.barWidth || 2,
       showOutline: t.showOutline || false,
       outlineColor: t.outlineColor || null,
-      outlineSmooth: t.outlineSmooth || 0,
+      smoothBp: t.smoothBp > 0 ? t.smoothBp : 0,
       showBars: t.showBars !== false,
       fillArea: t.fillArea === true,
       showNucleotides: t.showNucleotides !== false,
@@ -71,9 +83,6 @@ export function collectSession(genome, region, tracks, themeName, customTheme, l
       overlayOpacity: t.overlayOpacity ?? 0.6,
       annotationColors: t.annotationColors || null,
       targetChromosomes: t.targetChromosomes || null,
-      // Deliberate removal of a genome-annotation track (v2.9.9+) — persist
-      // so it stays gone across reloads instead of being auto-revived.
-      userRemoved: t.userRemoved || false,
       // Annotation feature-type filter (v2.8.0+)
       featureTypes: t.featureTypes || [],
       hiddenFeatureTypes: t.hiddenFeatureTypes || [],
@@ -284,7 +293,8 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
 
       // Apply frontend track state (colors, heights, settings)
       const legacy = !(session.version >= 3)
-      setTracks(restoredTracks.map(t => ({
+      const binSmoothing = !(session.version >= 4)
+      setTracks(restoredTracks.map(({ outlineSmooth, userRemoved, ...t }) => ({
         ...t,
         name: cleanName(t.name) || t.name,
         height: t.height || 80,
@@ -304,7 +314,7 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         barWidth: t.barWidth || 2,
       showOutline: t.showOutline || false,
       outlineColor: t.outlineColor || null,
-      outlineSmooth: t.outlineSmooth || 0,
+      smoothBp: binSmoothing ? smoothBpFromBins(outlineSmooth, session.region) : (t.smoothBp > 0 ? t.smoothBp : 0),
       showBars: t.showBars !== false,
       fillArea: t.fillArea === true,
       showNucleotides: t.showNucleotides !== false,
@@ -325,8 +335,6 @@ export default function SessionManager({ onClose, labelWidth, setLabelWidth }) {
         // Read-track strand visibility (v2.9.0+) — default true for older sessions
         showFwdStrand: t.showFwdStrand !== false,
         showRevStrand: t.showRevStrand !== false,
-        // Deliberate annotation-track removal (v2.9.9+)
-        userRemoved: t.userRemoved || false,
       })))
 
       // 3. Restore theme

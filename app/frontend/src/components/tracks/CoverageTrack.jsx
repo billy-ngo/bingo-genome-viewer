@@ -126,7 +126,7 @@ export default function CoverageTrack({
     const outlineColor = track.outlineColor || null
     // Smooth fill draws a single-colour area under the (smoothed) peak-outline
     // curve in place of the discrete bars, so the bars are off while it's on.
-    const { bars: drawBars, fill: fillArea, outline: showOutline, curve: wantCurve, smooth: outlineSmooth } = coverageStyle(track)
+    const { bars: drawBars, fill: fillArea, outline: showOutline, curve: wantCurve, smoothBp } = coverageStyle(track)
     // The axis (coverageAxis): the auto scale of the drawn statistic over the
     // visible region (default) or the fetched range, the track's link/overlay
     // group sharing one axis — or, with the bars hidden, the smoothed curve —
@@ -201,12 +201,12 @@ export default function CoverageTrack({
         const fwdYs = curveHi.map(v => midY - axisRatio(v, posMax, useLog) * topH)
         const revYs = curveLo.map(v => midY + axisRatio(v, negMax, useLog) * botH)
         if (fillArea) {
-          drawFilledArea(ctx, xs, fwdYs, midY, fwdColor, outlineSmooth > 0)
-          drawFilledArea(ctx, xs, revYs, midY, revColor, outlineSmooth > 0)
+          drawFilledArea(ctx, xs, fwdYs, midY, fwdColor, smoothBp > 0)
+          drawFilledArea(ctx, xs, revYs, midY, revColor, smoothBp > 0)
         }
         if (showOutline) {
-          drawSmoothLine(ctx, xs, fwdYs, fwdStroke, outlineSmooth > 0)
-          drawSmoothLine(ctx, xs, revYs, revStroke, outlineSmooth > 0)
+          drawSmoothLine(ctx, xs, fwdYs, fwdStroke, smoothBp > 0)
+          drawSmoothLine(ctx, xs, revYs, revStroke, smoothBp > 0)
         }
       }
       ctx.globalAlpha = 1
@@ -231,8 +231,8 @@ export default function CoverageTrack({
       }
       if (wantCurve && bins.length > 0) {
         const ys = curveHi.map(v => height - axisRatio(v, effectiveMax, useLog) * (height - 14) - 2)
-        if (fillArea) drawFilledArea(ctx, xs, ys, height - 2, color, outlineSmooth > 0)
-        if (showOutline) drawSmoothLine(ctx, xs, ys, outlineColor || theme.textPrimary || '#fff', outlineSmooth > 0)
+        if (fillArea) drawFilledArea(ctx, xs, ys, height - 2, color, smoothBp > 0)
+        if (showOutline) drawSmoothLine(ctx, xs, ys, outlineColor || theme.textPrimary || '#fff', smoothBp > 0)
       }
       ctx.globalAlpha = 1
       if (!isOverlayLayer) drawPending(ctx, bins, regionStart, regionLen, width, height, theme)
@@ -258,7 +258,7 @@ export default function CoverageTrack({
       warnings.push(...clipWarnings(track, bins, axis, region, { scaleMax: userScaleMax, scaleMin: userScaleMin, split: hasNegative }))
       onWarning(warnings.length > 0 ? warnings.join('\n') : null)
     }
-  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea, track.windowing, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
+  }, [data, loading, error, width, height, region, track.color, track.scaleMax, track.scaleMin, track.logScale, track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.smoothBp, track.showBars, track.fillArea, track.windowing, track.regionOverlays, track.autoScaleVisible, track.linkScale, track.overlayGroup, overlayRole, barAlpha, overlayScaleMax, overlayScaleMin, overlayLogScale, liveVersion, tracks, theme])
 
   return <canvas ref={canvasRef} style={{ display: 'block', width: '100%', height }} />
 }

@@ -7,10 +7,12 @@
  * Three fetch strategies:
  * 1. Viewport within overscan, same zoom: skip fetch (cached data is fine;
  *    for a read track, only data of the kind this zoom shows: reads or coverage)
- * 2. Viewport within overscan, different zoom: debounced refetch at the new
- *    resolution (immediate-ish for large jumps such as a gene search)
+ * 2. Viewport within overscan, different zoom (or, for auto-sized coverage
+ *    bins, a different width): debounced refetch at the new resolution
+ *    (immediate-ish for large jumps such as a gene search)
  * 3. Viewport outside overscan: immediate fetch (pan debounce 100ms, or instant if
- *    no data exists yet)
+ *    no data exists yet). So does data fetched before invalidateTrackData
+ *    (a merge changed the genome).
  *
  * Coverage requests are planned by planCoverageFetch: the range never extends
  * past the chromosome end, and a track's fixed bin size (Track Settings →
@@ -75,9 +77,26 @@ function makeCache(maxSize = 200) {
         if (key.startsWith(prefix)) map.delete(key)
       }
     },
+    clear() { map.clear() },
   }
 }
 const cache = makeCache()
+
+// ── Data epoch ─────────────────────────────────────────────────────────
+// Bumped by invalidateTrackData (after a merge). Every track whose data on
+// screen was fetched in an earlier epoch fetches its view again, keeping that
+// data on screen until the answer arrives.
+let dataEpoch = 0
+const epochListeners = new Set()
+
+/** Forget every cached response and have every track fetch its view again:
+ *  after a merge, a track's data for a chromosome can change (a length
+ *  pairing the merge made or cancelled). */
+export function invalidateTrackData() {
+  cache.clear()
+  dataEpoch++
+  for (const fn of epochListeners) fn(dataEpoch)
+}
 
 const liveData = new Map()
 
@@ -246,6 +265,14 @@ export function useTrackData(track, region, canvasWidth) {
   const retryTimerRef = useRef(null)
   const pollTimerRef = useRef(null)
   const latestRef = useRef(null)    // newest request parameters (timers read these)
+  const [epoch, setEpoch] = useState(dataEpoch)
+
+  useEffect(() => {
+    const fn = (e) => setEpoch(e)
+    epochListeners.add(fn)
+    setEpoch(dataEpoch)   // resync in case it changed between render and effect
+    return () => { epochListeners.delete(fn) }
+  }, [])
 
   const chromLength = (region && genome?.chromosomes?.find(c => c.name === region.chrom)?.length) || 0
   const binSize = track && track.binSize > 0 ? track.binSize : null
@@ -263,7 +290,7 @@ export function useTrackData(track, region, canvasWidth) {
     const { chrom, start, end } = region
     const viewLen = end - start
     const type = track.track_type
-    latestRef.current = { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize }
+    latestRef.current = { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, epoch }
 
     if (fetchedRef.current && fetchedRef.current.trackId !== track.id) {
       fetchedRef.current = null
@@ -285,16 +312,23 @@ export function useTrackData(track, region, canvasWidth) {
     const f = fetchedRef.current
     // A read track's data must also be of the kind this zoom shows (reads up
     // to READ_DETAIL_THRESHOLD, coverage beyond): a small zoom-in from
-    // coverage lands inside its overscan, yet needs reads.
+    // coverage lands inside its overscan, yet needs reads. Data fetched
+    // before invalidateTrackData (a merge) is fetched again.
     const readMode = type === 'reads' && viewLen <= READ_DETAIL_THRESHOLD
-    const withinOverscan = f && f.trackId === track.id && f.chrom === chrom &&
+    const withinOverscan = f && f.trackId === track.id && f.chrom === chrom && f.epoch === epoch &&
       start >= f.start && end <= f.end && f.binSize === binSize && f.readMode === readMode
+    // Auto-sized coverage bins follow the width they were fetched for (about
+    // one per pixel): after a resize they are fetched again at the new width,
+    // as after a small zoom, so what is drawn (and a smoothed curve's axis)
+    // never depends on the width at an earlier fetch.
+    const binned = type === 'coverage' || (type === 'reads' && !readMode)
+    const resized = binned && !binSize && f && f.canvasWidth !== canvasWidth
 
     if (withinOverscan) {
       const zoomRatio = viewLen / (f.viewLen || viewLen)
       // Reads are fetched for exactly the view, with its counts (total, read
       // limit): a small zoom-in still needs them for the new view.
-      if (zoomRatio > 0.8 && zoomRatio < 1.2 && (!readMode || (start === f.start && end === f.end))) {
+      if (zoomRatio > 0.8 && zoomRatio < 1.2 && !resized && (!readMode || (start === f.start && end === f.end))) {
         // Same zoom, within the fetched range — nothing to load. A newer fetch
         // still pending (e.g. for a pan that was abandoned by panning back) is
         // for a view we no longer show: cancel it so it can't overwrite this
@@ -358,14 +392,14 @@ export function useTrackData(track, region, canvasWidth) {
     return () => {
       if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null }
     }
-  }, [track?.id, region?.chrom, region?.start, region?.end, canvasWidth, chromLength, binSize])
+  }, [track?.id, region?.chrom, region?.start, region?.end, canvasWidth, chromLength, binSize, epoch])
 
   /** Fetch for the newest requested view (timers may fire after several moves). */
   function fetchLatest() {
     if (latestRef.current) doFetchForRegion(latestRef.current)
   }
 
-  /** `req`: { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize } */
+  /** `req`: { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, epoch } */
   function doFetchForRegion(req) {
     // Cancel any previous in-flight request — passes signal to axios so the
     // underlying HTTP request is genuinely aborted, not merely suppressed.
@@ -424,7 +458,7 @@ export function useTrackData(track, region, canvasWidth) {
   function attemptFetchOnce(controller, req, attempt, poll = false) {
     // Bail if a newer fetch has superseded this one or the hook has unmounted.
     if (controller.signal.aborted) return
-    const { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize } = req
+    const { track, chrom, start, end, viewLen, type, canvasWidth, chromLength, binSize, epoch } = req
 
     const readMode = type === 'reads' && viewLen <= READ_DETAIL_THRESHOLD
     const useOverscan = !readMode
@@ -451,7 +485,7 @@ export function useTrackData(track, region, canvasWidth) {
         setLiveData(track.id, cached)
         setError(null)
         setLoading(false)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, readMode, complete: true, controller, req }
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, readMode, canvasWidth, epoch, complete: true, controller, req }
         hasDataRef.current = true
         return
       }
@@ -485,7 +519,7 @@ export function useTrackData(track, region, canvasWidth) {
         }
         const incomplete = result.complete === false
         if (!incomplete) cache.set(cacheKey, result)
-        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, readMode, complete: !incomplete, controller, req }
+        fetchedRef.current = { trackId: track.id, chrom, start: fetchStart, end: fetchEnd, viewLen, binSize, readMode, canvasWidth, epoch, complete: !incomplete, controller, req }
         hasDataRef.current = true
         setData(result)
         setLiveData(track.id, result)

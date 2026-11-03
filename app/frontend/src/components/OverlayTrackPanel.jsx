@@ -10,7 +10,9 @@
  *   - up/down arrows (stacking hierarchy — later = drawn on top),
  *   - a show/hide toggle, and
  *   - a remove-from-overlay button.
- * The whole group drags/reorders and resizes as a single unit.
+ * The whole group drags/reorders and resizes as a single unit. A warning badge
+ * beside the title gathers the members' warnings (a failed update, values the
+ * group's fixed scale clips), each named by its member.
  */
 import React, { useRef, useState, useCallback, Component } from 'react'
 import { useTracks } from '../store/TrackContext'
@@ -20,6 +22,7 @@ import { useCanvasInteraction } from '../hooks/useCanvasInteraction'
 import CoverageTrack from './tracks/CoverageTrack'
 import SelectionOverlay from './ui/SelectionOverlay'
 import PeakRankOverlay from './ui/PeakRankOverlay'
+import TrackWarningBadge from './ui/TrackWarningBadge'
 import { getLiveTrackData } from '../hooks/useTrackData'
 
 class TrackErrorBoundary extends Component {
@@ -44,6 +47,10 @@ export default function OverlayTrackPanel({
   const containerRef = useRef(null)
   const nativeColorRef = useRef(null)
   const colorTargetRef = useRef(null)
+  const [warnings, setWarnings] = useState({})   // member id -> its CoverageTrack's warning (or null)
+  const onMemberWarning = useCallback((id, msg) => {
+    setWarnings(prev => (prev[id] === msg ? prev : { ...prev, [id]: msg }))
+  }, [])
 
   // Host (first member) owns the row height and is the base layer.
   const host = members[0]
@@ -58,6 +65,11 @@ export default function OverlayTrackPanel({
   // layer). The host may be hidden or have no data on this chromosome, and its
   // numbers would then be another replicon's. No member drawn → no signal rows.
   const tipMember = visibleMembers[0] || null
+  // The badge: the warnings of the members drawn here, each under its name
+  // when more than one has something to say.
+  const warned = visibleMembers.filter(m => warnings[m.id])
+  const warning = warned.length === 1 && visibleMembers.length === 1 ? warnings[warned[0].id]
+    : warned.map(m => `${m.name}: ${warnings[m.id]}`).join('\n') || null
 
   useCanvasInteraction(containerRef)
 
@@ -128,6 +140,7 @@ export default function OverlayTrackPanel({
           <span style={{ fontSize: 10, fontWeight: 700, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 }}>
             Overlay · {members.length}
           </span>
+          {warning && <TrackWarningBadge message={warning} theme={theme} />}
           <span
             title="Separate overlay (ungroup tracks)"
             onClick={() => dissolveOverlayGroup(groupId)}
@@ -205,6 +218,7 @@ export default function OverlayTrackPanel({
                   track={m}
                   width={width}
                   height={height}
+                  onWarning={msg => onMemberWarning(m.id, msg)}
                   overlayRole={i === 0 ? 'base' : 'overlay'}
                   barAlpha={m.overlayOpacity ?? 0.6}
                   overlayScaleMax={host.scaleMax}

@@ -11,7 +11,7 @@ import { useTracks, DEFAULT_ANNOTATION_COLORS, makeGroupId } from '../../store/T
 import { useTheme } from '../../store/ThemeContext'
 import { useBrowser } from '../../store/BrowserContext'
 import { getLiveTrackData, useLiveDataVersion, computeAutoScale, needsSplitLayout, scaleGroup, READ_DETAIL_THRESHOLD } from '../../hooks/useTrackData'
-import { formatBp, formatValue, coverageAxis } from '../../utils/coverageStats'
+import { formatBp, formatValue, coverageAxis, SMOOTH_STEPS_BP, nearestSmoothStep } from '../../utils/coverageStats'
 import { MAX_BINS } from '../../utils/fetchPlan'
 import DraggablePanel from './DraggablePanel'
 import NumberInput from './NumberInput'
@@ -139,7 +139,8 @@ export default function TrackSettings({ onClose }) {
   const commonBarWidth = selectedTracks.length > 0 && selectedTracks.every(t => t.barWidth === selectedTracks[0].barWidth) ? selectedTracks[0].barWidth : undefined
   const commonShowOutline = selectedTracks.length > 0 && selectedTracks.every(t => t.showOutline === selectedTracks[0].showOutline) ? selectedTracks[0].showOutline : null
   const commonOutlineColor = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineColor === selectedTracks[0].outlineColor) ? selectedTracks[0].outlineColor : undefined
-  const commonOutlineSmooth = selectedTracks.length > 0 && selectedTracks.every(t => t.outlineSmooth === selectedTracks[0].outlineSmooth) ? selectedTracks[0].outlineSmooth : undefined
+  const smoothOf = t => (t.smoothBp > 0 ? t.smoothBp : 0)
+  const commonSmoothBp = selectedTracks.length > 0 && selectedTracks.every(t => smoothOf(t) === smoothOf(selectedTracks[0])) ? smoothOf(selectedTracks[0]) : null
   const commonShowBars = selectedTracks.length > 0 && selectedTracks.every(t => t.showBars === selectedTracks[0].showBars) ? selectedTracks[0].showBars : null
   const commonFillArea = selectedTracks.length > 0 && selectedTracks.every(t => (t.fillArea === true) === (selectedTracks[0].fillArea === true)) ? (selectedTracks[0].fillArea === true) : null
   const commonShowNucleotides = selectedTracks.length > 0 && selectedTracks.every(t => t.showNucleotides === selectedTracks[0].showNucleotides) ? selectedTracks[0].showNucleotides : null
@@ -382,12 +383,16 @@ export default function TrackSettings({ onClose }) {
                   )}
                 </div>
                 {commonShowOutline === true && (
-                  <div style={S.subRow}>
+                  <div style={S.subRow}
+                    title="Moving average over this many bp on each side: the same stretch of genome at every zoom. Where a bin is wider, the curve follows the bins.">
                     <span style={S.subLabel}>Smoothness</span>
-                    <input type="range" min={0} max={10} step={1} value={commonOutlineSmooth ?? 0}
-                      onChange={e => applyToSelected({ outlineSmooth: parseInt(e.target.value) })}
+                    <input type="range" min={0} max={SMOOTH_STEPS_BP.length - 1} step={1}
+                      value={SMOOTH_STEPS_BP.indexOf(nearestSmoothStep(commonSmoothBp ?? 0))}
+                      onChange={e => applyToSelected({ smoothBp: SMOOTH_STEPS_BP[parseInt(e.target.value)] })}
                       style={{ flex: 1, cursor: 'pointer', accentColor: t.textSecondary }} />
-                    <span style={{ fontSize: 11, color: t.textTertiary, width: 24, textAlign: 'right' }}>{commonOutlineSmooth ?? 0}</span>
+                    <span style={{ fontSize: 11, color: t.textTertiary, width: 52, textAlign: 'right' }}>
+                      {commonSmoothBp == null ? 'mixed' : commonSmoothBp > 0 ? `±${formatBp(commonSmoothBp)}` : 'off'}
+                    </span>
                   </div>
                 )}
                 {/* Smooth fill: fill the area under the (smoothed) outline curve

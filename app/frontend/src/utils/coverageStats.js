@@ -72,8 +72,21 @@ export function smoothValues(values, radius) {
   return out
 }
 
+/** The smoothing radii Track Settings offers, in bp on each side (0 = none). */
+export const SMOOTH_STEPS_BP = [0, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+
+/** The SMOOTH_STEPS_BP entry nearest `bp` (on a log scale), 0 for none. */
+export function nearestSmoothStep(bp) {
+  if (!(bp > 0)) return 0
+  let best = SMOOTH_STEPS_BP[1]
+  for (const s of SMOOTH_STEPS_BP.slice(1)) {
+    if (Math.abs(Math.log(s / bp)) < Math.abs(Math.log(best / bp))) best = s
+  }
+  return best
+}
+
 /** How a coverage track (or a read track's coverage view) is drawn: bars
- *  and/or a peak-outline curve (`smooth` = its moving-average radius in bins).
+ *  and/or a peak-outline curve (`smoothBp` = its moving-average radius in bp).
  *  Smooth fill draws a single-colour area under the curve in place of the bars. */
 export function coverageStyle(track) {
   const fill = track.fillArea === true
@@ -83,8 +96,18 @@ export function coverageStyle(track) {
     fill,
     outline,
     curve: fill || outline,
-    smooth: track.outlineSmooth || 0,
+    smoothBp: track.smoothBp > 0 ? track.smoothBp : 0,
   }
+}
+
+/** The moving-average radius in bins of `smoothBp` bp over `bins` (by their
+ *  mean width). The window is the same stretch of genome at every zoom, so
+ *  zooming out does not flatten a smoothed peak: once a bin is wider than the
+ *  radius, the curve is the bins themselves. */
+export function smoothRadiusBins(bins, smoothBp) {
+  if (!(smoothBp > 0) || bins.length < 2) return 0
+  const width = (bins[bins.length - 1].end - bins[0].start) / bins.length
+  return width > 0 ? Math.round(smoothBp / width) : 0
 }
 
 /** The Y axis a coverage track, or a read track's coverage view, draws.
@@ -106,11 +129,12 @@ export function coverageStyle(track) {
 export function coverageAxis(track, bins, region, { auto, split = false, grouped = false, scaleMax = null, scaleMin = null }) {
   const style = coverageStyle(track)
   const windowing = windowingOf(track)
-  const curveHi = style.curve ? smoothValues(bins.map(b => (b.pending ? 0 : binHigh(b, windowing))), style.smooth) : null
-  const curveLo = style.curve && split ? smoothValues(bins.map(b => (b.pending ? 0 : -binLow(b, windowing))), style.smooth) : null
+  const radius = smoothRadiusBins(bins, style.smoothBp)
+  const curveHi = style.curve ? smoothValues(bins.map(b => (b.pending ? 0 : binHigh(b, windowing))), radius) : null
+  const curveLo = style.curve && split ? smoothValues(bins.map(b => (b.pending ? 0 : -binLow(b, windowing))), radius) : null
   let hi = auto.max
   let lo = -auto.min
-  const fitCurve = !style.bars && style.curve && style.smooth > 0 && !grouped
+  const fitCurve = !style.bars && style.curve && radius > 0 && !grouped
   if (fitCurve) {
     const visibleOnly = track.autoScaleVisible !== false
     hi = 0
