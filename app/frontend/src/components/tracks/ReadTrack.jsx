@@ -170,7 +170,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       const pxPerNt = width / regionLen
       // Smooth fill replaces the bars with a single-colour area under the
       // (smoothed) outline curve, so the bars are off while it's on.
-      const { bars: drawBars, fill: fillArea, outline: showOutline, smooth: sm } = coverageStyle(track)
+      const { bars: drawBars, fill: fillArea, outline: showOutline, smoothBp: sm } = coverageStyle(track)
       // The axis by CoverageTrack's rule (coverageAxis): the auto scale of the
       // track's link group, or the smoothed curve when that is all that is
       // drawn, unless a fixed scale is set. A read track never splits (+/−).
@@ -254,21 +254,30 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       if (unscannedX1 > unscannedX0) shadePending(ctx, unscannedX0, unscannedX1, height, theme)
     }
     const limitWarning = limited ? readLimitWarning(data, scannedTo, dataStart, visibleReads?.length || 0) : null
+    /** Draw `msg` over the part [x0, x1] of the canvas it describes, cut to
+     *  it; nothing when that part is (all but) off-screen — as right after a
+     *  jump, before the new view's reads have loaded. */
+    const textIn = (msg, x0, x1) => {
+      if (x1 - x0 < 16) return
+      ctx.save()
+      ctx.beginPath(); ctx.rect(x0, 0, x1 - x0, height); ctx.clip()
+      ctx.fillText(msg, x0 + 8, height / 2 + 4)
+      ctx.restore()
+    }
 
     if (!data.reads?.length || !visibleReads?.length) {
       ctx.fillStyle = theme.textTertiary; ctx.font = '11px Arial, Helvetica, sans-serif'
       shadeUnscanned()
-      if (data.reads?.length) {
-        ctx.fillText(showFwd || showRev
-          ? `No ${showFwd ? 'forward' : 'reverse'}-strand reads here — the ${showFwd ? 'reverse' : 'forward'} strand is hidden in Track Settings`
-          : 'All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
+      // The messages about the data describe its own range (dataX0..dataX1).
+      const dataX0 = clampX(toX(dataStart)), dataX1 = clampX(toX(dataEnd))
+      if (data.reads?.length && !(showFwd || showRev)) {
+        ctx.fillText('All strands hidden — enable forward or reverse in Track Settings', 8, height / 2 + 4)
+      } else if (data.reads?.length) {
+        textIn(`No ${showFwd ? 'forward' : 'reverse'}-strand reads here — the ${showFwd ? 'reverse' : 'forward'} strand is hidden in Track Settings`, dataX0, dataX1)
       } else if (limited) {
-        // The scan stopped before it could show a read here.
-        const msg = 'Too many reads to scan here'
-        const tx = Math.max(8, Math.min(unscannedX0 + 8, width - ctx.measureText(msg).width - 8))
-        ctx.fillText(msg, tx, height / 2 + 4)
+        textIn('Too many reads to scan here', unscannedX0, unscannedX1)   // the scan stopped before any read
       } else {
-        ctx.fillText('No reads in region', 8, height / 2 + 4)
+        textIn('No reads in region', dataX0, dataX1)
       }
       if (onWarning) {
         const warnings = []
@@ -404,7 +413,7 @@ export default function ReadTrack({ track, width, height, onWarning, onAutoHeigh
       onWarning(warnings.length ? warnings.join('\n') : null)
     }
   }, [data, error, visibleReads, loading, width, height, region, refSeq, showBases, rows, scrollRow, track.color, track.scaleMax, track.scaleMin,
-      track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.outlineSmooth, track.showBars, track.fillArea,
+      track.barAutoWidth, track.barWidth, track.showOutline, track.outlineColor, track.smoothBp, track.showBars, track.fillArea,
       track.windowing, track.showNucleotides, track.useArrows, track.logScale,
       track.fwdColor, track.revColor, track.arrowStyle, track.arrowSize,
       track.showFwdStrand, track.showRevStrand, track.autoScaleVisible, track.linkScale, liveVersion, tracks, theme])

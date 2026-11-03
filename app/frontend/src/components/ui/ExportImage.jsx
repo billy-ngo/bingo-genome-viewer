@@ -2,17 +2,22 @@
  * ExportImage.jsx — Export the current view as SVG or PNG.
  *
  * Renders all visible tracks to an SVG document matching the on-screen layout,
- * then offers download. Supports coverage bars, annotations, reads, and variants.
- * The dialog notes exported tracks whose data is incomplete on screen.
+ * then offers download. Supports coverage bars, annotations, reads, variants
+ * and the peak rank labels drawn over coverage rows. A PNG or JPG is that SVG
+ * drawn at the export size, so it matches the screen (and the SVG) instead of
+ * stretching the screen's pixels. The dialog notes exported tracks whose data
+ * is incomplete on screen.
  */
 import React, { useState } from 'react'
 import { useBrowser } from '../../store/BrowserContext'
 import { useTracks } from '../../store/TrackContext'
 import { useTheme } from '../../store/ThemeContext'
+import { usePeaks } from '../../store/PeakContext'
 import { getLiveTrackData, computeAutoScale, needsSplitLayout, useLiveDataVersion } from '../../hooks/useTrackData'
 import { binHigh, binLow, windowingOf, formatValue, coverageStyle, coverageAxis } from '../../utils/coverageStats'
 import { rulerTicks } from '../../utils/ruler'
 import { axisRatio, LOG_LABEL, drawCenterLine, drawAxisLabels, pendingRuns, PENDING_ALPHA } from '../tracks/CoverageTrack'
+import { mergedPeaks, placePeakLabels, LABEL_COLOR, LABEL_FONT, LABEL_Y } from './PeakRankOverlay'
 import NumberInput from './NumberInput'
 
 const FORMATS = ['svg', 'png', 'jpg']
@@ -22,6 +27,7 @@ export default function ExportImage({ onClose }) {
   const { region } = useBrowser()
   const { tracks } = useTracks()
   const { theme } = useTheme()
+  const { peaksByTrack } = usePeaks()
   const chrom = region?.chrom
   const visibleTracks = tracks.filter(t =>
     t.visible && (!t.targetChromosomes || !chrom || t.targetChromosomes.includes(chrom))
@@ -59,19 +65,25 @@ export default function ExportImage({ onClose }) {
       // Overlay groups occupy a single row (host height), not the sum of members.
       const units = buildExportUnits(selectedTracks, tracks, region.chrom)
       const totalH = rulerH + units.reduce((sum, u) => sum + unitHeight(u), 0)
+      const peaks = mergedPeaks(peaksByTrack)
+      const svg = buildSVG(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, tracks, peaks)
 
       if (format === 'svg') {
-        const svg = buildSVG(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, tracks)
         download(svg, 'genomics-export.svg', 'image/svg+xml')
       } else {
-        const canvas = buildCanvas(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, exportWidth, includeRuler, includeLabels, tracks)
         const mime = format === 'png' ? 'image/png' : 'image/jpeg'
-        canvas.toBlob(blob => {
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url; a.download = `genomics-export.${format}`; a.click()
-          URL.revokeObjectURL(url)
-        }, mime, 0.95)
+        let blob = null
+        try {
+          blob = await canvasBlob(await rasterizeSVG(svg, exportWidth, totalH, theme), mime)
+        } catch {
+          // A browser that cannot draw the SVG (or calls the result tainted):
+          // composite the screen's canvases instead, stretched to the width.
+          blob = await canvasBlob(buildCanvas(region, selectedTracks, theme, trackW, labelW, rulerH, totalH, exportWidth, includeRuler, includeLabels, tracks), mime)
+        }
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = `genomics-export.${format}`; a.click()
+        URL.revokeObjectURL(url)
       }
     } finally { setExporting(false) }
   }
@@ -195,14 +207,19 @@ function incompleteDataNotes(tracks, allTracks, chrom) {
           notes.push(`${t.name}: coverage still being computed (${Math.round(100 * (d.coverage_progress || 0))}%) — the shaded part is pending`)
         }
         if (d.truncated) notes.push(`${t.name}: coverage incomplete at this zoom (read limit reached) — the shaded part is not computed`)
-      } else if (d.reads && d.total_exact === false) {
+      } else if (d.reads) {
+        // What the pileup draws: with both strands hidden it draws no read at all.
+        const fwd = t.showFwdStrand !== false, rev = t.showRevStrand !== false
+        const only = fwd && rev ? '' : `, ${fwd ? 'forward' : 'reverse'} strand only`
         const n = d.reads.length
-        const sample = n < (d.total || 0)
-          ? `; the pileup is an even sample of ${n.toLocaleString()} of the ${d.total.toLocaleString()} reads found`
-          : ''
-        notes.push(`${t.name}: read limit reached — the shaded part of the pileup was not scanned${sample}`)
-      } else if (d.reads && d.truncated) {
-        notes.push(`${t.name}: ${d.reads.length.toLocaleString()} of ${(d.total || 0).toLocaleString()} reads shown (downsampled)`)
+        if (d.total_exact === false) {
+          const sample = (fwd || rev) && n < (d.total || 0)
+            ? `; the pileup is an even sample of ${n.toLocaleString()} of the ${d.total.toLocaleString()} reads found${only}`
+            : ''
+          notes.push(`${t.name}: read limit reached — the shaded part of the pileup was not scanned${sample}`)
+        } else if (d.truncated && (fwd || rev)) {
+          notes.push(`${t.name}: ${n.toLocaleString()} of ${(d.total || 0).toLocaleString()} reads ${only ? 'sampled' : 'shown'} (downsampled)${only}`)
+        }
       }
     }
   }
@@ -238,7 +255,9 @@ function overlayRowAxis(unit, region, allTracks) {
 
 // ─── SVG Builder ────────────────────────────────────────────────────────────
 
-function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, allTracks) {
+/** `peaks`: mergedPeaks of the peak tracks, whose rank labels go over the
+ *  coverage and read rows as PeakRankOverlay draws them on screen. */
+function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, includeRuler, includeLabels, allTracks, peaks = []) {
   const w = trackW + labelW
   let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`
   svg += `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${totalH}" viewBox="0 0 ${w} ${totalH}" font-family="Arial, Helvetica, sans-serif">\n`
@@ -292,6 +311,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
         if (mi === 0 && parts.labels) svg += `<g class="track-labels">\n${parts.labels}</g>\n`
       })
       svg += svgRegionHighlights(groupHost, region, trackW, uH)
+      svg += svgPeakRanks(peaks, region, trackW, uH)
     } else {
       const track = unit.track
       const data = getLiveTrackData(track.id)
@@ -315,6 +335,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
         svg += `<g class="track-variants">\n${svgVariants(data, region, track, trackW, uH, theme)}</g>\n`
       }
       svg += svgRegionHighlights(track, region, trackW, uH)
+      if (track.track_type === 'coverage' || track.track_type === 'reads') svg += svgPeakRanks(peaks, region, trackW, uH)
     }
     svg += `</g>\n`
 
@@ -322,6 +343,10 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
     if (includeLabels) {
       svg += `<rect x="0" y="${yOff}" width="${labelW}" height="${uH}" fill="${theme.panelBg}"/>\n`
       svg += `<line x1="${labelW}" y1="${yOff}" x2="${labelW}" y2="${yOff + uH}" stroke="${theme.border}"/>\n`
+      // Names are cut at the label column (on screen they end in an ellipsis),
+      // never drawn over the track's own labels.
+      svg += `<clipPath id="labelClip-${i}"><rect x="0" y="${yOff}" width="${labelW - 2}" height="${uH}"/></clipPath>\n`
+      svg += `<g clip-path="url(#labelClip-${i})">\n`
       if (unit.type === 'overlay') {
         // Legend: one colored line per exported member (clipped to the row height).
         unit.layers.forEach((m, mi) => {
@@ -333,6 +358,7 @@ function buildSVG(region, tracks, theme, trackW, labelW, rulerH, totalH, include
       } else {
         svg += `<text x="10" y="${yOff + uH / 2 + 4}" fill="${theme.trackName}" font-size="11" font-weight="600">${esc(unit.track.name)}</text>\n`
       }
+      svg += `</g>\n`
     }
     svg += `<line x1="0" y1="${yOff + uH}" x2="${w}" y2="${yOff + uH}" stroke="${theme.border}"/>\n`
     yOff += uH
@@ -358,6 +384,58 @@ function svgRegionHighlights(track, region, w, h) {
     s += `<rect x="${x0}" y="0" width="${ow}" height="${h}" fill="${o.highlightColor}" opacity="${o.highlightOpacity || 0.35}"/>\n`
   }
   return s
+}
+
+let measureCtx = null
+/** Width of `text` in the rank labels' font, as the screen measures it. */
+function rankLabelWidth(text) {
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d')
+  measureCtx.font = LABEL_FONT
+  return measureCtx.measureText(text).width
+}
+
+/** The peak rank labels PeakRankOverlay draws over a coverage or read row
+ *  `w` x `h`: the same labels in the same places (placePeakLabels). */
+function svgPeakRanks(peaks, region, w, h) {
+  const labels = placePeakLabels(peaks || [], region, w, rankLabelWidth)
+  if (!labels.length) return ''
+  let s = '<g class="peak-ranks">\n'
+  for (const { label, cx, x0, x1 } of labels) {
+    s += `<rect x="${x0}" y="${LABEL_Y - 7}" width="${x1 - x0}" height="14" rx="3" fill="#000000" fill-opacity="0.6"/>\n`
+    s += `<text x="${cx}" y="${LABEL_Y}" text-anchor="middle" dominant-baseline="central" fill="${LABEL_COLOR}" font-size="10" font-weight="bold">${esc(label)}</text>\n`
+    s += `<line x1="${cx}" y1="${LABEL_Y + 7}" x2="${cx}" y2="${Math.min(LABEL_Y + 13, h)}" stroke="${LABEL_COLOR}" stroke-opacity="0.55" stroke-width="1"/>\n`
+  }
+  return s + '</g>\n'
+}
+
+/** A canvas `w` x `h` with the SVG document `svg` drawn on it: the PNG/JPG
+ *  export, drawn at its own size rather than stretched from the screen. */
+function rasterizeSVG(svg, w, h, theme) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        const ctx = canvas.getContext('2d')
+        ctx.fillStyle = theme.canvasBg; ctx.fillRect(0, 0, w, h)
+        ctx.drawImage(img, 0, 0, w, h)
+        resolve(canvas)
+      } catch (e) { reject(e) } finally { URL.revokeObjectURL(url) }
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('the SVG could not be drawn')) }
+    img.src = url
+  })
+}
+
+/** The canvas as a `mime` file (rejects when the canvas is tainted). */
+function canvasBlob(canvas, mime) {
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('empty image'))), mime, 0.95)
+    } catch (e) { reject(e) }
+  })
 }
 
 /** PNG data URL of a track's live on-screen canvas (looked up by id), used to
@@ -447,7 +525,7 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
   const barFixedPx = track.barWidth || 2
   const pxPerNt = w / regionLen
 
-  const { bars: showBars, fill: fillArea, outline: showOutline, smooth: outSmooth } = coverageStyle(track)
+  const { bars: showBars, fill: fillArea, outline: showOutline, smoothBp: outSmooth } = coverageStyle(track)
   const outColor = track.outlineColor || null
   // The screen's axis. Its curve is smoothed over ALL fetched bins (as the
   // screen does); the visible points are picked out below.
@@ -472,10 +550,11 @@ function svgCoverageParts(data, region, track, w, h, theme, allTracks, forceHasN
     return null
   }
 
+  // Bar widths as CoverageTrack/ReadTrack draw them: at least 1 px.
   function autoW(binW) {
     if (!barAuto) return Math.min(barFixedPx, binW)
-    if (pxPerNt >= 1) return Math.max(0.5, Math.min(pxPerNt, binW))
-    return Math.max(0.5, binW)
+    if (pxPerNt >= 1) return Math.max(1, Math.min(pxPerNt, binW))
+    return Math.max(1, binW)
   }
 
   if (hasNeg) {
@@ -649,6 +728,8 @@ function svgVariants(data, region, track, w, h, theme) {
 
 // ─── Canvas (raster) builder ────────────────────────────────────────────────
 
+/** The PNG/JPG export where the SVG cannot be drawn (rasterizeSVG failed):
+ *  the screen's canvases composited, stretched to the export size. */
 function buildCanvas(region, tracks, theme, trackW, labelW, rulerH, totalH, fullW, includeRuler, includeLabels, allTracks = tracks) {
   const canvas = document.createElement('canvas')
   canvas.width = fullW; canvas.height = totalH

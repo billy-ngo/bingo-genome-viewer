@@ -47,21 +47,27 @@ function midName(name, max = 32) {
  * name finds the accession its BAMs and BigWigs were aligned to, but between
  * unrelated assemblies the same match can be a coincidence, so the pairing is
  * never made silently. `text` names the first pair (and how many more there
- * are), `title` lists them in full.
+ * are, over all the tracks), `title` lists them in full.
  */
 export function lengthPairingNotice(infos) {
   const pairs = new Map()
-  let total = 0
+  const unlisted = new Map()   // per listing: how many pairs are past it
   for (const info of infos || []) {
     const c = info?.compatibility
-    for (const a of c?.aliases || []) pairs.set(`${a.genome}\u0000${a.track}`, a)
-    total = Math.max(total, c?.aliases_total || 0)   // set when not all are listed
+    const listed = c?.aliases || []
+    for (const a of listed) pairs.set(`${a.genome}\u0000${a.track}`, a)
+    // A response lists the first pairs only (aliases_total counts them all),
+    // and pairs past a listing can't be told apart across tracks: tracks
+    // listing the same pairs out of the same total are taken to share the
+    // rest too (one assembly), other tracks to share none of it.
+    const rest = (c?.aliases_total || 0) - listed.length
+    if (rest > 0) unlisted.set(`${c.aliases_total}\u0001${listed.map(a => `${a.genome}\u0000${a.track}`).join('\u0001')}`, rest)
   }
   if (!pairs.size) return null
   const list = [...pairs.values()]
   const fmt = (a, short) => `${short ? shortName(a.genome) : a.genome} \u2194 ${short ? shortName(a.track) : a.track}` +
     ` (${(a.length || 0).toLocaleString()} bp)`
-  const more = Math.max(list.length, total) - 1
+  const more = list.length + [...unlisted.values()].reduce((n, k) => n + k, 0) - 1
   const tail = more > 0 ? ` and ${more.toLocaleString()} more` : ''
   return {
     text: `Matched by length: ${fmt(list[0], true)}${tail}`,
@@ -72,28 +78,28 @@ export function lengthPairingNotice(infos) {
 }
 
 /**
- * Give the loaded tracks the pairing an add-chromosomes response computed
- * for the merged genome (`res.data.tracks`: per track id, its
- * target_chromosomes and compatibility), so each one shows on the added
- * chromosomes it has data for.
+ * The data tracks a merge's pairings are to be compared with (pairingChanges):
+ * `before`, those listed when it started as they were then, plus the tracks
+ * in `now` committed since, as they are (their load answered meanwhile).
  */
-export function applyTrackPairings(pairings, updateTrack) {
-  for (const [id, p] of Object.entries(pairings || {})) {
-    updateTrack(id, { targetChromosomes: p.target_chromosomes || null, compatibility: p.compatibility })
-  }
+export function mergeBaseline(before, now) {
+  const ids = new Set(before.map(t => t.id))
+  return [...before, ...now.filter(t => t.track_type !== 'genome_annotations' && !ids.has(t.id))]
 }
 
 /**
  * What merging chromosomes changed for the tracks `before` (as they were
- * before the merge), given the latest add-chromosomes `pairings` and the
- * genome's chromosome names before the merge (`oldChroms`, a Set):
+ * before the merge; mergeBaseline), given the latest add-chromosomes
+ * `pairings` and the genome's chromosome names before the merge
+ * (`oldChroms`, a Set):
  *  - lost: tracks shown on some chromosome before and on none now (with their
  *    new compatibility), for lostPairingWarning: a BAM or BigWig whose only
  *    pairing was by a length the merge made ambiguous;
  *  - moved: tracks taken off chromosomes they were shown on but shown on
  *    others (`{ name, from, to }`), for movedTracksNotice: their data is served
  *    there now, e.g. by name on an added accession instead of by length on a
- *    GenBank LOCUS name;
+ *    GenBank LOCUS name; and tracks an earlier merge left on no chromosome
+ *    that pair with one again (`from` empty);
  *  - paired: per track, the length-only pairings new to added chromosomes, in
  *    the shape lengthPairingNotice takes.
  * Judged on the target chromosomes rather than the compatibility status: a
@@ -113,7 +119,7 @@ export function pairingChanges(before, pairings, oldChroms) {
       const was = t.targetChromosomes.filter(c => oldChroms.has(c))
       const from = was.filter(c => !now.has(c))
       if (was.length && !next.length) lost.push({ ...t, compatibility: p.compatibility })
-      else if (from.length) moved.push({ name: t.name, from, to: next })
+      else if (from.length || (!was.length && next.length)) moved.push({ name: t.name, from, to: next })
     }
     const had = new Set((t.compatibility?.aliases || []).map(a => `${a.genome}\u0000${a.track}`))
     const listed = p.compatibility?.aliases || []
@@ -139,19 +145,22 @@ function chromList(names, max = 2, full = false) {
 }
 
 /**
- * A notice naming the tracks a merge moved to other chromosomes
- * (pairingChanges().moved): `{ text, title }`, or null when there are none.
+ * A notice naming the tracks a merge moved to other chromosomes, or showed
+ * again after an earlier merge left them on none (pairingChanges().moved):
+ * `{ text, title }`, or null when there are none.
  */
 export function movedTracksNotice(moved) {
   if (!moved.length) return null
   const m = moved[0]
   return {
-    text: moved.length === 1
-      ? `${midName(m.name)} now shows on ${chromList(m.to)} instead of ${chromList(m.from)}`
-      : `${moved.length} tracks now show on other chromosomes: ` +
-        `${moved.slice(0, 3).map(x => midName(x.name, 24)).join(', ')}${moved.length > 3 ? ', …' : ''}`,
+    text: moved.length > 1
+      ? `${moved.length} tracks now show on other chromosomes: ` +
+        `${moved.slice(0, 3).map(x => midName(x.name, 24)).join(', ')}${moved.length > 3 ? ', …' : ''}`
+      : m.from.length
+        ? `${midName(m.name)} now shows on ${chromList(m.to)} instead of ${chromList(m.from)}`
+        : `${midName(m.name)} shows again, on ${chromList(m.to)}`,
     title: ['Adding chromosomes moved these tracks to the chromosomes their data pairs with now:',
-      ...moved.slice(0, 10).map(x => `${x.name}: ${chromList(x.from, 5, true)} → ${chromList(x.to, 5, true)}`),
+      ...moved.slice(0, 10).map(x => `${x.name}: ${x.from.length ? chromList(x.from, 5, true) : 'no chromosome'} → ${chromList(x.to, 5, true)}`),
       ...(moved.length > 10 ? [`and ${(moved.length - 10).toLocaleString()} more`] : [])].join('\n'),
   }
 }
@@ -282,7 +291,10 @@ function classifyFiles(files) {
 export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
   const { theme } = useTheme()
   const { genome, setGenome, navigateTo } = useBrowser()
-  const { tracks, addTrack, uploadTrack, commitTrack, discardTrack, updateTrack, addGenomeAnnotationTrack, error: trackError, setError } = useTracks()
+  const {
+    uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, applyMerge, withPairing, pairingVersion,
+    getTracks, error: trackError, setError,
+  } = useTracks()
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState(null)
   const [status, setStatusLine] = useState(null)
@@ -414,6 +426,24 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
     setErr(null)
   }, [mergeSignal])
 
+  // A merge answered (here or from a page drop) while tracks wait in the
+  // compatibility dialog: judge them again against the merged genome. Those
+  // that match it now are added, as a compatible load is; the others stay,
+  // with the reason as it stands now.
+  useEffect(() => {
+    if (!pairingVersion || !trackMismatch) return
+    const now = trackMismatch.tracks.map(withPairing)
+    if (now.every((t, i) => t === trackMismatch.tracks[i])) return
+    const ok = now.filter(t => !isTrackMismatch(t))
+    for (const t of ok) commitTrack(t)
+    const rest = now.filter(isTrackMismatch)
+    setTrackMismatch(rest.length ? { tracks: rest } : null)
+    if (ok.length) {
+      showNotice(lengthPairingNotice(ok))
+      setStatus(`Added ${ok.length} track${ok.length > 1 ? 's' : ''}: ${ok.length > 1 ? 'they match' : 'it matches'} the genome now.`, 4000)
+    }
+  }, [pairingVersion])
+
   async function addChromosomeFiles(files) {
     setLoading(true); setErr(null); setProgress(null)
     // A pairing notice still up from a track load, here or in the drop
@@ -422,7 +452,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
     onMergeStart?.()
     const errors = []
     // The loaded tracks and chromosomes before the merge, to tell what it changed.
-    const before = tracks.filter(t => t.track_type !== 'genome_annotations')
+    let before = mergeBaseline([], getTracks())
     const oldChroms = new Set((genome?.chromosomes || []).map(c => c.name))
     let pairings = null
     for (const file of files) {
@@ -433,22 +463,13 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
         })
         const info = res.data
         if (info.name) info.name = cleanName(info.name)
+        before = mergeBaseline(before, getTracks())
         setGenome(info)
-        // Each track's targets and compatibility against the merged genome:
-        // tracks appear on the added chromosomes they have data for.
-        if (info.tracks) {
-          applyTrackPairings(info.tracks, updateTrack)
-          pairings = info.tracks
-        }
-        // Ensure annotation track exists when the merged genome has annotations
-        if (info.is_annotated) {
-          addGenomeAnnotationTrack({
-            id: 'genome_annotations', name: `${info.name} (annotations)`,
-            track_type: 'genome_annotations', file_format: 'genbank',
-            targetChromosomes: info.annotated_chromosomes || null,
-            featureTypes: info.feature_types || [],
-          })
-        }
+        // Each track's targets and compatibility against the merged genome
+        // (tracks appear on the added chromosomes they have data for), the
+        // annotation track if the merged genome has annotations, and fresh data.
+        applyMerge(info)
+        if (info.tracks) pairings = info.tracks
       } catch (e) { errors.push(`${file.name}: ${e.response?.data?.detail || e.message}`) }
     }
     setLoading(false)
@@ -473,10 +494,11 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
       const { file, indexFile } = entries[idx]
       setStatus(`Loading track ${idx + 1}/${entries.length}: ${file.name}...`)
       try {
-        const info = await uploadTrack(file, undefined, indexFile, (p) => {
+        // With the pairing of a merge that answered first, if any.
+        const info = withPairing(await uploadTrack(file, undefined, indexFile, (p) => {
           setProgress({ ...p, label: file.name })
           if (p.percent >= 100) setStatus(`Processing: ${file.name}...`)
-        })
+        }))
         if (isTrackMismatch(info)) {
           incompatible.push(info)
         } else {
@@ -495,7 +517,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
       if (hints.length) setStatus(msg, 2000, [hints.join(' '), 8000])
       else setStatus(msg, 3000)
     } else setStatus(null)          // the rest waits in the compatibility dialog
-    if (incompatible.length > 0) setTrackMismatch({ tracks: incompatible })
+    if (incompatible.length > 0) setTrackMismatch(prev => ({ tracks: [...(prev?.tracks || []), ...incompatible] }))
   }
 
   async function processFiles(fileList) {
@@ -621,7 +643,7 @@ export default function FileLoader({ mergeSignal = 0, onMergeStart }) {
       try {
         const name = path.split(/[/\\]/).pop() || path
         const res = await tracksApi.loadPath(path, name, indexPath && indexPath.trim())
-        const info = res.data
+        const info = withPairing(res.data)     // with a merge's pairing that answered first
         if (info.name) info.name = cleanName(info.name)
         if (isTrackMismatch(info)) {
           // The same check as uploads: ask before adding a track that may

@@ -63,6 +63,11 @@ function enqueue(run, signal) {
   })
 }
 
+/** Forget every cached row (a merge may have changed a track's data). */
+export function clearSignalStats() {
+  cache.clear()
+}
+
 /** The row already known for these coordinates (no request), or undefined. */
 export function cachedSignalStats(track, chrom, start, end) {
   return cache.get(keyOf(track, chrom, start, end))

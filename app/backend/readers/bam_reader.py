@@ -5,8 +5,8 @@ CRAM and SAM are not supported by bamnostic; convert to an indexed BAM.
 
 Coverage comes from a BamCoverageIndex (exact per-base depth, built once in
 the background); individual reads for the zoomed-in view come from a raw
-scan of the .bai chunks (readers/bam_records.py). bamnostic reads the header
-and serves the live coverage fallback.
+scan of the .bai chunks (readers/bam_records.py), which also serves the live
+coverage fallback. bamnostic reads the header.
 """
 
 import zlib
@@ -17,7 +17,7 @@ from typing import Optional
 import bamnostic as bam
 
 from readers.bam_coverage import BamCoverageIndex, SKIP_FLAGS
-from readers.bam_records import BamRecords, decode_record
+from readers.bam_records import BamRecords, cigar_words, decode_record
 
 MAX_READS_RETURNED = 5000
 # Bounds on the records (of any kind) one read-view request examines, so it
@@ -313,19 +313,18 @@ class BamReader:
         max and min depth of aligned bases per bin (the index's counting
         rules), bounded by MAX_COVERAGE_READS.
 
-        Reads are taken in file order from the BAI linear-index offset for
-        the range start, and how far a read reaches comes from its CIGAR.
-        (bamnostic's fetch() looks that offset up through the bins, which
-        finds nothing when the 16 kb window at the range start has no reads,
-        and judges overlap by the sequence length, which drops reads that
-        start left of the range and span more reference than their sequence:
-        long reads with large deletions or introns.) Aligned blocks become
-        depth-change events in a heap. No read starts left of the previous
-        one, so all depth left of the newest start is final and the sweep
-        folds it into the bins; memory follows the depth, not the length of
-        the range. Records out of coordinate order raise (a stale index), a
-        contig without index intervals has zero depth, and bins beyond the
-        read cap are flagged ``pending`` rather than reported as zero.
+        The alignments overlapping the range come from the read view's raw
+        scan of the .bai chunks (readers/bam_records.py), in file order, and
+        how far each reaches comes from its CIGAR (or the CG tag that holds
+        it). bamnostic's iteration decoded every record in full at about a
+        twentieth of the speed, so the read cap was reached after a far
+        shorter stretch of a deep BAM. Aligned blocks become depth-change
+        events in a heap. No read starts left of the previous one, so all
+        depth left of the newest start is final and the sweep folds it into
+        the bins; memory follows the depth, not the length of the range.
+        Records out of coordinate order raise (a stale index), a contig
+        without reads has zero depth, and bins beyond the read cap are
+        flagged ``pending`` rather than reported as zero.
         Returns (bins, truncated)."""
         L = self._contig_length(chrom)
         region_len = end - start
@@ -362,55 +361,43 @@ class BamReader:
                     cur = t
 
         if hi > lo:
-            try:
-                tid = self._aln.ref2tid[chrom]
-                intervals = self._aln._index.get_ref(tid).intervals
-            except KeyError:
+            tid = next((i for i, c in enumerate(self.chromosomes) if c["name"] == chrom), None)
+            if tid is None:
                 return [], False   # contig absent from this BAM
-            except IndexError:
-                # bamnostic raises this for a contig without linear-index
-                # intervals, i.e. without reads: zero depth, not a corrupt file.
-                intervals = ()
-            except Exception as e:
-                raise RuntimeError(_fetch_error_msg(self.file_path)) from e
-            # Per 16 kb window, the linear index holds the offset of the first
-            # read reaching into it (an earlier one for a window without reads;
-            # 0 before the contig's first read in Picard indexes), so every
-            # read overlapping [lo, hi) is at or after this offset.
-            voffset = next((v for v in intervals[lo >> 14:] if v), None)
             total = 0
+
+            def visit(data, off, rs):
+                """Add one overlapping alignment's aligned blocks; False once
+                the read cap is reached."""
+                nonlocal total, truncated, complete_to
+                if not data[off + 16] | data[off + 17] << 8:
+                    return True                     # no CIGAR: nothing aligned
+                x = rs if rs > lo else lo
+                if x < cur:
+                    raise ValueError("alignments are not in coordinate order")
+                fold(x)
+                p = rs
+                for c in cigar_words(data, off):
+                    op, ln = c & 0xF, c >> 4
+                    if op == 0 or op == 7 or op == 8:      # M = X: aligned bases
+                        a, b = (p if p > lo else lo), (p + ln if p + ln < hi else hi)
+                        if b > a:
+                            heappush(events, a << 1 | 1)
+                            heappush(events, b << 1)
+                        p += ln
+                    elif op == 2 or op == 3:                # D N: skip reference
+                        p += ln
+                total += 1
+                if total >= MAX_COVERAGE_READS:
+                    truncated = True
+                    complete_to = x
+                    return False
+                return True
+
             try:
-                if voffset is not None:
-                    self._aln.seek(voffset)
-                    for read in self._aln:
-                        rs = read.reference_start
-                        if read.reference_id != tid or rs >= hi:
-                            break
-                        if read.flag & SKIP_FLAGS or not read.cigartuples:
-                            continue
-                        x = rs if rs > lo else lo
-                        if x < cur:
-                            raise ValueError("alignments are not in coordinate order")
-                        fold(x)
-                        p = rs
-                        for op, ln in read.cigartuples:
-                            if op == 0 or op == 7 or op == 8:      # M = X: aligned bases
-                                a, b = (p if p > lo else lo), (p + ln if p + ln < hi else hi)
-                                if b > a:
-                                    heappush(events, a << 1 | 1)
-                                    heappush(events, b << 1)
-                                p += ln
-                            elif op == 2 or op == 3:                # D N: skip reference
-                                p += ln
-                        if p <= lo:
-                            continue                # ends before the range
-                        total += 1
-                        if total >= MAX_COVERAGE_READS:
-                            truncated = True
-                            complete_to = x
-                            break
+                self._records.scan(tid, lo, hi, skip_flags=SKIP_FLAGS, visit=visit)
             except Exception as e:
-                # Corrupt index / BGZF decode failure mid-fetch: a clear message
+                # Corrupt index / BGZF decode failure mid-scan: a clear message
                 # (HTTP 503) rather than a track that looks valid but is wrong.
                 raise RuntimeError(_fetch_error_msg(self.file_path)) from e
             fold(complete_to)

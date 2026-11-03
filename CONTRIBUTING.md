@@ -41,9 +41,12 @@ interpreter you are using, including any active virtual environment.
 Use `python3 -m pip` on systems where only `python3` is on `PATH`.
 
 The backend serves the API at `/api/...` and, when a built frontend is
-present at `app/frontend/dist/` or `bingoviewer/frontend_dist/`, also
-serves the static bundle at `/`. With `--reload`, edits to backend
-modules trigger an automatic restart.
+present beside it, also serves the static bundle at `/`: `bingoviewer/frontend_dist/`
+for `bingoviewer/server`, `app/frontend/dist/` for `app/backend`. The latter
+is git-ignored and easily left over from an old `npm run build`, so it is
+not served when it is older than the frontend sources (a line on stderr
+says so); use the Vite dev server below instead. With `--reload`, edits to
+backend modules trigger an automatic restart.
 
 ## Frontend development
 
@@ -129,8 +132,9 @@ fresh build into `bingoviewer/frontend_dist/`.
 2. Create a feature branch from `master`.
 3. Implement the change. If it touches the frontend, rebuild the bundle
    into `bingoviewer/frontend_dist/`.
-4. Run the test suite locally (currently exercised through the example
-   files under `Test data/` and through `bingo` in editable mode).
+4. Run the backend unit tests (`python -B -m unittest discover -s tests -v`
+   from the repository root), and check frontend changes against the example
+   files under `Test data/` and through `bingo` in editable mode.
 5. Open a pull request. Include a short rationale, a description of the
    user-visible effect, and any test files or steps a reviewer can use
    to reproduce the change.

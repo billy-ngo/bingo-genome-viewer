@@ -3,8 +3,8 @@ BiNgo Genome Viewer — FastAPI application entry point.
 
 Mounts the REST API routers (/api/genome, /api/tracks, /api/tracks/{id}/...)
 and serves the bundled Vite frontend. Works in both pip-installed mode
-(frontend bundled inside the package) and development mode
-(``frontend/dist/``).
+(frontend bundled inside the package) and from the source tree
+(``frontend/dist/``, unless it is older than the frontend sources).
 
 Auto-shutdown
 -------------
@@ -43,6 +43,7 @@ The watchdog exits when *all* of the following hold:
 """
 
 import os
+import sys
 import time
 import threading
 from pathlib import Path
@@ -72,8 +73,36 @@ app.include_router(data_router)
 
 # Locate the built frontend — check bundled package location first, then dev layout
 _pkg_dist = Path(__file__).parent.parent / "frontend_dist"      # pip-installed
-_dev_dist = Path(__file__).parent.parent / "frontend" / "dist"  # dev / launcher mode
-frontend_dist = _pkg_dist if _pkg_dist.exists() else (_dev_dist if _dev_dist.exists() else None)
+_dev_dist = Path(__file__).parent.parent / "frontend" / "dist"  # Docker image, or a local `npm run build`
+
+
+def _stale_bundle(dist: Path) -> bool:
+    """True when a build in frontend/dist is older than the frontend sources
+    beside it: in a dev checkout that folder is git-ignored and easily left
+    from an old `npm run build`, and serving it would show an old UI on the
+    backend's port. (The Docker image has no sources there, only the bundle
+    built from them.)"""
+    root = dist.parent
+    if not (root / "src").is_dir():
+        return False
+    try:
+        built = (dist / "index.html").stat().st_mtime
+        sources = [p for p in (root / "src").rglob("*") if p.is_file()]
+        sources += [p for p in (root / "index.html", root / "vite.config.js", root / "package.json") if p.is_file()]
+        return max((p.stat().st_mtime for p in sources), default=0) > built
+    except OSError:
+        return False
+
+
+if _pkg_dist.exists():
+    frontend_dist = _pkg_dist
+elif _dev_dist.exists() and not _stale_bundle(_dev_dist):
+    frontend_dist = _dev_dist
+else:
+    frontend_dist = None
+    if _dev_dist.exists():
+        print(f"BiNgo: not serving {_dev_dist}: it is older than the frontend sources. "
+              "Use the Vite dev server (npm run dev, port 5173) or rebuild it.", file=sys.stderr)
 
 if frontend_dist:
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")

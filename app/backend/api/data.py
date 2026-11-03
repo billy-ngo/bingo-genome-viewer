@@ -53,7 +53,8 @@ def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Qu
         with app_state.lock_if_current(track_id, gen) as current:
             if not current:
                 raise _superseded()
-            res = reader.get_coverage(track_chrom, start, end, bins=bins)
+            # None: the track has no data on this chromosome (resolve_track_chrom).
+            res = [] if track_chrom is None else reader.get_coverage(track_chrom, start, end, bins=bins)
     except HTTPException:
         raise
     except Exception as e:
@@ -96,7 +97,7 @@ def get_coverage(track_id: str, chrom: str, start: int, end: int, bins: int = Qu
     # Whole-chromosome sign: lets the client choose the split (forward up /
     # reverse down) layout once per chromosome rather than per fetched window.
     has_negative = getattr(reader, "has_negative", None)
-    if callable(has_negative):
+    if callable(has_negative) and track_chrom is not None:
         hn = has_negative(track_chrom)
         if hn is not None:
             out["has_negative"] = bool(hn)
@@ -134,7 +135,7 @@ def get_stats(track_id: str, chrom: str, start: int, end: int,
         with app_state.lock_if_current(track_id, gen, gen_key=gen_key) as current:
             if not current:
                 raise _superseded()
-            res = reader.get_coverage(track_chrom, start, end, bins=1)
+            res = [] if track_chrom is None else reader.get_coverage(track_chrom, start, end, bins=1)
     except HTTPException:
         raise
     except Exception as e:
@@ -190,8 +191,8 @@ def get_reads(track_id: str, chrom: str, start: int, end: int):
         with app_state.lock_if_current(track_id, gen) as current:
             if not current:
                 raise _superseded()
-            res = reader.get_reads(track_chrom, start, end,
-                                   is_current=lambda: app_state.is_current(track_id, gen))
+            res = [] if track_chrom is None else reader.get_reads(
+                track_chrom, start, end, is_current=lambda: app_state.is_current(track_id, gen))
             # A newer request may have cut the scan short: its reads and total
             # would cover only part of the window, so never answer with them.
             if (isinstance(res, dict) and res.get("cancelled")) or not app_state.is_current(track_id, gen):
@@ -232,8 +233,9 @@ def get_variants(track_id: str, chrom: str, start: int, end: int):
         raise HTTPException(status_code=400, detail="Track does not support variants")
 
     try:
+        track_chrom = app_state.resolve_track_chrom(track_id, chrom)
         with app_state.track_lock(track_id):
-            variants = reader.get_variants(app_state.resolve_track_chrom(track_id, chrom), start, end)
+            variants = [] if track_chrom is None else reader.get_variants(track_chrom, start, end)
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 

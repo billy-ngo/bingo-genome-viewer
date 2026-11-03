@@ -2,11 +2,14 @@
  * TrackContext.jsx — Track list state management.
  *
  * Provides: tracks, addTrack, removeTrack, updateTrack, reorderTracks, setTracks.
- * Handles file upload to backend and local display settings per track.
+ * Handles file upload to backend and local display settings per track, and
+ * gives tracks the pairing a merge (Add as Chromosome) computed for them,
+ * including tracks not in the list yet (applyMerge, withPairing).
  */
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react'
 import { tracksApi } from '../api/client'
-import { clearTrackData } from '../hooks/useTrackData'
+import { clearTrackData, invalidateTrackData } from '../hooks/useTrackData'
+import { clearSignalStats } from '../utils/signalStats'
 
 const TrackContext = createContext(null)
 
@@ -42,6 +45,21 @@ export function TrackProvider({ children }) {
   const [error, setError] = useState(null)
   const tracksRef = useRef(tracks)
   tracksRef.current = tracks
+  // The latest pairing a merge's response gave each track id: its
+  // target_chromosomes and compatibility against the merged genome. A track
+  // whose load answered before that merge but is not in the list yet (its
+  // response still on its way, or it waits in a compatibility dialog) gets
+  // it when committed (commitTrack, withPairing). `pairingVersion` counts the
+  // merge responses, so such a dialog can judge its tracks again.
+  const pairingsRef = useRef(new Map())
+  const [pairingVersion, setPairingVersion] = useState(0)
+
+  /** `info` (a track load response, or a track waiting to be committed) with
+   *  the pairing a later merge gave it, if any. */
+  const withPairing = useCallback((info) => {
+    const p = info && pairingsRef.current.get(info.id)
+    return p ? { ...info, target_chromosomes: p.target_chromosomes || null, compatibility: p.compatibility } : info
+  }, [])
 
   /** Upload a track file to the backend without adding to UI state.
    *  For BAM files, pass the matching .bai as indexFile.
@@ -57,8 +75,11 @@ export function TrackProvider({ children }) {
     return info
   }, [])
 
-  /** Add a previously uploaded track to the UI state. */
-  const commitTrack = useCallback((info) => {
+  /** Add a previously uploaded track to the UI state, with the pairing of
+   *  any merge that answered after its load. */
+  const commitTrack = useCallback((loaded) => {
+    const info = withPairing(loaded)
+    pairingsRef.current.delete(info.id)
     setTracks(prev => {
       const color = TRACK_COLORS[prev.length % TRACK_COLORS.length]
       const isAnnotation = info.track_type === 'annotations' || info.track_type === 'genome_annotations'
@@ -79,7 +100,7 @@ export function TrackProvider({ children }) {
         barWidth: 2,
         showOutline: false,
         outlineColor: null,
-        outlineSmooth: 0,
+        smoothBp: 0,        // peak-outline smoothing radius in bp each side (0 = none)
         showBars: true,
         fillArea: false,    // fill the area under the smoothed peak outline instead of drawing bars
 
@@ -101,10 +122,11 @@ export function TrackProvider({ children }) {
         } : {}),
       }]
     })
-  }, [])
+  }, [withPairing])
 
   /** Discard a track that was uploaded to the backend but not committed. */
   const discardTrack = useCallback(async (id) => {
+    pairingsRef.current.delete(id)
     try { await tracksApi.remove(id) } catch (e) { /* ignore */ }
   }, [])
 
@@ -117,16 +139,16 @@ export function TrackProvider({ children }) {
 
   const removeTrack = useCallback(async (id) => {
     const track = tracksRef.current.find(t => t.id === id)
-    // Genome annotation tracks are hidden (not deleted) so they can be
-    // restored when the user navigates back to an annotated chromosome.
-    // Mark `userRemoved` so a *deliberate* removal is NOT auto-revived on
-    // the next chromosome change (see restoreAnnotationTracks). Without
-    // this flag the removed annotation track reappeared on navigation and
-    // ghosted back into the export.
+    // The genome annotation track is served by the genome itself: removing it
+    // hides it (Track Settings → Visible shows it again). Like any track's
+    // Visible setting, that sticks until the user changes it or loads another
+    // genome (addGenomeAnnotationTrack); chromosome switches, merges and
+    // session restores leave it as it is.
     if (track && track.track_type === 'genome_annotations') {
-      setTracks(prev => prev.map(t => t.id === id ? { ...t, visible: false, userRemoved: true } : t))
+      setTracks(prev => prev.map(t => t.id === id ? { ...t, visible: false } : t))
       return
     }
+    pairingsRef.current.delete(id)
     // Optimistically drop the track from UI state — the backend DELETE is
     // best-effort cleanup, not a precondition for the row disappearing.
     // Previously the filter ran only AFTER `await tracksApi.remove(id)`
@@ -159,14 +181,6 @@ export function TrackProvider({ children }) {
         setError(e.response?.data?.detail || e.message)
       }
     }
-  }, [])
-
-  const restoreAnnotationTracks = useCallback(() => {
-    setTracks(prev => prev.map(t =>
-      t.track_type === 'genome_annotations' && !t.visible && !t.userRemoved
-        ? { ...t, visible: true }
-        : t
-    ))
   }, [])
 
   const updateTrack = useCallback((id, updates) => {
@@ -313,17 +327,19 @@ export function TrackProvider({ children }) {
     })
   }, [])
 
-  const addGenomeAnnotationTrack = useCallback((info) => {
+  /** Show the genome's GenBank annotations as the 'genome_annotations'
+   *  track. `revive`: a genome was loaded, so an existing (maybe hidden)
+   *  track is shown again. A merge passes false: the user's Visible choice
+   *  stands, and only the name, targets and feature types change. */
+  const addGenomeAnnotationTrack = useCallback((info, { revive = true } = {}) => {
     setTracks(prev => {
       const idx = prev.findIndex(t => t.id === info.id)
       if (idx !== -1) {
-        // Already exists (maybe hidden) — update name, target chromosomes, feature types, and re-show
         const updated = [...prev]
         const merged = {
           ...updated[idx],
           name: cleanName(info.name) || info.name,
-          visible: true,
-          userRemoved: false,  // re-loading the genome un-does a prior removal
+          ...(revive ? { visible: true } : {}),
           ...(info.targetChromosomes ? { targetChromosomes: info.targetChromosomes } : {}),
         }
         // Merge new feature types with existing (when adding chromosomes from another file)
@@ -338,7 +354,6 @@ export function TrackProvider({ children }) {
         ...info,
         name: cleanName(info.name) || info.name,
         color: '#a5d6a7', height: 80, autoHeight: true, visible: true, useArrows: true,
-        userRemoved: false,
         annotationColors: null,
         targetChromosomes: info.targetChromosomes || null,
         featureTypes: info.featureTypes || [],
@@ -347,13 +362,45 @@ export function TrackProvider({ children }) {
     })
   }, [])
 
+  /** Apply an add-chromosomes response (`info`): each loaded track's
+   *  targets and compatibility against the merged genome (kept for tracks
+   *  not committed yet, see withPairing), the annotation track when the
+   *  merged genome has annotations, and every track fetching its data again:
+   *  a pairing the merge made or cancelled changes what a track has on a
+   *  chromosome, so no response cached before it may be shown again. */
+  const applyMerge = useCallback((info) => {
+    const pairings = info.tracks || {}
+    const ids = Object.keys(pairings)
+    for (const id of ids) pairingsRef.current.set(id, pairings[id])
+    if (ids.length) {
+      setTracks(prev => prev.map(t => pairings[t.id]
+        ? { ...t, targetChromosomes: pairings[t.id].target_chromosomes || null, compatibility: pairings[t.id].compatibility }
+        : t))
+      setPairingVersion(v => v + 1)
+    }
+    if (info.is_annotated) {
+      addGenomeAnnotationTrack({
+        id: 'genome_annotations', name: `${info.name} (annotations)`,
+        track_type: 'genome_annotations', file_format: 'genbank',
+        targetChromosomes: info.annotated_chromosomes || null,
+        featureTypes: info.feature_types || [],
+      }, { revive: false })
+    }
+    invalidateTrackData()
+    clearSignalStats()
+  }, [addGenomeAnnotationTrack])
+
+  /** The track list as last rendered, for handlers that outlive a render. */
+  const getTracks = useCallback(() => tracksRef.current, [])
+
   return (
     <TrackContext.Provider value={{
       tracks, setTracks, addTrack, uploadTrack, commitTrack, discardTrack,
       removeTrack, updateTrack, updateMultipleTracks, reorderTracks,
       createOverlayGroup, addToOverlayGroup, dissolveOverlayGroup,
       removeFromOverlayGroup, reorderOverlayMember,
-      addGenomeAnnotationTrack, restoreAnnotationTracks, error, setError,
+      addGenomeAnnotationTrack, applyMerge, withPairing, pairingVersion, getTracks,
+      error, setError,
     }}>
       {children}
     </TrackContext.Provider>

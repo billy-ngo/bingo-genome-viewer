@@ -11,7 +11,7 @@ import { ThemeProvider, useTheme } from './store/ThemeContext'
 import { PeakProvider } from './store/PeakContext'
 import { genomeApi } from './api/client'
 import FileLoader, {
-  lengthPairingNotice, applyTrackPairings, pairingChanges, lostPairingWarning, movedTracksNotice, PAIRING_NOTICE_MS,
+  lengthPairingNotice, mergeBaseline, pairingChanges, lostPairingWarning, movedTracksNotice, PAIRING_NOTICE_MS,
 } from './components/ui/FileLoader'
 import TrackSettings from './components/ui/TrackSettings'
 import ThemeSettings from './components/ui/ThemeSettings'
@@ -87,7 +87,10 @@ function SkeletonTrack({ theme, labelWidth }) {
 function BrowserApp() {
   const { theme } = useTheme()
   const { genome, region, setGenome, navigateTo } = useBrowser()
-  const { tracks, reorderTracks, addTrack, uploadTrack, commitTrack, discardTrack, updateTrack, addGenomeAnnotationTrack, restoreAnnotationTracks } = useTracks()
+  const {
+    tracks, reorderTracks, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack,
+    applyMerge, withPairing, pairingVersion, getTracks,
+  } = useTracks()
   const containerRef = useRef(null)
   const [containerWidth, setContainerWidth] = useState(800)
   const [showSettings, setShowSettings] = useState(false)
@@ -145,6 +148,12 @@ function BrowserApp() {
     setDropNotices([])
   }, [])
 
+  /** Put loaded tracks that may not match the genome in the drop's
+   *  compatibility dialog (Load Anyway / Skip), after any it already holds. */
+  const offerMismatched = useCallback((infos) => {
+    setDropTrackMismatch(prev => ({ tracks: [...(prev?.tracks || []), ...infos] }))
+  }, [])
+
   /** A merge is starting in FileLoader: it also clears an error in the drop
    *  toast, as a merge here clears FileLoader's. */
   const onFileLoaderMergeStart = useCallback(() => {
@@ -197,18 +206,6 @@ function BrowserApp() {
     }
   }, [])
 
-  // Restore hidden genome annotation tracks when the user switches chromosomes.
-  // Start at null so the very first observed chromosome always triggers a
-  // restore (initialising to region?.chrom could skip it if a region is
-  // already set on mount, e.g. certain session-restore orderings).
-  const prevChromRef = useRef(null)
-  useEffect(() => {
-    if (region?.chrom && region.chrom !== prevChromRef.current) {
-      prevChromRef.current = region.chrom
-      restoreAnnotationTracks()
-    }
-  }, [region?.chrom, restoreAnnotationTracks])
-
   // Full-screen drag-and-drop support
   const GENOME_EXTS = new Set(['.gb', '.gbk', '.genbank', '.fasta', '.fa'])
   const TRACK_EXTS = new Set([
@@ -255,6 +252,23 @@ function BrowserApp() {
     return c && c.status !== 'ok' && c.status !== 'no_genome'
   }
 
+  // A merge answered (from here or from FileLoader) while tracks wait in the
+  // drop's compatibility dialog: judge them again against the merged genome,
+  // as FileLoader does with its own dialog.
+  useEffect(() => {
+    if (!pairingVersion || !dropTrackMismatch) return
+    const now = dropTrackMismatch.tracks.map(withPairing)
+    if (now.every((t, i) => t === dropTrackMismatch.tracks[i])) return
+    const ok = now.filter(t => !isTrackMismatch(t))
+    for (const t of ok) commitTrack(t)
+    const rest = now.filter(isTrackMismatch)
+    setDropTrackMismatch(rest.length ? { tracks: rest } : null)
+    if (ok.length) {
+      showDropNotices([lengthPairingNotice(ok)])
+      flashDropStatus({ msg: `Added ${ok.length} track${ok.length > 1 ? 's' : ''}: ${ok.length > 1 ? 'they match' : 'it matches'} the genome now` }, 4000)
+    }
+  }, [pairingVersion])
+
   const onAppDrop = useCallback(async (e) => {
     e.preventDefault(); e.stopPropagation()
     appDragCounter.current = 0
@@ -300,10 +314,10 @@ function BrowserApp() {
     try {
       // Genome files dropped while a genome is loaded, or those after the first
       // when none is: the user is asked what to do with them once the tracks
-      // dropped with them are loaded, as in FileLoader. A merge pairs only the
-      // tracks already added, so a track still uploading, or waiting in the
-      // compatibility dialog (drawn over the prompt), would keep its targets
-      // from before the merge.
+      // dropped with them are loaded, as in FileLoader, and after answering
+      // any compatibility dialog (drawn over the prompt). A track that is not
+      // in the list yet when a merge answers still gets its pairing
+      // (TrackContext.withPairing), but the order keeps the notices simple.
       const promptFiles = genome
         ? (genomeFiles.length > 0 ? genomeFiles : null)
         : (genomeFiles.length > 1 ? genomeFiles.slice(1) : null)
@@ -350,7 +364,8 @@ function BrowserApp() {
         const errors = []
         for (const file of trackFiles) {
           try {
-            const info = await uploadTrack(file, undefined)
+            // With the pairing of a merge that answered first, if any.
+            const info = withPairing(await uploadTrack(file, undefined))
             if (isTrackMismatch(info)) {
               incompatible.push(info)
             } else {
@@ -361,12 +376,11 @@ function BrowserApp() {
         }
         if (promptFiles) setDropPrompt({ files: promptFiles })
         showDropNotices([lengthPairingNotice(compatible)])
+        // Offered even when other files failed: they are loaded, and wait for an answer.
+        if (incompatible.length > 0) offerMismatched(incompatible)
         if (errors.length) {
           flashDropStatus({ error: errors.join('; ') }, 5000)
           return
-        }
-        if (incompatible.length > 0) {
-          setDropTrackMismatch({ tracks: incompatible })
         }
       } else if (promptFiles) {
         setDropPrompt({ files: promptFiles })
@@ -382,7 +396,7 @@ function BrowserApp() {
     } catch (err) {
       flashDropStatus({ error: err.response?.data?.detail || err.message || 'Drop failed' }, 5000)
     }
-  }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, discardTrack, addGenomeAnnotationTrack, showDropNotices, flashDropStatus])
+  }, [genome, setGenome, navigateTo, uploadTrack, commitTrack, withPairing, addGenomeAnnotationTrack, offerMismatched, showDropNotices, flashDropStatus])
 
   const onDropPromptChromosome = useCallback(async () => {
     if (!dropPrompt) return
@@ -395,7 +409,7 @@ function BrowserApp() {
     try {
       const errors = []
       // The loaded tracks and chromosomes before the merge, to tell what it changed.
-      const before = tracks.filter(t => t.track_type !== 'genome_annotations')
+      let before = mergeBaseline([], getTracks())
       const oldChroms = new Set((genome?.chromosomes || []).map(c => c.name))
       let pairings = null
       for (const file of files) {
@@ -404,22 +418,13 @@ function BrowserApp() {
           const res = await genomeApi.addChromosomes(file)
           const info = res.data
           if (info.name) info.name = cleanName(info.name)
+          before = mergeBaseline(before, getTracks())
           setGenome(info)
-          // Each track's targets and compatibility against the merged genome:
-          // tracks appear on the added chromosomes they have data for.
-          if (info.tracks) {
-            applyTrackPairings(info.tracks, updateTrack)
-            pairings = info.tracks
-          }
-          // Ensure annotation track exists when the merged genome has annotations
-          if (info.is_annotated) {
-            addGenomeAnnotationTrack({
-              id: 'genome_annotations', name: `${info.name} (annotations)`,
-              track_type: 'genome_annotations', file_format: 'genbank',
-              targetChromosomes: info.annotated_chromosomes || null,
-              featureTypes: info.feature_types || [],
-            })
-          }
+          // Each track's targets and compatibility against the merged genome
+          // (tracks appear on the added chromosomes they have data for), the
+          // annotation track if the merged genome has annotations, and fresh data.
+          applyMerge(info)
+          if (info.tracks) pairings = info.tracks
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
       }
       const { lost, moved, paired } = pairingChanges(before, pairings, oldChroms)
@@ -433,7 +438,7 @@ function BrowserApp() {
     } catch (err) {
       flashDropStatus({ error: err.message || 'Failed to add chromosomes' }, 5000)
     }
-  }, [dropPrompt, tracks, genome, setGenome, updateTrack, addGenomeAnnotationTrack, showDropNotices, clearDropNotices, flashDropStatus])
+  }, [dropPrompt, getTracks, genome, setGenome, applyMerge, showDropNotices, clearDropNotices, flashDropStatus])
 
   const onDropPromptTrack = useCallback(async () => {
     if (!dropPrompt) return
@@ -449,16 +454,16 @@ function BrowserApp() {
       // here too (previously this path committed unconditionally).
       for (const file of files) {
         try {
-          const info = await uploadTrack(file, undefined)
+          const info = withPairing(await uploadTrack(file, undefined))
           if (isTrackMismatch(info)) incompatible.push(info)
           else { commitTrack(info); compatible.push(info) }
         } catch (err) { errors.push(`${file.name}: ${err.response?.data?.detail || err.message}`) }
       }
       showDropNotices([lengthPairingNotice(compatible)])
+      if (incompatible.length) offerMismatched(incompatible)
       if (errors.length) {
         flashDropStatus({ error: errors.join('; ') }, 5000)
       } else if (incompatible.length) {
-        setDropTrackMismatch({ tracks: incompatible })
         flashDropStatus(null)
       } else {
         flashDropStatus({ msg: `Added ${files.length} track${files.length > 1 ? 's' : ''}` }, 3000)
@@ -466,7 +471,7 @@ function BrowserApp() {
     } catch (err) {
       flashDropStatus({ error: err.message || 'Failed to load tracks' }, 5000)
     }
-  }, [dropPrompt, uploadTrack, commitTrack, showDropNotices, flashDropStatus])
+  }, [dropPrompt, uploadTrack, commitTrack, withPairing, offerMismatched, showDropNotices, flashDropStatus])
 
   const onDropMismatchSkip = useCallback(async () => {
     if (!dropTrackMismatch) return
@@ -817,7 +822,9 @@ function BrowserApp() {
         </div>
       )}
 
-      {/* Prompt when genome file dropped while genome already loaded */}
+      {/* Prompt when genome file dropped while genome already loaded. Drawn
+          under the compatibility dialogs (here and in FileLoader): the tracks
+          waiting there are answered first, so a merge finds them loaded. */}
       {dropPrompt && (() => {
         const plural = dropPrompt.files.length > 1
         const names = dropPrompt.files.map(f => f.name).join(', ')
@@ -826,7 +833,7 @@ function BrowserApp() {
         return (
           <div style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9998,
           }}>
             <div style={{
               background: theme.panelBg, border: `1px solid ${theme.borderAccent}`, borderRadius: 8,

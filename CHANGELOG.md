@@ -6,6 +6,75 @@ commit history is on GitHub.
 
 The project follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 
+## [Unreleased]
+
+### Fixed — adding chromosomes
+- **Tracks that are still loading when chromosomes are added get the merged
+  pairing.** A track whose load answered on the server before the merge, but
+  reached the browser after it, kept the chromosomes it had before the merge.
+  A track waiting in the "Track compatibility warning" dialog did the same
+  when you chose Load Anyway. Both now get the merged genome's pairing. A
+  waiting track that matches the merged genome is added at once, and the
+  dialog closes when no track is left in it.
+- **The genome-file prompt of a page drop no longer opens over the Load Files
+  compatibility dialog.** That dialog is answered first, so the tracks in it
+  are loaded before the merge.
+- **The genome annotation track stays hidden once you hide or remove it.**
+  It used to come back after any Add as Chromosome, every chromosome switch
+  and every session restore. Loading another genome still shows its
+  annotations.
+- A track that an earlier merge left on no chromosome, and a later merge
+  pairs again, now gets a notice ("… shows again, on …").
+- When some files of a drop fail to load, the dropped tracks that may not
+  match the genome are still offered in the compatibility dialog. They used
+  to stay loaded on the server without being shown or offered.
+- The "Matched by length" notice counts the pairs of all the tracks loaded
+  together; it showed only the largest track's count.
+- After a merge every track fetches its data again, instead of showing a
+  response cached before the merge.
+
+### Fixed — display and export
+- **Peak-outline smoothing is set in bp.** Track Settings → Smoothness offers
+  ±10 bp to ±10 kb, the same stretch of genome at every zoom. It used to
+  average a number of bins (about pixels), so a smoothed peak flattened as
+  you zoomed out. Sessions saved before keep about the look they had at their
+  saved view. After a window resize, coverage is fetched again for the new
+  width, so a smoothed axis no longer depends on the width at an earlier
+  fetch.
+- **Overlay rows show warning badges**, naming the member each warning is
+  about (for example bars a fixed scale clips, or a failed update).
+- **Read view:** "Too many reads to scan here" and "No reads in region" are
+  drawn only over the part of the view they describe. Right after a jump they
+  no longer appear over a view whose reads have not loaded yet.
+- **PNG and JPG exports are drawn at their own size** from the SVG export,
+  so they match it and the screen. They used to stretch the screen's pixels
+  to the export width.
+- **Exports include the peak rank labels** drawn over coverage and read
+  tracks.
+- SVG bars are at least 1 px wide, as on screen (they could be 0.5 px), and
+  track names in SVG/PNG exports are cut at the label column instead of
+  running over the track.
+- The export note no longer says "… reads shown (downsampled)" when both
+  strands of a read track are hidden; with one strand hidden it says which
+  one is shown.
+
+### Fixed — server
+- **Building a BAM's coverage index no longer slows the server.** The index
+  is built in a separate process, so other requests (other tracks, the read
+  view, the heartbeat) are answered as quickly during the build as before
+  it, and the build no longer slows down while the server is busy.
+- **Loading a genome and adding chromosomes no longer stall the server**
+  while the file is parsed.
+- References too large for the coverage index (over 32 Mbp) compute coverage
+  per view about 40 times faster, so far more of a deep BAM is covered before
+  the read cap.
+- A BAM is drawn only on the chromosomes it pairs with: one whose only contig
+  is k141_9.0, loaded with Load Anyway onto a genome with k141_9.1 and
+  k141_9.2, no longer shows k141_9.0's reads and coverage on both.
+- Development: the backend run from `app/backend` no longer serves an
+  `app/frontend/dist` build that is older than the frontend sources.
+- Backend unit tests: `python -B -m unittest discover -s tests -v`.
+
 ## [2.14.0] — 2026-11-03
 
 ### Fixed — Y-axis (scale bar) accuracy
