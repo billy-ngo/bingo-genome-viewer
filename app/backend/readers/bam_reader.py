@@ -275,10 +275,12 @@ class BamReader:
         """Binned read depth over [start, end): exact mean / max / min per bin.
 
         Served from the background coverage index; bins the index has not
-        reached yet come back ``pending``. If the index is unavailable (very
-        large reference, or the scan failed) a bounded live pileup is used
-        instead and the result is flagged ``truncated`` when its read cap was
-        hit — never silently drawn as zero coverage."""
+        reached yet come back ``pending``, with coverage_state 'building'
+        (the state the bins were computed under, even when the build has
+        failed since: asked again, the live fallback answers). If the index
+        is unavailable (very large reference, or the scan failed) a bounded
+        live pileup is used instead and the result is flagged ``truncated``
+        when its read cap was hit — never silently drawn as zero coverage."""
         chrom = self._resolve_chrom(chrom)
         if end - start <= 0:
             return {"bins": [], "meta": {}}
@@ -286,10 +288,10 @@ class BamReader:
         if state in ("building", "ready"):
             if not self._cov.has_contig(chrom):
                 return {"bins": [], "meta": {"coverage_state": state}}   # contig not in this BAM
-            bins_data = self._cov.coverage(chrom, start, end, bins)
+            bins_data, state = self._cov.coverage(chrom, start, end, bins)
             if bins_data:
                 return {"bins": bins_data, "meta": {
-                    "coverage_state": self._cov.state,
+                    "coverage_state": state,
                     "coverage_progress": self._cov.progress,
                 }}
         # Index unavailable (reference too large for it, or the scan failed).

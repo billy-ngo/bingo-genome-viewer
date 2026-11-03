@@ -21,6 +21,10 @@ header declares the BAM coordinate-sorted (@HD SO:coordinate), so queries are
 answered exactly up to that point and the remaining bins are returned with
 ``pending: True``. Without that declaration every bin stays pending until the
 scan has finished.
+
+A record whose block_size contradicts its fixed-size fields (htslib's check),
+or a file that ends inside a record, fails the build instead of being skipped
+or miscounted; BamReader then falls back to its live pileup.
 """
 
 import array
@@ -35,6 +39,11 @@ SKIP_FLAGS = 0x4 | 0x200 | 0x400           # unmapped | QC-fail | duplicate (IGV
 _CHUNK = 1 << 22                            # uncompressed bytes per read() of the stream
 _RAW_CHUNK = 1 << 22                        # compressed bytes per read() of the file
 _BLOCK = 64                                 # bp per pre-aggregated block for fast zoomed-out queries
+# The start of every alignment record: block_size, refID, pos, l_read_name,
+# mapq, bin, n_cigar_op, flag, l_seq. With next_refID, next_pos and tlen the
+# fixed part is 36 bytes, block_size included.
+_RECORD = struct.Struct("<iiiBBHHHi")
+_MAX_RECORD = 1 << 28                       # bytes; a larger block_size is corrupt
 # Size in bytes of each fixed-size SAM aux value type (A c C s S i I f).
 _AUX_SIZE = {ord(t): n for t, n in zip("AcCsSiIf", (1, 1, 1, 2, 2, 4, 4, 4))}
 # The index holds two int32 arrays per reference base at its peak (difference
@@ -238,33 +247,38 @@ class BamCoverageIndex:
     def has_contig(self, name: str) -> bool:
         return name in self._lengths
 
-    def coverage(self, contig: str, start: int, end: int, bins: int) -> list[dict]:
-        """Bins over [start, end): exact mean / max / min depth per bin.
+    def coverage(self, contig: str, start: int, end: int, bins: int) -> tuple[list[dict], str]:
+        """Bins over [start, end): exact mean / max / min depth per bin, and
+        the state they were computed under.
 
         Bin edges are the integer coordinates reported to the client, so the
         statistics describe exactly the bases each bar is drawn over. Bins past
         the contig end are empty (value 0, ``cov`` 0). While the background scan
         is still running, bins it has not reached are returned with
-        ``pending: True`` and zero values."""
+        ``pending: True`` and zero values; such an answer comes with state
+        'building' even if the build has ended (or failed) since, so it is
+        never taken for final. 'ready' means the bins come from the finished
+        index; any other state comes with no bins (nothing usable)."""
+        state = self.state
         region_len = end - start
         if region_len <= 0 or contig not in self._lengths:
-            return []
+            return [], state
         L = self._lengths[contig]
         n = min(bins, region_len)
         bs = region_len / n
         edges = [start + int(i * bs) for i in range(n)] + [end]
 
-        ready = self.state == "ready"
         diff = None
-        if not ready:
+        if state == "building":
             diff = self._diff.get(contig)
-            if diff is None:             # the build finished between the two reads
-                ready = self.state == "ready"
+            if diff is None:             # the build ended between the two reads
+                state = self.state
+        ready = state == "ready"
         if ready:
             depth = self._depth[contig]
             avail = L
         elif diff is None:               # failed / cancelled: nothing usable
-            return []
+            return [], state
         else:
             avail = min(self._final_upto.get(contig, 0), L)
             # Snapshot the final prefix of the difference array (positions
@@ -289,7 +303,7 @@ class BamCoverageIndex:
                     s, mx, mn = sum(seg), max(seg), min(seg)
                 b.update(value=s / (hi_c - lo_c), max=float(mx), min=float(mn), cov=hi_c - lo_c)
             out.append(b)
-        return out
+        return out, state
 
     # ── internals ───────────────────────────────────────────────────────
 
@@ -317,19 +331,11 @@ class BamCoverageIndex:
     def _run(self):
         try:
             self._scan()
-            if self._cancel.is_set():
+            if self._cancel.is_set() or not self._aggregate():
                 self.state = "cancelled"
                 self._diff = {}
+                self._depth, self._blk_sum, self._blk_max, self._blk_min = {}, {}, {}, {}
                 return
-            for name, L in self._lengths.items():
-                d = array.array("i", itertools.accumulate(self._diff[name][:L])) if L else array.array("i")
-                self._depth[name] = d
-                nb = -(-L // _BLOCK)
-                sums, maxs, mins = array.array("q"), array.array("i"), array.array("i")
-                for k in range(nb):
-                    seg = d[k * _BLOCK:(k + 1) * _BLOCK]
-                    sums.append(sum(seg)); maxs.append(max(seg)); mins.append(min(seg))
-                self._blk_sum[name], self._blk_max[name], self._blk_min[name] = sums, maxs, mins
             self.progress = 1.0
             self.state = "ready"         # publish before freeing the build arrays
             self._diff = {}
@@ -339,6 +345,24 @@ class BamCoverageIndex:
             self.state = "failed"
         finally:
             self._close_file()
+
+    def _aggregate(self) -> bool:
+        """Per-base depth and 64-bp block statistics from the finished
+        difference arrays. False when cancelled meanwhile."""
+        for name, L in self._lengths.items():
+            if self._cancel.is_set():
+                return False
+            d = array.array("i", itertools.accumulate(self._diff[name][:L])) if L else array.array("i")
+            self._depth[name] = d
+            nb = -(-L // _BLOCK)
+            sums, maxs, mins = array.array("q"), array.array("i"), array.array("i")
+            for k in range(nb):
+                if not k & 0x3FFF and self._cancel.is_set():   # every ~1 Mbp
+                    return False
+                seg = d[k * _BLOCK:(k + 1) * _BLOCK]
+                sums.append(sum(seg)); maxs.append(max(seg)); mins.append(min(seg))
+            self._blk_sum[name], self._blk_max[name], self._blk_min[name] = sums, maxs, mins
+        return True
 
     def _open(self):
         """Open the BAM stream and read its header: contig names/lengths,
@@ -385,6 +409,7 @@ class BamCoverageIndex:
         diffs = [self._diff[n] for n in names]
         final = self._final_upto
         unpack_from = struct.unpack_from
+        record = _RECORD.unpack_from
         # Partial results are published only when the header declares the BAM
         # coordinate-sorted: then every position left of the scan is final.
         # Records out of order despite that (a stale or mismatched file)
@@ -392,15 +417,24 @@ class BamCoverageIndex:
         live = self._coord_sorted
         unsorted = False
         data = f.read(_CHUNK)
+        have = len(data)
         off = 0
         cur_ref, last_pos = -1, -1
         while True:
-            avail = len(data) - off
-            if avail < 4 or avail < 4 + unpack_from("<i", data, off)[0]:
+            avail = have - off
+            if avail >= 36:
+                bs, refid, pos, l_rn, _mq, _bin, n_cig, flag, l_seq = record(data, off)
+            if avail < 36 or avail < 4 + bs:
+                # The next record is not all in the buffer: read on.
+                if avail >= 36 and bs > _MAX_RECORD:
+                    raise ValueError("malformed alignment record")
                 more = f.read(_CHUNK)
                 if not more:
+                    if avail:
+                        raise EOFError("the BAM ends inside an alignment record")
                     break
                 data = data[off:] + more
+                have = len(data)
                 off = 0
                 self.progress = min(0.999, f.offset / size)
                 if live and cur_ref >= 0:
@@ -408,8 +442,11 @@ class BamCoverageIndex:
                 if self._cancel.is_set():
                     return
                 continue
-            bs = unpack_from("<i", data, off)[0]
-            refid, pos, l_rn, _mq, _bin, n_cig, flag = unpack_from("<iiBBHHH", data, off + 4)
+            # The fixed-size fields must fit in the record (htslib's check):
+            # a wrong block_size would stall the scan, move it backwards or
+            # lose its place among the records.
+            if bs < 32 + l_rn + 4 * n_cig + ((l_seq + 1) >> 1) + l_seq or l_seq < 0 or not l_rn:
+                raise ValueError("malformed alignment record")
             if refid >= 0:
                 if refid != cur_ref:
                     if refid < cur_ref:
